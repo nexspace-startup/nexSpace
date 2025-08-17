@@ -1,13 +1,14 @@
 import './App.css';
 import './index.css';
 
-
 function App() {
 
   return (
-     <div>
+    <>
+     <div className='text-xl font-medium text-black dark:text-white'>
       Welcome to NexSpace
     </div>
+    </>
   )
 }
 
