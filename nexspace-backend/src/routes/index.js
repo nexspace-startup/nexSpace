@@ -4,7 +4,7 @@ export function registerAppRoutes(app) {
   app.get('/', (req, res) => {
     const u = req.session.user;
     res.send(`
-      <h1>Node Auth Starter</h1>
+      <h1>NexSpace</h1>
       ${u ? `<p>Signed in as ${u.name || u.email}</p>` : '<p>Not signed in</p>'}
       <a href="/auth/google">Sign in with Google</a><br/>
       <a href="/auth/microsoft">Sign in with Microsoft</a><br/>
