@@ -1,12 +1,39 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 
 const AuthPage: React.FC = () => {
+     const navigate = useNavigate();
     const handleGoogleLogin = () => {
-        window.location.href = 'http://localhost:3000/auth/google';
+        openPopup('/api/auth/google');
     };
     const handleMicrosoftLogin = () => {
-        window.location.href = 'http://localhost:3000/auth/microsoft';
+        openPopup('/api/auth/microsoft');
     };
+
+
+    function openPopup(url: string) {
+        window.open(url, 'oauth', 'width=400,height=500');
+        const origin = 'http://localhost:3000';
+
+        function onMessage(e: MessageEvent) {
+            console.log('Message from child', e);
+            if (e.origin !== origin) return;
+            if (e.data?.type === 'oauth_done') {
+                window.removeEventListener('message', onMessage);
+               // try { w?.close(); } catch { }
+                // refresh current user now that session cookie is set
+                fetch('/api/me', { credentials: 'include' })
+                    .then(r => r.json())
+                    .then(data => {
+                        // set your auth state here (context/store)
+                        if(data?.user)
+                            navigate('/setup/account')
+                    });
+            }
+        }
+        window.addEventListener('message', onMessage);
+    }
+
     return (
         <div className="relative min-h-screen w-full bg-white flex items-center justify-center">
             {/* Centered Frame */}

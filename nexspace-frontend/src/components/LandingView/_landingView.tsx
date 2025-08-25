@@ -30,7 +30,7 @@ const LandingPage: React.FC = () => {
                 </div>
 
                 {/* Join Button */}
-                <button onClick={() => navigate('/auth')}
+                <button onClick={() => navigate('/signin')}
                     className="bg-[#212121] text-white text-[18px] font-semibold px-6 py-3 rounded-xl shadow-md">
                     Join Now
                 </button>
