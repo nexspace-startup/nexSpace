@@ -21,6 +21,7 @@ export default function Setup() {
   const [index, setIndex] = React.useState(0);
   const [account, setAccount] = React.useState<Partial<AccountData>>({});
   const [workspace, setWorkspace] = React.useState<Partial<WorkspaceData>>({});
+  const [isLoading, setIsLoading] = React.useState(false);
   //const [invites, setInvites] = React.useState<Partial<InviteData>>({ invites: [] });
 
   const next = () => setIndex((i) => Math.min(i + 1, steps.length - 1));
@@ -33,10 +34,12 @@ export default function Setup() {
       //...(inviteData as InviteData),
     };
     try {
+      setIsLoading(true);
       const res = await api.post("/api/onboarding", payload)
 
       if (res.status === 201) {
         // Success → alert with workspace name or a simple message
+        setIsLoading(false);
         alert(`Workspace "${res.data.workspace.name}" created successfully!`)
         // Redirect to dashboard
         navigate('/dashboard');
@@ -44,6 +47,7 @@ export default function Setup() {
       }
     } catch (err: any) {
       // Error handling
+      setIsLoading(false);
       if (err.response) {
         alert(`Error: ${err.response.data.error}`)
       } else {
@@ -87,6 +91,11 @@ export default function Setup() {
           )}
         </div>
       </main>
+      {isLoading && (
+                <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+                    <div className="loader ease-linear rounded-full border-8 border-t-8 border-gray-200 h-16 w-16"></div>
+                </div>
+            )}
     </div>
   );
 }

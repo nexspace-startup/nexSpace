@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useUserStore } from "../../stores/userStore";
 import { googleGetCode } from '../../lib/oauthClients';
@@ -8,6 +8,7 @@ type Provider = 'google' | 'microsoft';
 
 const Signin: React.FC = () => {
     const setUser = useUserStore((state) => state.setUser);
+    const [isLoading, setIsLoading] = useState(false);
     const navigate = useNavigate();
     const handleGoogleLogin = () => {
         handleOAuth('google')
@@ -18,8 +19,8 @@ const Signin: React.FC = () => {
 
     async function handleOAuth(provider: 'google' | 'microsoft') {
         try {
+            setIsLoading(true);
             let result: any;
-
             if (provider === 'google') {
                 const code = await googleGetCode();
                 if (!code) throw new Error('Google sign-in was cancelled.');
@@ -42,7 +43,7 @@ const Signin: React.FC = () => {
 
             // save user
             setUser(result.user);
-
+            setIsLoading(false);
             // route by workspaces
             const ws = result.workspaces ?? [];
             if (ws.length === 0) {
@@ -53,6 +54,7 @@ const Signin: React.FC = () => {
             } 
         } catch (e: any) {
             console.error(e);
+            setIsLoading(false);
             alert(e?.message || 'Authentication error');
         }
     }
@@ -150,6 +152,12 @@ const Signin: React.FC = () => {
             <p className="absolute bottom-8 text-center text-sm text-[#828282] w-[322px]">
                 By signing up, you agree to our Terms of Service and Privacy Policy
             </p>
+
+            {isLoading && (
+                <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+                    <div className="loader ease-linear rounded-full border-8 border-t-8 border-gray-200 h-16 w-16"></div>
+                </div>
+            )}
         </div>
     );
 };
