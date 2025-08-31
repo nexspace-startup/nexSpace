@@ -6,7 +6,7 @@ import { googleGetCode } from '../../lib/oauthClients';
 type Provider = 'google' | 'microsoft';
 
 
-const AuthPage: React.FC = () => {
+const Signin: React.FC = () => {
     const setUser = useUserStore((state) => state.setUser);
     const navigate = useNavigate();
     const handleGoogleLogin = () => {
@@ -35,6 +35,7 @@ const AuthPage: React.FC = () => {
             //   }
 
             if (!result?.isAuthenticated || !result.user) {
+                console.log(result);
                 alert('Authentication failed. Please try again.');
                 return;
             }
@@ -153,4 +154,4 @@ const AuthPage: React.FC = () => {
     );
 };
 
-export default AuthPage;
+export default Signin;

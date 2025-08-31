@@ -1,6 +1,5 @@
 generator client {
   provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
 }
 
 datasource db {
@@ -9,8 +8,64 @@ datasource db {
 }
 
 model User {
-  id         BigInt @id @default(autoincrement())
-  first_name String @db.VarChar(100)
-  last_name  String @db.VarChar(100)
-  role       Int
+  id                BigInt   @id @default(autoincrement())
+  first_name        String   @db.VarChar(100)
+  last_name         String   @db.VarChar(100)
+  email             String   @unique
+  auth_provider     String
+  auth_provider_sub String   @unique
+  createdAt         DateTime @default(now())
+  lastLoginAt       DateTime @updatedAt
+
+  // --- Opposite relation fields
+  workspacesCreated Workspace[]       @relation("UserCreatedWorkspaces")
+  memberships       WorkspaceMember[] // opposite of WorkspaceMember.user
+  invitesSent       WorkspaceMember[] @relation("UserInvites") // opposite of WorkspaceMember.invitedBy
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+model Workspace {
+  id        BigInt   @id @default(autoincrement())
+  uid       String   @unique @default(cuid())
+  name      String   @db.VarChar(120)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // creator
+  createdById BigInt
+  createdBy   User   @relation("UserCreatedWorkspaces", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  // memberships
+  members WorkspaceMember[]
+
+  @@index([createdById])
+}
+
+model WorkspaceMember {
+  // FKs 
+  workspaceId BigInt
+  userId      BigInt
+
+  // membership metadata
+  role     WorkspaceRole @default(MEMBER)
+  joinedAt DateTime      @default(now())
+
+  // optional: inviter
+  invitedById BigInt?
+  invitedBy   User?   @relation("UserInvites", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  // relations
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  // composite PK: one row per (workspace, user)
+  @@id([workspaceId, userId])
+  // common query paths
+  @@index([userId])
+  @@index([workspaceId, role])
 }

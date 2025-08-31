@@ -1,10 +1,9 @@
 import express from 'express';
 import session from 'express-session';
-import { initProviders } from './auth/providers.js';
-import createAuthRouter from './routes/auth.js';
+import oauthGoogle from './routes/oauth.google.js';
+import setupRouter from './routes/setup.js';
 import { config } from './config/env.js';
-
-const providers = await initProviders(); // wait BEFORE building router
+import me from './routes/auth.me.js';
 
 const app = express();
 
@@ -22,13 +21,13 @@ app.use(session({
 app.use(express.json());
 
 // Mount at '/auth' — now router paths are '/google', '/microsoft'
-app.use('/auth', createAuthRouter(providers));
+app.use('/auth', oauthGoogle);
+
+app.use('/', setupRouter);
 
 // protected endpoint
-app.get('/me', (req, res) => {
-  if (!req.session.user) return res.status(401).json({ user: null });
-  res.json({ user: req.session.user });
-});
+app.use('/', me);
+
 
 app.get('/health', (_req, res) => res.send('ok'));
 
