@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "nodemon src/server.js",
-    "start": "node src/server.js",
-    "lint": "eslint ."
+    "dev": "nodemon --watch src --ext ts --exec \"npm run build && node dist/server.js\"",
+    "start": "node dist/server.js",
+    "build": "tsc"
   },
   "dependencies": {
     "@prisma/client": "^6.15.0",
@@ -17,11 +17,12 @@
     "google-auth-library": "^10.3.0",
     "openid-client": "^5.7.0",
     "uuid": "^9.0.1",
-    "zod": "^4.1.5"
+    "zod": "^4.1.5",
+    "cookie": "^0.6.0"
   },
   "devDependencies": {
-    "eslint": "^9.9.0",
     "nodemon": "^3.1.4",
-    "prisma": "^6.15.0"
+    "prisma": "^6.15.0",
+    "typescript": "^5.3.3"
   }
 }
