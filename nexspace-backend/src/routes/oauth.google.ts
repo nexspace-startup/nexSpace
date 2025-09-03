@@ -48,7 +48,7 @@ router.post(
             where: { auth_provider_sub: profile.sub },
             include: { memberships: { include: { workspace: true } } }
         });
-        let memberships = [];
+        let memberships: Array<{ workspaceId: bigint }> = [];
         if (user) {
             // Fetch the workspaces the user is part of
             memberships = await prisma.workspaceMember.findMany({
@@ -61,7 +61,7 @@ router.post(
             userId: user?.id?.toString(), // BigInt → string for JSON
             sub: profile.sub,
             email: profile.email,
-            wids: memberships?.map(m => m.workspaceId.toString()),
+            wids: memberships?.map((m: { workspaceId: bigint }) => m.workspaceId.toString()),
         });
         // no body; the frontend calls /api/auth/me next
         res.status(204).end();

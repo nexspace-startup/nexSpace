@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
-import { prisma, WorkspaceRole } from '../prisma.js';
+import { prisma, WorkspaceRole, Prisma } from '../prisma.js';
 import { getSession } from '../session.js';
 
 const router = Router();
@@ -30,8 +30,6 @@ interface WorkspaceDTO {
   id: string;
   uid: string;
   name: string;
-  company: string | null;
-  teamSize: number | null;
 }
 
 interface MembershipDTO {
@@ -56,7 +54,7 @@ router.post(
     if (!sess?.userId && !sess?.sub)
       return res.status(401).json({ error: 'UNAUTHORIZED' });
     try {
-      const result = await prisma.$transaction(async (tx) => {
+      const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Upsert user (dedupe by auth_provider_sub)
       const user = await tx.user.upsert({
         where: { auth_provider_sub: sess?.sub },
@@ -70,7 +68,7 @@ router.post(
           last_name: input.lastName,
           email: input.email,
           auth_provider: "google",
-          auth_provider_sub: sess?.sub,
+          auth_provider_sub: sess?.sub!,
         },
       });
 
@@ -91,8 +89,6 @@ router.post(
       const workspace = await tx.workspace.create({
         data: {
           name: input.workspaceName,
-          //company: input.company,
-          //teamSize: input.teamSize,
           createdById: user.id,
         },
       });
@@ -118,8 +114,6 @@ router.post(
           id: workspace.id.toString(),
           uid: workspace.uid,
           name: workspace.name,
-          company: workspace.company ?? null,
-          teamSize: workspace.teamSize ?? null,
         },
         membership: {
           role: membership.role,

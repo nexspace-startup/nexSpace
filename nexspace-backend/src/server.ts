@@ -1,4 +1,4 @@
-import express, { NextFunction, Request, Response } from 'express';
+import express, { json, NextFunction, Request, Response } from 'express';
 import session from 'express-session';
 import oauthGoogle from './routes/oauth.google.js';
 import setupRouter from './routes/setup.js';
@@ -18,7 +18,7 @@ app.use(session({
   }
 }));
 
-app.use(express.json());
+app.use(json());
 
 // Mount at '/auth' — now router paths are '/google', '/microsoft'
 app.use('/auth', oauthGoogle);

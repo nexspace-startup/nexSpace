@@ -1,5 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, WorkspaceRole } from '@prisma/client';
 
 export const prisma = new PrismaClient();
 
-export type { User, Workspace, WorkspaceMember, WorkspaceRole } from '@prisma/client';
+export { WorkspaceRole };
+export type { User, Workspace, WorkspaceMember, Prisma } from '@prisma/client';

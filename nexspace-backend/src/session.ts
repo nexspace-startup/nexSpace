@@ -1,4 +1,4 @@
-import cookie from 'cookie';
+import { parse, serialize } from 'cookie';
 import { randomBytes } from 'node:crypto';
 import type { Request, Response } from 'express';
 
@@ -68,7 +68,7 @@ async function delFromStore(sid: string): Promise<void> {
 export async function getSession(
   req: Request,
 ): Promise<{ data: SessionData | null; sid: string | null }> {
-  const sid = cookie.parse(req.headers.cookie || '').sid;
+  const sid = parse(req.headers.cookie || '').sid;
   if (!sid) return { data: null, sid: null };
   const data = await getFromStore(sid);
   return { data, sid };
@@ -84,7 +84,7 @@ export async function setSession(
 
   res.setHeader(
     'Set-Cookie',
-    cookie.serialize('sid', sid, {
+    serialize('sid', sid, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
@@ -98,7 +98,7 @@ export async function clearSession(
   req: Request,
   res: Response,
 ): Promise<void> {
-  const sid = cookie.parse(req.headers.cookie || '').sid;
+  const sid = parse(req.headers.cookie || '').sid;
   if (sid) await delFromStore(sid);
   res.setHeader('Set-Cookie', 'sid=; Path=/; Max-Age=0; HttpOnly');
 }

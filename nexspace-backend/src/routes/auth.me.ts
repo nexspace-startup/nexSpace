@@ -14,8 +14,6 @@ interface WorkspaceDTO {
   id: string;
   uid: string;
   name: string;
-  company: string | null;
-  teamSizeBand: string | null;
   memberCount: number;
   role: WorkspaceRole;
 }
@@ -61,15 +59,19 @@ router.get('/me', async (req: Request, res: Response<MeResponse>) => {
     })) as UserWithMemberships | null;
     if (!user) return res.json({ isAuthenticated: false });
 
-    workspaces = user.memberships.map((m) => ({
+    workspaces = user.memberships.map(
+      (
+        m: WorkspaceMember & {
+          workspace: Workspace & { _count: { members: number } };
+        },
+      ) => ({
       id: m.workspace.id.toString(),
       uid: m.workspace.uid,
       name: m.workspace.name,
-      company: m.workspace.company ?? null,
-      teamSizeBand: m.workspace.teamSizeBand ?? null,
       memberCount: m.workspace._count.members,
       role: m.role,
-    }));
+    }),
+    );
   }
 
   res.json({
