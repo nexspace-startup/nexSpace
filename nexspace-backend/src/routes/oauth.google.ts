@@ -1,8 +1,13 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { OAuth2Client } from 'google-auth-library';
 import { prisma } from '../prisma.js';
 import { setSession } from '../session.js';
 import { config } from '../config/env.js';
+
+interface GoogleCallbackBody {
+  code: string;
+  redirectUri?: string;
+}
 
 const router = Router();
 
@@ -12,7 +17,12 @@ const gClient = new OAuth2Client(
 );
 
 // POST /api/auth/google/callback  body: { code, redirectUri: 'postmessage' }
-router.post('/google/callback', async (req, res) => {
+router.post(
+  '/google/callback',
+  async (
+    req: Request<{}, {}, GoogleCallbackBody>,
+    res: Response,
+  ) => {
     const { code, redirectUri } = req.body || {};
     if (!code) return res.status(400).json({ error: 'CODE_REQUIRED' });
 
@@ -59,6 +69,7 @@ router.post('/google/callback', async (req, res) => {
         console.error('google callback error', e);
         res.status(401).json({ error: 'AUTH_FAILED' });
     }
-});
+  },
+);
 
 export default router;

@@ -1,9 +1,7 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { z } from 'zod';
-import prismaPkg from '@prisma/client'
-const { WorkspaceRole } = prismaPkg
-import { prisma } from '../prisma.js'
-import { getSession, setSession } from '../session.js';
+import { prisma, WorkspaceRole } from '../prisma.js';
+import { getSession } from '../session.js';
 
 const router = Router();
 
@@ -19,17 +17,46 @@ const OnboardingSchema = z.object({
   role: z.nativeEnum(WorkspaceRole), // 'OWNER' | 'ADMIN' | 'MEMBER'
 });
 
+type OnboardingInput = z.infer<typeof OnboardingSchema>;
+
+interface UserDTO {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+}
+
+interface WorkspaceDTO {
+  id: string;
+  uid: string;
+  name: string;
+  company: string | null;
+  teamSize: number | null;
+}
+
+interface MembershipDTO {
+  role: WorkspaceRole;
+}
+
+interface OnboardingResponse {
+  user: UserDTO;
+  workspace: WorkspaceDTO;
+  membership: MembershipDTO;
+}
+
 // POST /api/onboarding
-router.post('/onboarding', async (req, res) => {
-  // const parsed = OnboardingSchema.safeParse(req.body);
-  // if (!parsed.success) {
-  //   return res.status(400).json({ error: 'INVALID_INPUT', details: parsed.error.format() });
-  // }
-  const input = req.body;
-const { data: sess } = await getSession(req);
-    if (!sess?.userId && !sess?.sub) return res.status(401).json({ error: 'UNAUTHORIZED' });;
-  try {
-    const result = await prisma.$transaction(async (tx) => {
+router.post(
+  '/onboarding',
+  async (
+    req: Request<{}, {}, OnboardingInput>,
+    res: Response<OnboardingResponse | { error: string; meta?: unknown }>,
+  ) => {
+    const input = req.body;
+    const { data: sess } = await getSession(req);
+    if (!sess?.userId && !sess?.sub)
+      return res.status(401).json({ error: 'UNAUTHORIZED' });
+    try {
+      const result = await prisma.$transaction(async (tx) => {
       // Upsert user (dedupe by auth_provider_sub)
       const user = await tx.user.upsert({
         where: { auth_provider_sub: sess?.sub },
@@ -53,7 +80,9 @@ const { data: sess } = await getSession(req);
         select: { id: true },
       });
       if (duplicate) {
-        const err = new Error('WORKSPACE_ALREADY_EXISTS');
+        const err = new Error('WORKSPACE_ALREADY_EXISTS') as Error & {
+          code?: string;
+        };
         err.code = 'WORKSPACE_CONFLICT';
         throw err;
       }
@@ -98,18 +127,26 @@ const { data: sess } = await getSession(req);
       };
     });
 
-    return res.status(201).json(result);
-  } catch (err) {
-    if (err?.code === 'WORKSPACE_CONFLICT') {
-      return res.status(409).json({ error: 'WORKSPACE_ALREADY_EXISTS' });
+      return res.status(201).json(result);
+    } catch (err: any) {
+      if (err?.code === 'WORKSPACE_CONFLICT') {
+        return res.status(409).json({ error: 'WORKSPACE_ALREADY_EXISTS' });
+      }
+      // Prisma unique constraint collisions (e.g., email/auth_provider_sub)
+      if (err?.code === 'P2002') {
+        return res
+          .status(409)
+          .json({
+            error: 'UNIQUE_CONSTRAINT_VIOLATION',
+            meta: err.meta || null,
+          });
+      }
+      console.error('Onboarding error:', err);
+      return res
+        .status(500)
+        .json({ error: 'INTERNAL_SERVER_ERROR' });
     }
-    // Prisma unique constraint collisions (e.g., email/auth_provider_sub)
-    if (err?.code === 'P2002') {
-      return res.status(409).json({ error: 'UNIQUE_CONSTRAINT_VIOLATION', meta: err.meta || null });
-    }
-    console.error('Onboarding error:', err);
-    return res.status(500).json({ error: 'INTERNAL_SERVER_ERROR' });
-  }
-});
+  },
+);
 
 export default router;
