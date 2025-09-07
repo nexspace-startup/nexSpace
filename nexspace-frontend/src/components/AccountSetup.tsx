@@ -10,7 +10,7 @@ const schema = z.object({
   lastName: z.string().min(1, "Last name is required")
   .regex(/^[A-Za-z\s'-]+$/, "First name can only contain letters, spaces, apostrophes, and hyphens"),
   email: z.string().email("Enter a valid email"),
-  role: z.enum(["Owner", "Admin", "Member"]).refine((val) => ["Owner", "Admin", "Member"].includes(val), {
+  role: z.enum(["OWNER", "ADMIN", "MEMBER"]).refine((val) => ["OWNER", "ADMIN", "MEMBER"].includes(val), {
     message: "Select a valid role",
   }),
   company: z.string().max(60).optional(),
@@ -24,7 +24,7 @@ export default function AccountSetup({ defaultValues, onValidNext }: Props) {
     useForm<AccountData>({
       resolver: zodResolver(schema),
       mode: "onSubmit",
-      defaultValues: { firstName: "", lastName: "", email: user?.email, role: "Owner", company: "", ...defaultValues },
+      defaultValues: { firstName: "", lastName: "", email: user?.email, role: "OWNER", company: "", ...defaultValues },
     });
 
   return (
@@ -78,9 +78,9 @@ export default function AccountSetup({ defaultValues, onValidNext }: Props) {
             {...register("role")}
             className={`select-base ${errors.role ? "select-error" : "select-normal"}`}
           >
-            <option value="Owner">Owner</option>
-            <option value="Admin">Admin</option>
-            <option value="Member">Member</option>
+            <option value="OWNER">Owner</option>
+            <option value="ADMIN">Admin</option>
+            <option value="MEMBER">Member</option>
           </select>
           {errors.role && <p className="error-text">{errors.role.message}</p>}
         </div>

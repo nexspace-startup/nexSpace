@@ -1,3 +1,4 @@
+// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,20 +8,55 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id                BigInt   @id @default(autoincrement())
-  first_name        String   @db.VarChar(100)
-  last_name         String   @db.VarChar(100)
-  email             String   @unique
-  auth_provider     String
-  auth_provider_sub String   @unique
-  createdAt         DateTime @default(now())
-  lastLoginAt       DateTime @updatedAt
+enum AuthProvider {
+  local
+  google
+  microsoft
+}
 
-  // --- Opposite relation fields
+model User {
+  id          BigInt  @id @default(autoincrement())
+  first_name  String  @db.VarChar(100)
+  last_name   String  @db.VarChar(100)
+  displayName String? @db.VarChar(120)
+
+  // canonical email (case-insensitive at DB level with CITEXT)
+  email           String    @unique @db.Citext
+  emailVerifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // relations
+  identities        AuthIdentity[]
+  credential        UserLogin?
   workspacesCreated Workspace[]       @relation("UserCreatedWorkspaces")
-  memberships       WorkspaceMember[] // opposite of WorkspaceMember.user
-  invitesSent       WorkspaceMember[] @relation("UserInvites") // opposite of WorkspaceMember.invitedBy
+  memberships       WorkspaceMember[]
+  invitesSent       Invitation[]      @relation("UserInvites")
+}
+
+model AuthIdentity {
+  id          BigInt       @id @default(autoincrement())
+  userId      BigInt
+  provider    AuthProvider
+  providerId  String // email for local login and sub for google or microsoft
+  createdAt   DateTime     @default(now())
+  lastLoginAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([provider, providerId])
+  @@index([userId, provider])
+}
+
+model UserLogin {
+  userId    BigInt   @id
+  hash      String   @db.VarChar(255)
+  alg       String   @default("argon2id")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 }
 
 enum WorkspaceRole {
@@ -36,36 +72,62 @@ model Workspace {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // creator
   createdById BigInt
   createdBy   User   @relation("UserCreatedWorkspaces", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
-  // memberships
-  members WorkspaceMember[]
+  members     WorkspaceMember[]
+  invitations Invitation[]
 
   @@index([createdById])
 }
 
 model WorkspaceMember {
-  // FKs 
   workspaceId BigInt
   userId      BigInt
 
-  // membership metadata
   role     WorkspaceRole @default(MEMBER)
   joinedAt DateTime      @default(now())
 
-  // optional: inviter
-  invitedById BigInt?
-  invitedBy   User?   @relation("UserInvites", fields: [invitedById], references: [id], onDelete: SetNull)
-
-  // relations
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
-  // composite PK: one row per (workspace, user)
   @@id([workspaceId, userId])
-  // common query paths
   @@index([userId])
   @@index([workspaceId, role])
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+model Invitation {
+  id           String           @id @default(uuid()) @db.Uuid
+  workspaceId  BigInt
+  invitedBy    BigInt
+  invitedEmail String           @db.Citext
+  role         WorkspaceRole    @default(MEMBER)
+  expiresAt    DateTime
+  status       InvitationStatus @default(PENDING)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  inviter   User      @relation("UserInvites", fields: [invitedBy], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([workspaceId])
+  @@index([invitedEmail])
+}
+
+// Email templates
+
+model EmailTemplate {
+  id          String   @id @default(uuid())
+  name        String   @unique      // e.g. "invite_workspace", "reset_password"
+  subject     String                
+  mailBody String               
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }

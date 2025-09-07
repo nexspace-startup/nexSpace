@@ -1,6 +1,6 @@
 -- CreateEnum
 CREATE TYPE "public"."WorkspaceRole" AS ENUM ('OWNER', 'ADMIN', 'MEMBER');
-
+CREATE EXTENSION IF NOT EXISTS citext;
 -- CreateTable
 CREATE TABLE "public"."User" (
     "id" BIGSERIAL NOT NULL,

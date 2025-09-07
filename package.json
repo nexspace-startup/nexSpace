@@ -6,10 +6,10 @@
     "nexspace-backend"
   ],
   "scripts": {
-    "dev": "concurrently -k \"npm:dev-*\"",
-    "dev-frontend": "npm --workspace nexspace-frontend run dev",
-    "dev-backend": "npm --workspace nexspace-backend run dev",
-    "build": "npm --workspace nexspace-frontend run build && npm --workspace nexspace-backend run build"
+    "start": "concurrently -k -n FE,BE -c auto \"npm -w nexspace-frontend run dev\" \"npm -w nexspace-backend run debug\"",
+    "fe": "npm -w nexspace-frontend run dev",
+    "be": "npm -w nexspace-backend run debug",
+    "build": "npm -w nexspace-frontend run build && npm -w nexspace-backend run build"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

@@ -1,6 +1,6 @@
-import { PrismaClient, WorkspaceRole } from '@prisma/client';
+import { PrismaClient, WorkspaceRole, InvitationStatus } from '@prisma/client';
 
 export const prisma = new PrismaClient();
 
 export { WorkspaceRole };
-export type { User, Workspace, WorkspaceMember, Prisma } from '@prisma/client';
+export type { User, Workspace, WorkspaceMember, Invitation, AuthProvider, EmailTemplate, Prisma } from '@prisma/client';

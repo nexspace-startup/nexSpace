@@ -8,7 +8,10 @@
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["node", "express", "cookie-parser"],
+    "sourceMap": true,
+    "inlineSources": true
   },
   "include": ["src/**/*"]
 }
