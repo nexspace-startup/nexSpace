@@ -2,7 +2,7 @@ export type AccountData = {
   firstName: string;
   lastName: string;
   email: string;
-  role: "Owner" | "Admin" | "Member";
+  role: "OWNER" | "ADMIN" | "MEMBER";
   company?: string;
 };
 

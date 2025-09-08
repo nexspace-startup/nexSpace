@@ -1,41 +1,30 @@
-import express, { json, NextFunction, Request, Response } from 'express';
-import session from 'express-session';
-import oauthGoogle from './routes/oauth.google.js';
+import express, { json } from 'express';
 import setupRouter from './routes/setup.js';
+import signin from './routes/signin.js';
 import { config } from './config/env.js';
 import me from './routes/auth.me.js';
+import { ensureRedisReady } from './middleware/redis.js';
+import cookieParser from 'cookie-parser';
+import { responseWrapper } from './middleware/response.js';
+import { errorHandler, notFound } from './middleware/error.js';
 
 const app = express();
-
-app.use(session({
-  secret: config.sessionSecret,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: config.nodeEnv === 'production'
-  }
-}));
-
 app.use(json());
+app.use(cookieParser());
+app.use(responseWrapper);
 
-// Mount at '/auth' — now router paths are '/google', '/microsoft'
-app.use('/auth', oauthGoogle);
-
+await ensureRedisReady();
+// routes
+app.use('/auth', me);
+app.use('/auth', signin);
 app.use('/', setupRouter);
-
-// protected endpoint
-app.use('/', me);
-
-
-app.get('/health', (_req: Request, res: Response) => res.send('ok'));
-
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(err);
-  res.status(500).send('Internal Server Error');
-});
+// health check
+app.get('/health', (_req, res) => res.success({ message: 'ok' }));
+// 404 + error handler (must be last)
+app.use(notFound);
+app.use(errorHandler);
 
 app.listen(config.port, () => {
   console.log(`Server running on http://localhost:${config.port}`);
 });
+

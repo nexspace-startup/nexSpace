@@ -1,57 +1,46 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useUserStore } from "../../stores/userStore";
 import { googleGetCode } from '../../lib/oauthClients';
+import { getMe } from '../../services/authService';
 
 type Provider = 'google' | 'microsoft';
-
 
 const Signin: React.FC = () => {
     const setUser = useUserStore((state) => state.setUser);
     const [isLoading, setIsLoading] = useState(false);
     const navigate = useNavigate();
-    const handleGoogleLogin = () => {
-        handleOAuth('google')
-    };
-    const handleMicrosoftLogin = () => {
-        handleOAuth('microsoft')
+    const loc = useLocation();
+
+    // NEW: figure out where to go after login
+    const resolveNext = () => {
+        const from = (loc.state as any)?.from;
+        const statePath = typeof from === 'string' ? from : from?.pathname;
+        const queryNext = new URLSearchParams(loc.search).get('next');
+        const raw = statePath || queryNext;
+        // allow only same-origin paths
+        return raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/dashboard';
     };
 
-    async function handleOAuth(provider: 'google' | 'microsoft') {
+    const handleGoogleLogin = () => {
+        handleOAuth('google');
+    };
+    const handleMicrosoftLogin = () => {
+        handleOAuth('microsoft');
+    };
+
+    async function handleOAuth(provider: Provider) {
         try {
             setIsLoading(true);
-            let result: any;
             if (provider === 'google') {
                 const code = await googleGetCode();
                 if (!code) throw new Error('Google sign-in was cancelled.');
-                result = await completeAuthentication('google', {
+                await completeAuthentication('google', {
                     code,
                     redirectUri: 'postmessage',
                 });
             }
-            //   else {
-            //     const idToken = await microsoftGetIdToken();
-            //     if (!idToken) throw new Error('Microsoft sign-in was cancelled.');
-            //     result = await completeAuthentication('microsoft', { idToken });
-            //   }
-
-            if (!result?.isAuthenticated || !result.user) {
-                console.log(result);
-                alert('Authentication failed. Please try again.');
-                return;
-            }
-
-            // save user
-            setUser(result.user);
-            setIsLoading(false);
-            // route by workspaces
-            const ws = result.workspaces ?? [];
-            if (ws.length === 0) {
-                navigate('/setup');
-            } else if (ws.length >= 1) {
-                // optionally set active workspace in a store here
-                navigate('/dashboard'); // rewrite to your actual path
-            } 
+            // (If you add Microsoft, call completeAuthentication similarly)
         } catch (e: any) {
             console.error(e);
             setIsLoading(false);
@@ -75,16 +64,45 @@ const Signin: React.FC = () => {
             body: JSON.stringify(payload),
         });
 
+        // success can be 204 (No Content) — tolerate both 2xx + 204
         if (!resp.ok && resp.status !== 204) {
-            // backend might reply 204 No Content on success
             const msg = await resp.text().catch(() => 'Auth failed');
             throw new Error(msg || 'Authentication failed');
         }
 
-        const me = await fetch('/api/me', { credentials: 'include' });
-        if (!me.ok) throw new Error('Failed to bootstrap session');
-        return (await me.json()) as any;
+        getMe()
+            .then((res) => {
+                if (res?.isAuthenticated && res?.user) {
+                    const { id, first_name, last_name, email } = res.user;
+                    const name = [first_name, last_name].filter(Boolean).join(' ');
+                    setIsLoading(false);
+                    setUser({ id, firstName: first_name, lastName: last_name, name, email });
+
+                    // CHANGED: use intended route if available; otherwise dashboard.
+                    const path = resolveNext();
+
+                    if (id) {
+                        navigate(path, { replace: true });
+                    } else {
+                        // if the user record isn't created yet → onboarding
+                        if (path !== '/dashboard') {
+                            navigate(path, { replace: true });
+                        } else
+                            navigate('/setup', { replace: true });
+                    }
+                } else {
+                    setIsLoading(false);
+                    alert('Authentication failed. Please try again.');
+                }
+            })
+            .catch((e) => {
+                console.error(e);
+                setIsLoading(false);
+                alert(e?.message || 'Authentication error');
+            });
     }
+
+
     return (
         <div className="relative min-h-screen w-full bg-white flex items-center justify-center">
             {/* Centered Frame */}
@@ -100,7 +118,6 @@ const Signin: React.FC = () => {
                         </div>
                     </div>
 
-                    {/* Title */}
                     <h2 className="text-[24px] font-bold text-[#212121] text-center leading-[36px]">
                         Welcome to NexSpace
                     </h2>
@@ -109,7 +126,7 @@ const Signin: React.FC = () => {
                     </p>
                 </div>
 
-                {/* Email Input & Button */}
+                {/* Email Input & Button (placeholder for later) */}
                 <div className="flex flex-col items-start gap-4 w-full">
                     <div className="flex flex-col gap-1 w-full">
                         <label className="text-sm text-[#212121] font-medium">Email</label>
@@ -134,13 +151,11 @@ const Signin: React.FC = () => {
 
                 {/* OAuth Buttons */}
                 <div className="flex flex-col gap-6 w-full">
-                    {/* Google Button */}
                     <button onClick={handleGoogleLogin} className="w-full flex items-center justify-center gap-3 py-2 border border-[#E0E0E0] rounded-xl bg-[#F2F4F6]">
                         <img src="/google-icon.svg" alt="Google" className="w-5 h-5" />
                         <span className="text-sm font-semibold text-[#212121]">Continue with Google</span>
                     </button>
 
-                    {/* Microsoft Button */}
                     <button onClick={handleMicrosoftLogin} className="w-full flex items-center justify-center gap-3 py-2 border border-[#E0E0E0] rounded-xl bg-[#F2F4F6]">
                         <img src="/microsoft-icon.svg" alt="Microsoft" className="w-5 h-5" />
                         <span className="text-sm font-semibold text-[#212121]">Continue with Microsoft</span>
@@ -148,7 +163,6 @@ const Signin: React.FC = () => {
                 </div>
             </div>
 
-            {/* Terms & Privacy */}
             <p className="absolute bottom-8 text-center text-sm text-[#828282] w-[322px]">
                 By signing up, you agree to our Terms of Service and Privacy Policy
             </p>

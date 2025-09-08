@@ -4,7 +4,7 @@ import ProgressBar from "../../components/ProgressBar";
 import AccountSetup from "../../components/AccountSetup";
 import WorkspaceSetup from "../../components/WorkspaceSetup";
 import InvitationSetup from "../../components/InvitationSetup";
-import type { AccountData, WorkspaceData, InviteData, OnboardingPayload } from "../../types";
+import type { AccountData, WorkspaceData, OnboardingPayload } from "../../types";
 import "./Setup.css"; // import the shared styles
 import Sidebar from "../../components/Setup/_nexSideBar";
 import { api } from "../../services/httpService";
@@ -35,12 +35,13 @@ export default function Setup() {
     };
     try {
       setIsLoading(true);
-      const res = await api.post("/api/onboarding", payload)
+      payload.role = "OWNER"
+      const res = await api.post("/onboarding", payload)
 
-      if (res.status === 201) {
+      if (res?.data?.success === true) {
         // Success → alert with workspace name or a simple message
         setIsLoading(false);
-        alert(`Workspace "${res.data.workspace.name}" created successfully!`)
+        alert(`Workspace "${res.data?.workspaceName}" created successfully!`)
         // Redirect to dashboard
         navigate('/dashboard');
 
@@ -48,8 +49,9 @@ export default function Setup() {
     } catch (err: any) {
       // Error handling
       setIsLoading(false);
+      console.log(err);
       if (err.response) {
-        alert(`Error: ${err.response.data.error}`)
+        alert(`Error: ${err?.response?.data?.error}`)
       } else {
         alert("Something went wrong")
       }

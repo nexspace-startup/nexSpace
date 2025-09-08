@@ -7,20 +7,52 @@ interface OAuthConfig {
   redirectUri?: string;
 }
 
+interface SMTPConfig {
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+  secure: boolean;   
+}
+
+interface MailConfig {
+  from: string;
+  smtp: SMTPConfig;
+}
+
+interface liveKitConfig {
+  url: string;
+  apiKey: string;
+  apiSecret: string;
+}
+
 export interface Config {
+  webOrigin?: string;
   port: number;
   nodeEnv: string;
   sessionSecret: string;
   google: OAuthConfig;
   microsoft: OAuthConfig & { tenantId: string };
   postLogoutRedirect: string;
+  mail: MailConfig;
+  liveKit: liveKitConfig;
 }
 
 export const config: Config = {
   port: Number(process.env.PORT) || 3000,
   nodeEnv: process.env.NODE_ENV || 'development',
   sessionSecret: process.env.SESSION_SECRET || 'dev-secret',
-
+  webOrigin: process.env.WEB_ORIGIN || 'http://localhost:5173',
+  mail: {
+    from: process.env.MAIL_FROM || "Nexspace <no-reply@nexspace.local>",
+    smtp: {
+      host: process.env.SMTP_HOST || "",
+      port: Number(process.env.SMTP_PORT || 587),
+      user: process.env.SMTP_USER || "",
+      pass: process.env.SMTP_PASS || "",
+      secure: process.env.SMTP_SECURE === "true",
+    },
+  },
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
@@ -31,6 +63,11 @@ export const config: Config = {
     clientId: process.env.MS_CLIENT_ID,
     clientSecret: process.env.MS_CLIENT_SECRET,
     redirectUri: process.env.MS_REDIRECT_URI,
+  },
+  liveKit: {
+    url: process.env.LIVEKIT_URL || '',
+    apiKey: process.env.LIVEKIT_API_KEY || '',
+    apiSecret: process.env.LIVEKIT_API_SECRET || '',
   },
   postLogoutRedirect:
     process.env.POST_LOGOUT_REDIRECT || 'http://localhost:3000/',
