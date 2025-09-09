@@ -1,3 +1,105 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer components {
+  /* Form labels & errors */
+  .label      { @apply block text-sm font-medium text-neutral-800; }
+  .error-text { @apply text-sm text-rose-600 mt-1; }
+
+  /* Inputs */
+  .input-base {
+    @apply w-full rounded-xl border px-4 py-2 text-neutral-900 placeholder-neutral-400
+           focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-colors;
+  }
+  .input-normal { @apply border-neutral-200; }
+  .input-error  { @apply border-rose-400; }
+
+  /* Selects */
+  .select-base {
+    @apply w-full appearance-none rounded-xl border px-4 py-2 pr-10 text-neutral-900
+           focus:outline-none focus:ring-2 focus:ring-neutral-300 transition-colors;
+  }
+  .select-normal { @apply border-neutral-200; }
+  .select-error  { @apply border-rose-400; }
+
+  /* Buttons (setup screens) */
+  .btn-primary {
+    @apply w-full rounded-xl bg-neutral-900 px-4 py-2 text-white text-lg font-medium
+           transition-colors disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+  .btn-ghost { @apply rounded-xl border border-neutral-200 px-3 py-2 text-sm; }
+
+  /* Titles */
+  .heading-xl { @apply text-3xl font-semibold text-neutral-900; }
+  .subheading { @apply text-neutral-500; }
+
+  /* Progress Bar */
+  .progress-track { @apply relative h-1 rounded-full bg-neutral-200; }
+  .progress-fill  { @apply absolute left-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-gradient-to-r from-blue-400 via-blue-600 to-black transition-all duration-500; }
+  .progress-dot   { @apply absolute top-1/2 -translate-y-1/2 -translate-x-1/2 transition-all duration-500; }
+  .progress-knob  { @apply block h-3 w-3 rounded-full bg-black shadow-sm; }
+  .progress-labels { @apply mt-3 flex justify-between text-sm; }
+  .progress-label-active { @apply text-black font-medium; }
+  .progress-label-done   { @apply text-neutral-800; }
+  .progress-label-pending{ @apply text-neutral-400; }
+
+  /* Meeting UI: pills, buttons, tiles, controls */
+  .pill-dark { @apply px-4 rounded-[20px] bg-[#18181B] shadow-md flex items-center justify-between; }
+  .btn-danger { @apply h-8 px-3 rounded-xl bg-[#ED5C5B] text-white text-xs font-semibold hover:brightness-110; }
+  .btn-cta    { @apply h-10 px-4 rounded-2xl bg-[#4285F4] text-white text-sm font-semibold disabled:opacity-60; }
+
+  .control-bar { @apply bg-[#18181B] rounded-[20px] px-6 flex items-center justify-between; }
+  .ctrl-btn    { @apply w-10 h-10 rounded-full bg-[#202024] grid place-items-center; }
+
+  .segmented         { @apply flex items-center bg-[#202024] rounded-full p-1; }
+  .segmented-active  { @apply px-3 h-8 rounded-full bg-white/10 text-white text-sm font-semibold; }
+  .segmented-inactive{ @apply px-3 h-8 rounded-full text-[#80889B] text-sm; }
+
+  .btn-circle-ghost { @apply w-8 h-8 rounded-full bg-[#202024] grid place-items-center text-white/70 disabled:opacity-40; }
+
+  .tile-profile       { @apply relative w-[120px] h-[134px] rounded-xl bg-[#18181B] flex flex-col items-center justify-center gap-3 isolate; }
+  .avatar-box         { @apply relative w-[88px] h-[64px] flex items-center justify-center rounded-[12px]; }
+  .avatar             { @apply w-16 h-16 rounded-full overflow-hidden shadow-[0_4px_15px_rgba(0,0,0,0.2)] grid place-items-center; }
+  .avatar-placeholder { @apply w-full h-full bg-[#1F1F23] grid place-items-center; }
+  .avatar-speaking    { @apply ring-2 ring-[#48FFA4] shadow-[0_0_16px_rgba(72,255,164,0.45)] transition-shadow; }
+
+  /* Top widget: 24px avatars with slight overlap */
+  .avatar-24 { @apply box-border w-6 h-6 rounded-full border border-[#26272B] overflow-hidden; }
+  .avatar-stack-24 { @apply relative h-6 w-14; }
+  .avatar-counter-24 { @apply absolute grid place-items-center w-6 h-6 rounded-full bg-[#202024] border border-[#26272B] text-[10px] leading-[14px] font-medium text-[#80889B]; }
+
+  /* Fixed-width timer readout to avoid layout shift */
+  .time-readout { @apply inline-block text-center tabular-nums text-sm font-semibold text-[#FE741F] w-[12ch]; }
+
+  /* Navbar panel */
+  .nav-btn         { @apply w-12 h-12 grid place-items-center rounded-2xl transition-colors hover:bg-white/5; }
+  .nav-btn-active  { @apply bg-[#202024]; }
+
+  /* Responsive tweaks for setup screens */
+  @screen sm {
+    .section-pad { @apply px-10; }
+    .heading-xl  { @apply text-xl; }
+  }
+
+  /* Meeting: top widget pill */
+  .widget-top { @apply absolute z-20; }
+  .widget-top-inner {
+    @apply flex items-center justify-center gap-6 pl-4 pr-6 py-[14px] rounded-[20px] bg-[#18181B] shadow-[1px_1px_15px_rgba(0,0,0,0.2)];
+  }
+  .status-chip { @apply flex items-center gap-2 h-8 px-3 bg-[#202024] rounded-xl text-white text-sm font-medium font-manrope; }
+  .icon-16 { @apply w-4 h-4; }
+  .icon-20 { @apply w-5 h-5; }
+  /* Vertical fade separator (top widget) */
+  .sep-vert { @apply w-0 h-6 border border-[#26272B]}
+  /* .sep-vert { @apply w-2 h-8; background-image: linear-gradient(to bottom, rgba(38,39,43,0), #26272B, rgba(38,39,43,0)); } */
+  .icon-btn-ghost { @apply w-8 h-8 rounded-full bg-[#202024] grid place-items-center; }
+  .avatar-stack { @apply relative h-6 w-20; }
+  .avatar-16 { @apply box-border w-6 h-6 rounded-full border border-[#26272B] overflow-hidden; }
+  .avatar-counter { @apply absolute grid place-items-center w-6 h-6 rounded-full bg-[#202024] border border-[#26272B] text-[10px] leading-3 font-medium text-[#80889B]; }
+  .chev-btn { @apply w-5 h-5 grid place-items-center text-[#80889B]; }
+
+  /* Dropdown menu */
+  .menu { @apply absolute mt-2 left-0 w-44 rounded-lg bg-[#202024] shadow-lg border border-[#26272B] py-1; }
+  .menu-item { @apply px-3 py-2 text-sm text-white/90 hover:bg-white/5 flex items-center gap-2; }
+}

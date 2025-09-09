@@ -19,6 +19,7 @@
     "express": "^4.19.2",
     "express-session": "^1.17.3",
     "google-auth-library": "^10.3.0",
+    "livekit-server-sdk": "^2.13.3",
     "nodemailer": "^7.0.6",
     "openid-client": "^5.7.0",
     "redis": "^5.8.2",
