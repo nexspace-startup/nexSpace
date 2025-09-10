@@ -3,20 +3,36 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useRoomContext } from "@livekit/components-react";
 import type { Participant, Room } from "livekit-client";
 import ProfileTile from "./ProfileTile";
+import { useMeetingStore } from "../stores/meetingStore";
+import { useShallow } from "zustand/react/shallow";
 
 const CROSS_COUNT = 5 as const;
 
-function collectParticipants(room: Room | null | undefined): Participant[] {
+function collectParticipants(
+  room: Room | null | undefined,
+  ids: { id: string }[]
+): Participant[] {
   if (!room) return [];
-  // Remote set -> array
+  const localId = (room.localParticipant as any)?.sid ?? room.localParticipant.identity;
   const remote = Array.from(room.remoteParticipants?.values?.() ?? []);
-  // For testing with many participants, uncomment below
-  // (This creates mock participants without video/audio)
+  const map = new Map<string, Participant>();
+  map.set(localId, room.localParticipant);
+  for (const rp of remote) {
+    const key = (rp as any)?.sid ?? rp.identity;
+    map.set(key, rp);
+  }
+  const out: Participant[] = [];
+  for (const a of ids) {
+    const p = map.get(a.id);
+    if (p) out.push(p);
+  }
+  //test data to test meeting grid layouts
   // const arr: any[] = [];
-  // for (let i = 0; i < 25; i++) {
+  // for (let i = 0; i < 1; i++) {
   //   arr.push({ sid: `mock-${i}`, identity: `mock-${i}`, name: `User ${i + 1}` });
   // }
-  return [room.localParticipant, ...remote].filter(Boolean) as Participant[];
+  // out.push(...arr);
+  return out;
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -34,12 +50,13 @@ type Props = {
 
 const MeetingGrid: React.FC<Props> = ({
   pageSize = 20,
-  cols = 4,
   bottomSafeAreaPx = 120,
 }) => {
   const room = useRoomContext();
+  const avatars = useMeetingStore(useShallow((s) => s.participants));
 
-  const all = useMemo(() => collectParticipants(room), [room]);
+  // Resolve LiveKit Participant objects in the same order as the store list
+  const all = useMemo(() => collectParticipants(room, avatars), [room, avatars]);
 
   const { mode, items } = useMemo(() => {
     const n = all.length;
@@ -63,25 +80,20 @@ const MeetingGrid: React.FC<Props> = ({
   const current = pages[Math.min(page, pages.length - 1)] ?? [];
   const totalPages = pages.length;
 
-  const GridMany = useMemo(
-    () =>
-      function GridManyInner() {
-        return (
-          <div
-            className="grid grid-cols-6 gap-x-0 gap-y-2 w-full"
-          // style={{
-          //   gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-          //   justifyItems: "center",
-          // }}
-          >
-            {current.map((p) => (
-              <ProfileTile key={p.sid ?? p.identity} participant={p} />
-            ))}
-          </div>
-        );
-      },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [current, cols]
+  const GridMany = useMemo(() =>
+    function GridManyInner() {
+      return (
+        <div
+          className="grid gap-x-2 gap-y-2 w-full"
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", justifyItems: "center" }}
+        >
+          {current.map((p) => (
+            <ProfileTile key={(p as any)?.sid ?? p.identity} participant={p} />
+          ))}
+        </div>
+      );
+    },
+    [current]
   );
 
   const GridOne = useMemo(
