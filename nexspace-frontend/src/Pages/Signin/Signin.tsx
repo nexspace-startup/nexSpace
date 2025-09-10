@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useUserStore } from "../../stores/userStore";
 import { googleGetCode } from '../../lib/oauthClients';
 import { getMe } from '../../services/authService';
+import { api } from '../../services/httpService';
 
 type Provider = 'google' | 'microsoft';
 
@@ -57,15 +58,10 @@ const Signin: React.FC = () => {
                 ? '/auth/google/callback'
                 : '/auth/microsoft/callback';
 
-        const resp = await fetch(endpoint, {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        });
-
+        const res = await api.post(endpoint, payload);
+        const resp = res?.data;
         // success can be 204 (No Content) — tolerate both 2xx + 204
-        if (!resp.ok && resp.status !== 204) {
+        if (!resp?.success) {
             const msg = await resp.text().catch(() => 'Auth failed');
             throw new Error(msg || 'Authentication failed');
         }
