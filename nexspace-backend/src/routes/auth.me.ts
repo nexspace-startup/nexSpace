@@ -75,9 +75,11 @@ router.get(
   "/me",
   asyncHandler(async (req: Request, res: Response) => {
     const sid = (req.cookies && (req.cookies as any).sid) as string | undefined;
+    console.log(sid);
     if (!sid) return res.success<MeResponse>({ isAuthenticated: false });
 
     const sess = await getSession(sid, DEFAULT_TTL);
+    console.log(sess ,"sess");
     const sessUserId = (sess as any)?.userId as string | undefined;
     const sessSub = (sess as any)?.sub as string | undefined;
     const sessProvider = (sess as any)?.provider as "google" | "microsoft" | undefined;
@@ -85,6 +87,7 @@ router.get(
 
     // No identity material in session
     if (!sessUserId && !sessSub) {
+      console.log("no sess user id or sub");
       return res.success<MeResponse>({ isAuthenticated: false });
     }
 

@@ -133,10 +133,13 @@ export async function getSession(
   slidingTtlSeconds?: number
 ): Promise<SessionData | null> {
   const ready = await ensureRedisReady();
+  console.log(ready, "ready");
   if (!ready) return null;
   const client = getRedisClientOrThrow();
+  console.log(client, "client");
 
   const raw = await client.get(k.sess(sid));
+  console.log(raw, "raw");
   if (!raw) return null;
 
   const data = JSON.parse(raw) as SessionData;
