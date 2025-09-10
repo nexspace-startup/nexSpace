@@ -39,10 +39,11 @@ function cookieOpts(
   ttlSeconds = DEFAULT_TTL,
   isProd = process.env.NODE_ENV === "production"
 ) {
+  console.log(process.env.NODE_ENV === "production")
   return {
     httpOnly: true,
     secure: isProd,
-    sameSite: "lax" as const,
+    sameSite: "none" as const,
     path: "/",
     maxAge: Math.max(ttlSeconds, 0) * 1000, // ms
   };
@@ -60,7 +61,7 @@ export function setSessionCookie(
 /** Clear the session cookie. */
 export function clearSessionCookie(res: ExpressResponse) {
   // Must match cookie attributes used when setting it (path/sameSite/secure)
-  res.clearCookie(SID_COOKIE, { path: "/", sameSite: "lax", httpOnly: true, secure: process.env.NODE_ENV === "production" });
+  res.clearCookie(SID_COOKIE, { path: "/", sameSite: "none", httpOnly: true, secure: process.env.NODE_ENV === "production" });
 }
 
 /**
