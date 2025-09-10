@@ -43,18 +43,25 @@ const ProfileTileComponent: React.FC<Props> = ({ participant }) => {
 
   // Memoize track subscription args to avoid re-subscribing every render
   const trackArgs = useMemo(
-    () => [{ source: Track.Source.Camera, withPlaceholder: false, participant }],
-    [participant]
+    () => [{ source: Track.Source.Camera, withPlaceholder: false }],
+    []
   );
   const tracks = useTracks(trackArgs, { onlySubscribed: true });
 
   // Use the useMemo hook to find the first subscribed camera track for the participant
   const camRef = useMemo(() => {
-    const t = tracks.find(
-      (tr) => isTrackReference(tr) && tr.source === Track.Source.Camera
-    );
+    const t = tracks.find((tr) => {
+      if (!isTrackReference(tr)) return false;
+      if (tr.source !== Track.Source.Camera) return false;
+      const ownerSid =
+        (tr as any)?.participant?.sid ??
+        (tr as any)?.participant?.identity ??
+        (tr as any)?.publication?.participant?.sid ??
+        (tr as any)?.publication?.participant?.identity;
+      return ownerSid === sid;
+    });
     return isTrackReference(t) ? t : undefined;
-  }, [tracks]);
+  }, [tracks, sid]);
 
   // Determine whether to show the video track based on the track's subscription and mute status
   const showVideo = !!(camRef?.publication?.isSubscribed && !camRef.publication.isMuted);
