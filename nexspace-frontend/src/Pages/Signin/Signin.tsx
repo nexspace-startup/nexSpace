@@ -54,8 +54,8 @@ const Signin: React.FC = () => {
     ): Promise<any> {
         const endpoint =
             provider === 'google'
-                ? '/api/auth/google/callback'
-                : '/api/auth/microsoft/callback';
+                ? '/auth/google/callback'
+                : '/auth/microsoft/callback';
 
         const resp = await fetch(endpoint, {
             method: 'POST',
