@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
 import { MicIcon, MicDisabledIcon, CameraIcon, CameraDisabledIcon, ChatIcon } from "@livekit/components-react";
-import { useShallow } from "zustand/shallow";
+import { useShallow } from "zustand/react/shallow";
 import { useMeetingStore } from "../stores/meetingStore";
 import { fmtHMS } from "../utils/util";
 import { useTick } from "../hooks/useTick";

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { devtools } from "zustand/middleware";
 import type { Room, Participant } from "livekit-client";
-import { RoomEvent } from "livekit-client";
+import { RoomEvent, Track } from "livekit-client";
 import { useWorkspaceStore } from "./workspaceStore";
 import { api } from "../services/httpService";
 
@@ -25,14 +25,28 @@ export type MeetingState = {          // 👈 export the type so consumers can a
   startedAt: number | null;
   micEnabled: boolean;
   camEnabled: boolean;
+  // whisper state
+  whisperActive: boolean;
+  whisperTargetSid: string | null;
 
   toggleMic: () => Promise<void>;
   toggleCam: () => Promise<void>;
   joinActiveWorkspace: () => Promise<void>;
   setRoom: (room: Room | null) => void;
   leave: () => void;
+  // whisper controls
+  startWhisper: (targetSid: string) => Promise<void>;
+  stopWhisper: () => Promise<void>;
 };
 
+/**
+ * Given a LiveKit room, compute a list of MeetingAvatar objects representing
+ * all participants in the room. Remote participants are included from
+ * room.remoteParticipants; the local participant is from room.localParticipant.
+ * The returned list includes the local participant.
+ *
+ * If room is null, an empty list is returned.
+ */
 function computeParticipants(room: Room | null) {
   if (!room) return [];
   const remote = Array.from(room.remoteParticipants?.values?.() ?? []);
@@ -45,6 +59,12 @@ function computeParticipants(room: Room | null) {
 
 export const useMeetingStore = create<MeetingState>()(
   devtools((set, get) => {
+    /**
+     * Updates the store's micEnabled and camEnabled to match the current
+     * state of the room's local participant.
+     *
+     * @param room - the LiveKit room to sync with
+     */
     const syncAV = (room: Room | null) => {
       const lp = room?.localParticipant;
       set({
@@ -54,6 +74,8 @@ export const useMeetingStore = create<MeetingState>()(
     };
 
     let detachEvents: (() => void) | null = null;
+    // track if we temporarily enabled mic for whisper
+    let revertMicOnWhisperStop = false;
 
     const attachRoomListeners = (room: Room | null) => {
       detachEvents?.();
@@ -79,30 +101,116 @@ export const useMeetingStore = create<MeetingState>()(
         syncAV(room);
       };
 
+      // helper: (un)subscribe from a sender's audio on THIS client
+      const setHearSender = (senderSid: string, shouldHear: boolean) => {
+        try {
+          const remotes = Array.from(room.remoteParticipants?.values?.() ?? []);
+          const rp = remotes.find((p: any) => (p?.sid ?? p?.identity) === senderSid);
+          if (!rp) return;
+          const pubs: any[] = (rp as any).getTrackPublications?.() ?? Array.from((rp as any).trackPublications?.values?.() ?? []);
+          pubs
+            .filter((pub: any) => pub?.kind === 'audio' || pub?.source === Track.Source.Microphone)
+            .forEach((pub: any) => {
+              try { pub.setSubscribed?.(!!shouldHear); } catch {}
+            });
+        } catch {}
+      };
+
+    /**
+     * Process incoming data from other clients in the room. Currently only
+     * processes 'whisper' messages, which are used to control whether the local
+     * user can hear the audio of another user in the room.
+     *
+     * The message format is a JSON object with the following fields:
+     *
+     * - `type`: should be 'whisper'
+     * - `action`: one of 'start' or 'stop'
+     * - `originSid`: the sid of the user that sent the message
+     * - `targetSid`: the sid of the user that is the target of the action
+     *
+     * If the action is 'start', the local user will be subscribed to the sender's
+     * audio if and only if the targetSid matches the local user's sid. If the
+     * action is 'stop', the local user will be unsubscribed from the sender's
+     * audio.
+     */
+      const onData = (
+        payload: Uint8Array,
+        _participant?: Participant,
+        _kind?: any,
+        topic?: string
+      ) => {
+        try {
+          // If topic is provided and it's not for whisper, ignore
+          if (typeof topic === 'string' && topic !== 'whisper') return;
+          const text = typeof (payload as any) === 'string' ? (payload as any) : new TextDecoder().decode(payload);
+          const msg = JSON.parse(text);
+          if (!msg || msg.type !== 'whisper') return;
+          const localSid = (room.localParticipant as any)?.sid ?? room.localParticipant.identity;
+          const senderSid: string | undefined = msg.originSid;
+          if (!senderSid) return;
+          if (msg.action === 'start') {
+            const targetSid: string | undefined = msg.targetSid;
+            const shouldHear = !!targetSid && targetSid === localSid;
+            setHearSender(senderSid, shouldHear);
+          } else if (msg.action === 'stop') {
+            setHearSender(senderSid, true);
+          }
+        } catch { /* ignore */ }
+      };
+
+      const onParticipantConnected = (p: Participant) => {
+        // keep participants and A/V in sync
+        updateParticipants();
+        // If this local user is currently whispering, rebroadcast start to the newcomer only
+        try {
+          const { whisperActive, whisperTargetSid } = get();
+          if (!whisperActive || !whisperTargetSid) return;
+          const lp: any = room.localParticipant as any;
+          const originSid = (lp?.sid ?? lp?.identity) as string;
+          const payload = JSON.stringify({ type: 'whisper', action: 'start', originSid, targetSid: whisperTargetSid });
+          const bytes = new TextEncoder().encode(payload);
+          const destSid = (p as any)?.sid ?? p.identity;
+          room.localParticipant.publishData(bytes, { reliable: true, topic: 'whisper', destinationSids: [destSid] } as any);
+        } catch {/* ignore */}
+      };
+
+      const onParticipantDisconnected = (p: Participant) => {
+        updateParticipants();
+        try {
+          const { whisperActive, whisperTargetSid } = get();
+          const leftSid = (p as any)?.sid ?? p.identity;
+          if (whisperActive && whisperTargetSid && leftSid === whisperTargetSid) {
+            get().stopWhisper?.();
+          }
+        } catch { /* ignore */ }
+      };
+
       room
-        .on?.(RoomEvent.ParticipantConnected, updateParticipants)
-        .on?.(RoomEvent.ParticipantDisconnected, updateParticipants)
+        .on?.(RoomEvent.ParticipantConnected, onParticipantConnected)
+        .on?.(RoomEvent.ParticipantDisconnected, onParticipantDisconnected)
         .on?.(RoomEvent.TrackSubscribed, onAnyTrackChange)
         .on?.(RoomEvent.TrackUnsubscribed, onAnyTrackChange)
         .on?.(RoomEvent.TrackMuted, onAnyTrackChange as any)
         .on?.(RoomEvent.TrackUnmuted, onAnyTrackChange as any)
         .on?.(RoomEvent.LocalTrackPublished, onAnyTrackChange as any)
         .on?.(RoomEvent.LocalTrackUnpublished, onAnyTrackChange as any)
-        .on?.(RoomEvent.ConnectionStateChanged, onConn);
+        .on?.(RoomEvent.ConnectionStateChanged, onConn)
+        .on?.(RoomEvent.DataReceived as any, onData as any);
 
       detachEvents = () => {
         clearTimeout(t1);
         clearTimeout(t2);
         room
-          .off?.(RoomEvent.ParticipantConnected, updateParticipants)
-          .off?.(RoomEvent.ParticipantDisconnected, updateParticipants)
+          .off?.(RoomEvent.ParticipantConnected, onParticipantConnected)
+          .off?.(RoomEvent.ParticipantDisconnected, onParticipantDisconnected)
           .off?.(RoomEvent.TrackSubscribed, onAnyTrackChange)
           .off?.(RoomEvent.TrackUnsubscribed, onAnyTrackChange)
           .off?.(RoomEvent.TrackMuted, onAnyTrackChange as any)
           .off?.(RoomEvent.TrackUnmuted, onAnyTrackChange as any)
           .off?.(RoomEvent.LocalTrackPublished, onAnyTrackChange as any)
           .off?.(RoomEvent.LocalTrackUnpublished, onAnyTrackChange as any)
-          .off?.(RoomEvent.ConnectionStateChanged, onConn);
+          .off?.(RoomEvent.ConnectionStateChanged, onConn)
+          .off?.(RoomEvent.DataReceived as any, onData as any);
       };
     };
 
@@ -117,6 +225,8 @@ export const useMeetingStore = create<MeetingState>()(
       startedAt: null,
       micEnabled: true,
       camEnabled: true,
+      whisperActive: false,
+      whisperTargetSid: null,
 
       setRoom: (room) => {
         set({
@@ -161,7 +271,56 @@ export const useMeetingStore = create<MeetingState>()(
           startedAt: null,
           micEnabled: true,
           camEnabled: true,
+          whisperActive: false,
+          whisperTargetSid: null,
         });
+      },
+
+      startWhisper: async (targetSid: string) => {
+        const room = get().room;
+        if (!room) return;
+        const lp: any = room.localParticipant as any;
+        // ensure mic is on; if not, enable and remember to revert
+        revertMicOnWhisperStop = false;
+        try {
+          if (!lp?.isMicrophoneEnabled) {
+            await room.localParticipant.setMicrophoneEnabled(true);
+            revertMicOnWhisperStop = true;
+            set({ micEnabled: !!room.localParticipant.isMicrophoneEnabled });
+          }
+        } catch {}
+
+        // broadcast start
+        try {
+          const originSid = (lp?.sid ?? lp?.identity) as string;
+          const payload = JSON.stringify({ type: 'whisper', action: 'start', originSid, targetSid });
+          const bytes = new TextEncoder().encode(payload);
+          await room.localParticipant.publishData(bytes, { reliable: true, topic: 'whisper' } as any);
+        } catch {}
+
+        set({ whisperActive: true, whisperTargetSid: targetSid });
+      },
+
+      stopWhisper: async () => {
+        const room = get().room;
+        if (!room) return;
+        const lp: any = room.localParticipant as any;
+        // broadcast stop
+        try {
+          const originSid = (lp?.sid ?? lp?.identity) as string;
+          const payload = JSON.stringify({ type: 'whisper', action: 'stop', originSid });
+          const bytes = new TextEncoder().encode(payload);
+          await room.localParticipant.publishData(bytes, { reliable: true, topic: 'whisper' } as any);
+        } catch {}
+
+        if (revertMicOnWhisperStop) {
+          try {
+            await room.localParticipant.setMicrophoneEnabled(false);
+            set({ micEnabled: !!room.localParticipant.isMicrophoneEnabled });
+          } catch {}
+        }
+        revertMicOnWhisperStop = false;
+        set({ whisperActive: false, whisperTargetSid: null });
       },
 
       joinActiveWorkspace: async () => {

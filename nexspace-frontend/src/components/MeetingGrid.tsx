@@ -10,11 +10,13 @@ function collectParticipants(room: Room | null | undefined): Participant[] {
   if (!room) return [];
   // Remote set -> array
   const remote = Array.from(room.remoteParticipants?.values?.() ?? []);
-  const arr: any[] = [];
-  for (let i = 0; i < 25; i++) {
-    arr.push({ sid: `mock-${i}`, identity: `mock-${i}`, name: `User ${i + 1}` });
-  }
-  return [room.localParticipant, ...remote, ...arr].filter(Boolean) as Participant[];
+  // For testing with many participants, uncomment below
+  // (This creates mock participants without video/audio)
+  // const arr: any[] = [];
+  // for (let i = 0; i < 25; i++) {
+  //   arr.push({ sid: `mock-${i}`, identity: `mock-${i}`, name: `User ${i + 1}` });
+  // }
+  return [room.localParticipant, ...remote].filter(Boolean) as Participant[];
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {

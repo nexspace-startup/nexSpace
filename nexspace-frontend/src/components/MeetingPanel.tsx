@@ -27,6 +27,9 @@ const MeetingPanel: React.FC = () => {
     leave,
     micEnabled,
     camEnabled,
+    whisperActive,
+    whisperTargetSid,
+    participants,
   } = useMeetingStore(
     useShallow((s) => ({
       url: s.url,
@@ -36,6 +39,9 @@ const MeetingPanel: React.FC = () => {
       leave: s.leave,
       micEnabled: s.micEnabled,
       camEnabled: s.camEnabled,
+      whisperActive: s.whisperActive,
+      whisperTargetSid: s.whisperTargetSid,
+      participants: s.participants,
     }))
   );
 
@@ -51,6 +57,12 @@ const MeetingPanel: React.FC = () => {
     <section className="relative flex-1 h-screen overflow-hidden bg-[#202024]">
       {/* Top widget pill */}
       {canConnect && <TopWidget />}
+      {/* Whisper indicator */}
+      {canConnect && whisperActive && (
+        <div className="absolute left-1/2 -translate-x-1/2 top-4 z-20 px-3 py-1.5 rounded-full bg-[rgba(254,116,31,0.15)] border border-[#FE741F]/40 text-[#FFD7BF] text-sm">
+          Whispering to {participants.find((p) => p.id === whisperTargetSid)?.name ?? "participant"}
+        </div>
+      )}
 
       {/* Stage */}
       {!canConnect ? (

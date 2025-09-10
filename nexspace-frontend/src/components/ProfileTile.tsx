@@ -1,15 +1,18 @@
 // src/components/meeting/ProfileTile.tsx
 
 // Import necessary dependencies from React and LiveKit
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import type { Participant } from "livekit-client";
 import { Track, ParticipantEvent } from "livekit-client";
 import {
   useTracks,
   VideoTrack,
   isTrackReference,
+  useRoomContext,
 } from "@livekit/components-react";
 import { initialsFrom } from "../utils/util";
+import { useMeetingStore } from "../stores/meetingStore";
+import { useShallow } from "zustand/react/shallow";
 
 // Define the type for the component's props
 type Props = { participant: Participant };
@@ -18,12 +21,32 @@ type Props = { participant: Participant };
 const ProfileTileComponent: React.FC<Props> = ({ participant }) => {
   // Extract the participant's name from the participant object
   const name = (participant as any)?.name ?? participant.identity;
+  const sid = (participant as any)?.sid ?? participant.identity;
 
-  // Use the useTracks hook to fetch the participant's camera track
-  const tracks = useTracks(
-    [{ source: Track.Source.Camera, withPlaceholder: false, participant }],
-    { onlySubscribed: true }
+  // Access room to determine if this tile is the local participant
+  const room = useRoomContext();
+  const localSid = (room?.localParticipant as any)?.sid ?? room?.localParticipant?.identity;
+  const isSelf = sid === localSid;
+
+  // Whisper controls
+  const { startWhisper, stopWhisper, whisperActive, whisperTargetSid } = useMeetingStore(
+    useShallow((s) => ({
+      startWhisper: s.startWhisper,
+      stopWhisper: s.stopWhisper,
+      whisperActive: s.whisperActive,
+      whisperTargetSid: s.whisperTargetSid,
+    }))
   );
+  const whisperOn = whisperActive && whisperTargetSid === sid;
+  const onPTTDown = useCallback(() => { if (!isSelf) startWhisper(sid); }, [isSelf, sid, startWhisper]);
+  const onPTTUp = useCallback(() => { stopWhisper(); }, [stopWhisper]);
+
+  // Memoize track subscription args to avoid re-subscribing every render
+  const trackArgs = useMemo(
+    () => [{ source: Track.Source.Camera, withPlaceholder: false, participant }],
+    [participant]
+  );
+  const tracks = useTracks(trackArgs, { onlySubscribed: true });
 
   // Use the useMemo hook to find the first subscribed camera track for the participant
   const camRef = useMemo(() => {
@@ -90,9 +113,27 @@ const ProfileTileComponent: React.FC<Props> = ({ participant }) => {
             />
           </svg>
         </div>
-
-
-
+        {/* Whisper push-to-talk button */}
+        <button
+          type="button"
+          className={[
+            "absolute -bottom-1 -right-1 w-7 h-7 rounded-full grid place-items-center z-10",
+            whisperOn ? "bg-[rgba(254,116,31,0.9)]" : "bg-[rgba(128,136,155,0.25)] hover:bg-[rgba(128,136,155,0.4)]",
+            isSelf ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
+          ].join(" ")}
+          aria-label={`Hold to whisper to ${name}`}
+          title={isSelf ? "Cannot whisper to yourself" : "Hold to whisper"}
+          onMouseDown={onPTTDown}
+          onMouseUp={onPTTUp}
+          onMouseLeave={onPTTUp}
+          onTouchStart={onPTTDown}
+          onTouchEnd={onPTTUp}
+          disabled={isSelf}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0h-2a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z" fill="#fff"/>
+          </svg>
+        </button>
       </div>
       {/* name chip */}
       <div className="h-[26px] min-w-[88px] px-2 rounded-xl bg-[rgba(128,136,155,0.05)] opacity-80 grid place-items-center">
