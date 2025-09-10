@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 import { useUserStore } from "../stores/userStore";
-import { acceptInvitation } from "../services/dashBoardService";
+import { acceptInvitation } from "../services/dashboardService";
 
 type View =
   | "checking"

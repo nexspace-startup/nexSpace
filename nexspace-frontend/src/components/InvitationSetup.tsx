@@ -20,7 +20,6 @@ type Props = { finalSubmit: () => void;};
 export default function InvitationSetup({ finalSubmit }: Props) {
   const {
     register,
-    watch,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -28,7 +27,7 @@ export default function InvitationSetup({ finalSubmit }: Props) {
     defaultValues: { email: "" },
   });
 
-  const email = watch("email");
+  // watching email is not currently used in UI; remove to avoid TS6133
 
   const addInvite = () => {
     alert("Invite sent (not really, this is a placeholder).");
