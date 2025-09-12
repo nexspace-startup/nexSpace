@@ -5,6 +5,7 @@ import { ensureRedisReady, getRedisClientOrThrow } from "./middleware/redis.js";
 
 const SESSION_PREFIX = "sess:";
 const USER_INDEX_PREFIX = "user_sess:"; // index by DB userId (when known)
+const SUB_INDEX_PREFIX = "sub_sess:";  // index by OAuth sub (when known)
 
 export const DEFAULT_TTL = 60 * 60 * 24 * 7; // 7 days (seconds)
 export const SID_COOKIE = "sid";
@@ -29,6 +30,7 @@ export type SessionData = {
 const k = {
   sess: (sid: string) => `${SESSION_PREFIX}${sid}`,
   userIdx: (userId: string) => `${USER_INDEX_PREFIX}${userId}`,
+  subIdx: (sub: string) => `${SUB_INDEX_PREFIX}${sub}`,
 };
 
 function newSid(bytes = 32) {
@@ -39,11 +41,10 @@ function cookieOpts(
   ttlSeconds = DEFAULT_TTL,
   isProd = process.env.NODE_ENV === "production"
 ) {
-  console.log(process.env.NODE_ENV === "production")
   return {
     httpOnly: true,
     secure: isProd,
-    sameSite: "none" as const,
+    sameSite: "lax" as const,
     path: "/",
     maxAge: Math.max(ttlSeconds, 0) * 1000, // ms
   };
@@ -61,7 +62,7 @@ export function setSessionCookie(
 /** Clear the session cookie. */
 export function clearSessionCookie(res: ExpressResponse) {
   // Must match cookie attributes used when setting it (path/sameSite/secure)
-  res.clearCookie(SID_COOKIE, { path: "/", sameSite: "none", httpOnly: true, secure: process.env.NODE_ENV === "production" });
+  res.clearCookie(SID_COOKIE, { path: "/", sameSite: "lax", httpOnly: true, secure: process.env.NODE_ENV === "production" });
 }
 
 /**
@@ -103,12 +104,36 @@ export async function createSession(
   };
 
   const pipe = client.multi();
+
+  // If a session already exists for this userId or sub, revoke older ones first
+  try {
+    const toDelete = new Set<string>();
+    if (user.userId) {
+      const sids = await client.sMembers(k.userIdx(user.userId));
+      for (const s of sids) toDelete.add(s);
+    }
+    if (user.sub) {
+      const sids = await client.sMembers(k.subIdx(user.sub));
+      for (const s of sids) toDelete.add(s);
+    }
+    if (toDelete.size > 0) {
+      for (const s of toDelete) {
+        pipe.del(k.sess(s));
+        if (user.userId) pipe.sRem(k.userIdx(user.userId), s);
+        if (user.sub) pipe.sRem(k.subIdx(user.sub), s);
+      }
+    }
+  } catch {/* ignore */}
   pipe.set(k.sess(sid), JSON.stringify(data), { EX: ttlSeconds });
 
   // If we already know DB userId (e.g., local sign-in), index it now.
   if (user.userId) {
     pipe.sAdd(k.userIdx(user.userId), sid);
     pipe.expire(k.userIdx(user.userId), ttlSeconds);
+  }
+  if (user.sub) {
+    pipe.sAdd(k.subIdx(user.sub), sid);
+    pipe.expire(k.subIdx(user.sub), ttlSeconds);
   }
   await pipe.exec();
 
@@ -180,7 +205,25 @@ export async function attachDbUserIdToSession(
   if (lastName !== undefined) data.lastName = lastName;
   data.lastSeenAt = new Date().toISOString();
 
+  // Enforce single active session per user: remove all other sessions for this userId
   const pipe = client.multi();
+  try {
+    const existing = await client.sMembers(k.userIdx(dbUserId));
+    for (const otherSid of existing) {
+      if (otherSid === sid) continue;
+      const otherRaw = await client.get(k.sess(otherSid));
+      pipe.del(k.sess(otherSid));
+      pipe.sRem(k.userIdx(dbUserId), otherSid);
+      if (otherRaw) {
+        try {
+          const other = JSON.parse(otherRaw) as SessionData;
+          if (other?.sub) pipe.sRem(k.subIdx(other.sub), otherSid);
+        } catch { /* ignore parse errors */ }
+      }
+    }
+  } catch { /* ignore */ }
+
+  // Persist updated session and index
   pipe.set(k.sess(sid), JSON.stringify(data), { EX: ttlSeconds });
   pipe.sAdd(k.userIdx(dbUserId), sid);
   pipe.expire(k.userIdx(dbUserId), ttlSeconds);
@@ -226,6 +269,12 @@ export async function rotateSession(
     pipe.sAdd(k.userIdx(prev.userId), sid);
     pipe.expire(k.userIdx(prev.userId), ttlSeconds);
   }
+  // 4) update sub index (if OAuth sub present)
+  if (prev.sub) {
+    pipe.sRem(k.subIdx(prev.sub), oldSid);
+    pipe.sAdd(k.subIdx(prev.sub), sid);
+    pipe.expire(k.subIdx(prev.sub), ttlSeconds);
+  }
   await pipe.exec();
 
   return next;
@@ -243,6 +292,7 @@ export async function revokeSession(sid: string): Promise<void> {
   if (raw) {
     const data = JSON.parse(raw) as SessionData;
     if (data.userId) pipe.sRem(k.userIdx(data.userId), sid);
+    if (data.sub) pipe.sRem(k.subIdx(data.sub), sid);
   }
   await pipe.exec();
 }
@@ -257,5 +307,17 @@ export async function revokeAllSessions(userId: string): Promise<void> {
   const pipe = client.multi();
   for (const sid of sids) pipe.del(k.sess(sid));
   pipe.del(k.userIdx(userId));
+  await pipe.exec();
+}
+
+/** Revoke all sessions for an OAuth sub. */
+export async function revokeAllSessionsBySub(sub: string): Promise<void> {
+  const ready = await ensureRedisReady();
+  if (!ready) return;
+  const client = getRedisClientOrThrow();
+  const sids = await client.sMembers(k.subIdx(sub));
+  const pipe = client.multi();
+  for (const s of sids) pipe.del(k.sess(s));
+  pipe.del(k.subIdx(sub));
   await pipe.exec();
 }
