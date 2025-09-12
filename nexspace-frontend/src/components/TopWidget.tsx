@@ -37,18 +37,20 @@ const TopWidget: React.FC = () => {
   const extraCount = Math.max(0, participants.length - avatars.length);
 
   return (
-    <div className="widget-top left-1/2 -translate-x-1/2" style={{ top: 24, width: 385, height: 60 }}>
-      <div className="widget-top-inner" style={{ width: 385, height: 60 }}>
-        <div className="flex items-center" style={{ width: 345, height: 32, gap: 32 }}>
+    <div
+      className="widget-top left-1/2 -translate-x-1/2 w-[calc(100%-24px)] max-w-[385px]"
+      style={{ top: 24, height: 60 }}
+    >
+      <div className="widget-top-inner w-full h-full">
+        <div className="flex items-center w-full h-8 gap-3 sm:gap-8">
           {/* Status chip */}
           <div className="relative">
             <button
               type="button"
-              className="status-chip"
+              className="status-chip min-w-[120px] max-w-[180px]"
               onClick={() => setStatusOpen((v) => !v)}
               aria-haspopup="menu"
               aria-expanded={statusOpen}
-              style={{ width: 137 }}
             >
               <svg className="icon-16" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M5 9a7 7 0 1 0 14 0" stroke="#4285F4" strokeWidth="1.6" fill="none" />
@@ -92,10 +94,10 @@ const TopWidget: React.FC = () => {
           </div>
 
           {/* Divider */}
-          <div className="sep-vert" />
+          <div className="sep-vert hidden sm:block" />
 
           {/* Search */}
-          <button className="icon-btn-ghost" aria-label="Search" style={{ width: 32, height: 32 }}>
+          <button className="icon-btn-ghost hidden sm:grid" aria-label="Search" style={{ width: 32, height: 32 }}>
             <svg className="icon-16 text-[#80889B]" viewBox="0 0 24 24" aria-hidden="true">
               <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.6" fill="none" />
               <path d="M20 20l-3.2-3.2" stroke="currentColor" strokeWidth="1.6" />
@@ -103,7 +105,7 @@ const TopWidget: React.FC = () => {
           </button>
 
           {/* Divider */}
-          <div className="sep-vert" />
+          <div className="sep-vert hidden sm:block" />
 
           {/* Avatars + chevron */}
           <div className="flex items-center" style={{ gap: 5 }}>
@@ -125,7 +127,7 @@ const TopWidget: React.FC = () => {
               )}
               <div className="avatar-counter-24" style={{ left: 32, top: 0 }}>{extraCount > 0 ? `+${extraCount}` : "+0"}</div>
             </div>
-            <button className="chev-btn" aria-label="More participants" style={{ width: 20, height: 20 }}>
+            <button className="chev-btn hidden sm:grid" aria-label="More participants" style={{ width: 20, height: 20 }}>
               <svg viewBox="0 0 24 24" className="w-5 h-5">
                 <path d="M6 9l6 6 6-6" stroke="#80889B" strokeWidth="1.6" fill="none" strokeLinecap="round" />
               </svg>

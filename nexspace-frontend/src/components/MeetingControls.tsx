@@ -31,7 +31,11 @@ const MeetingControls: React.FC = () => {
 
     return (
         <div
-            className="absolute w-[682px] h-[72px] left-1/2 -translate-x-1/2 bottom-6 control-bar"
+            className="absolute left-1/2 -translate-x-1/2 control-bar
+                        w-[calc(100%-16px)] max-w-[682px]
+                        h-auto sm:h-[72px]
+                        px-3 sm:px-6 py-2 sm:py-0
+                        bottom-2 sm:bottom-6 flex-wrap gap-3"
             role="region"
             aria-label="Meeting controls"
         >

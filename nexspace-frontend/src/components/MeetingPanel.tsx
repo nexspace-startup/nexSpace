@@ -54,7 +54,7 @@ const MeetingPanel: React.FC = () => {
   const canConnect = !!url && !!token;
 
   return (
-    <section className="relative flex-1 h-screen overflow-hidden bg-[#202024]">
+    <section className="relative flex-1 h-dvh overflow-hidden bg-[#202024]">
       {/* Top widget pill */}
       {canConnect && <TopWidget />}
       {/* Whisper indicator */}
@@ -94,7 +94,7 @@ const MeetingPanel: React.FC = () => {
           <RoomBinder />
 
           {/* Main grid (fills, centers, leaves space for controls) */}
-          <MeetingGrid pageSize={24} cols={4} />
+          <MeetingGrid pageSize={24} />
 
           {/* Audio + controls (overlay) */}
           <RoomAudioRenderer />

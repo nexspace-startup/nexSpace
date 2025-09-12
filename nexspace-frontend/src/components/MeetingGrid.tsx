@@ -44,12 +44,11 @@ function chunk<T>(arr: T[], size: number): T[][] {
 
 type Props = {
   pageSize?: number;
-  cols?: number;
   bottomSafeAreaPx?: number; // space reserved for controls
 };
 
 const MeetingGrid: React.FC<Props> = ({
-  pageSize = 20,
+  pageSize = 24,
   bottomSafeAreaPx = 120,
 }) => {
   const room = useRoomContext();
@@ -85,7 +84,7 @@ const MeetingGrid: React.FC<Props> = ({
       return (
         <div
           className="grid gap-x-2 gap-y-2 w-full"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", justifyItems: "center" }}
+          style={{ gridTemplateColumns: "repeat(6, minmax(0, 1fr))", justifyItems: "center" }}
         >
           {current.map((p) => (
             <ProfileTile key={(p as any)?.sid ?? p.identity} participant={p} />
@@ -138,7 +137,7 @@ const MeetingGrid: React.FC<Props> = ({
   return (
     <div className="relative h-full w-full bg-[#202024]">
       {/* Centered stage with your max width */}
-      <div className="relative mx-auto h-full w-full max-w-[1000px]">
+      <div className="relative mx-auto h-full w-full max-w-[1000px] px-3 sm:px-0">
         {/* Keep space for the top pill and bottom controls */}
         <div
           className="h-full w-full flex items-center justify-center"
