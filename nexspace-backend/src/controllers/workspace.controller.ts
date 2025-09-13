@@ -1,14 +1,10 @@
 import type { Request, Response } from "express";
-import { getSession, DEFAULT_TTL } from "../session.js";
 import { MeetingJoinParams } from "../validators/workspace.validators.js";
 import { buildMeetingJoinToken, listWorkspacesForUser } from "../services/meeting.service.js";
 
 export async function joinMeeting(req: Request, res: Response) {
-  const sid = req.cookies?.sid as string | undefined;
-  if (!sid) return res.fail?.([{ message: "Unauthorized", code: "UNAUTHORIZED" }], 401);
-  const sess = await getSession(sid, DEFAULT_TTL);
-  const userId = (sess as any)?.userId as string | undefined;
-  if (!userId) return res.fail?.([{ message: "Unauthorized", code: "UNAUTHORIZED" }], 401);
+  const userId = req.auth!.userId! as string;
+  const sess = req.auth!.session;
 
   const parsed = MeetingJoinParams.safeParse(req.params);
   if (!parsed.success) return res.fail?.([{ message: "workspaceUid required", code: "VALIDATION_ERROR" }], 400);
@@ -29,13 +25,8 @@ export async function joinMeeting(req: Request, res: Response) {
 }
 
 export async function listMyWorkspaces(req: Request, res: Response) {
-  const sid = req.cookies?.sid as string | undefined;
-  if (!sid) return res.fail?.([{ message: "Unauthorized", code: "UNAUTHORIZED" }], 401);
-  const sess = await getSession(sid, DEFAULT_TTL);
-  const userId = (sess as any)?.userId as string | undefined;
-  if (!userId) return res.fail?.([{ message: "Unauthorized", code: "UNAUTHORIZED" }], 401);
+  const userId = req.auth!.userId! as string;
 
   const rows = await listWorkspacesForUser(userId);
   return res.success?.(rows, 200) ?? res.status(200).json({ success: true, data: rows, errors: [] });
 }
-

@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import type { z } from "zod";
-import { DEFAULT_TTL, createSession, getSession, setSessionCookie } from "../session.js";
+import { DEFAULT_TTL, createSession, setSessionCookie } from "../session.js";
 import { OnboardingSchema, InvitationSchema, AcceptParams } from "../validators/setup.validators.js";
 import { onboardingLocal, onboardingOAuth, createInvitationForWorkspace, acceptInvitation } from "../services/setup.service.js";
 
@@ -12,11 +12,9 @@ export async function onboarding(req: Request, res: Response) {
   }
   const input = parsed.data;
 
-  const sid = req.cookies?.sid as string | undefined;
-  const sess = sid ? await getSession(sid, DEFAULT_TTL) : null;
-  const sub = (sess as any)?.sub ?? null;
-  const sessUserId = (sess as any)?.userId ?? null;
-  const hintedProvider = (sess as any)?.provider as any | undefined;
+  const sub = req.auth?.sub ?? null;
+  const sessUserId = req.auth?.userId ?? null;
+  const hintedProvider = req.auth?.provider as any | undefined;
 
   if (!sub) {
     if (!input.password) {
@@ -55,10 +53,7 @@ export async function invite(req: Request, res: Response) {
     const details = parsed.error.issues.map((i: z.ZodIssue) => ({ path: i.path.join("."), message: i.message }));
     return res.fail?.([{ message: "Validation failed", code: "VALIDATION_ERROR", details }], 400);
   }
-  const sid = req.cookies?.sid as string | undefined;
-  const sess = sid ? await getSession(sid, DEFAULT_TTL) : null;
-  const sessUserId = (sess as any)?.userId as string | undefined;
-  if (!sessUserId) return res.fail?.([{ message: "Unauthorized", code: "UNAUTHORIZED" }], 401);
+  const sessUserId = req.auth!.userId! as string;
 
   try {
     const { invitationurl, emailSent, reused } = await createInvitationForWorkspace(sessUserId, parsed.data);
@@ -77,11 +72,8 @@ export async function acceptInvite(req: Request, res: Response) {
     const details = params.error.issues.map((i: z.ZodIssue) => ({ path: i.path.join("."), message: i.message }));
     return res.fail?.([{ message: "Validation failed", code: "VALIDATION_ERROR", details }], 400);
   }
-  const sid = req.cookies?.sid as string | undefined;
-  const sess = sid ? await getSession(sid, DEFAULT_TTL) : null;
-  const sessUserId = (sess as any)?.userId as string | undefined;
-  const sessEmail = (sess as any)?.email as string | undefined;
-  if (!sessUserId || !sessEmail) return res.fail?.([{ message: "Unauthorized", code: "UNAUTHORIZED" }], 401);
+  const sessUserId = req.auth!.userId! as string;
+  const sessEmail = req.auth!.email! as string;
 
   try {
     const payload = await acceptInvitation(params.data.token, sessUserId, sessEmail.toLowerCase());
@@ -95,4 +87,3 @@ export async function acceptInvite(req: Request, res: Response) {
     return res.fail?.([{ message: "Internal server error", code: "INTERNAL_SERVER_ERROR" }], 500);
   }
 }
-

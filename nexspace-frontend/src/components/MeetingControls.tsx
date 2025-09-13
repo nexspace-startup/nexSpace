@@ -7,7 +7,7 @@ import { useTick } from "../hooks/useTick";
 
 const MeetingControls: React.FC = () => {
     const {
-        connected, startedAt, leave, micEnabled, camEnabled, toggleMic, toggleCam
+        connected, startedAt, leave, micEnabled, camEnabled, toggleMic, toggleCam, chatOpen, unreadCount, toggleChat
     } = useMeetingStore(
         useShallow((s) => ({
             connected: s.connected,
@@ -17,6 +17,9 @@ const MeetingControls: React.FC = () => {
             camEnabled: s.camEnabled,
             toggleMic: s.toggleMic,
             toggleCam: s.toggleCam,
+            chatOpen: s.chatOpen,
+            unreadCount: s.unreadCount,
+            toggleChat: s.toggleChat,
         }))
     );
 
@@ -81,9 +84,12 @@ const MeetingControls: React.FC = () => {
                     {camEnabled ? <CameraIcon className="w-5 h-5 text-[#80889B]" /> : <CameraDisabledIcon className="w-5 h-5 text-[#ed5c5b]" />}
                 </button>
 
-                {/* Chat placeholder */}
-                <button className="ctrl-btn" title="Chat">
+                {/* Chat toggle */}
+                <button className={`ctrl-btn relative ${chatOpen ? 'ring-1 ring-[#3D93F8]' : ''}`} title="Chat" onClick={toggleChat} aria-pressed={chatOpen}>
                     <ChatIcon className="w-5 h-5 text-[#80889B]" />
+                    {(!chatOpen && unreadCount > 0) && (
+                      <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#ED5C5B] text-white text-[10px] grid place-items-center">{unreadCount}</span>
+                    )}
                 </button>
             </div>
 

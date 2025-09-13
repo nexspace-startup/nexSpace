@@ -47,6 +47,35 @@ Sessions are stored in Redis and indexed by both DB `userId` and OAuth `sub`:
 
 This guarantees a single active session per identity, whether the user came via local sign-in or OAuth-first.
 
+## Auth Middleware
+
+- `attachSession` (global): Parses `sid` from cookie or `Authorization: Bearer <sid>`, loads the session with sliding TTL, and attaches it to `req.auth` when present. This runs globally in `server.ts` so downstream handlers can read `req.auth` if needed.
+- `requireSession`: Ensures a valid session exists; responds `401` with a unified JSON error if missing/invalid. Also sets `req.auth`.
+- `requireUser`: Like `requireSession`, but additionally enforces that the session is bound to a DB `userId`.
+
+Usage examples:
+
+```
+import { Router } from 'express';
+import { asyncHandler } from '../utils/asyncHandler.js';
+import { requireUser } from '../middleware/auth.js';
+
+const router = Router();
+
+// Protect all routes in this router
+router.use(asyncHandler(requireUser));
+
+router.get('/protected', asyncHandler(async (req, res) => {
+  const userId = req.auth!.userId!;
+  // ...
+  return res.success({ ok: true });
+}));
+```
+
+Notes:
+- Session id is read from the `sid` cookie by default; an `Authorization: Bearer <sid>` header also works (CORS includes `Authorization`).
+- All protected responses use the same `res.fail([{ message: 'Unauthorized', code: 'UNAUTHORIZED' }], 401)` shape.
+
 ## Build
 
 ```

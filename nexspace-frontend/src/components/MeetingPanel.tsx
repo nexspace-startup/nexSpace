@@ -6,6 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 import MeetingControls from "./MeetingControls";
 import MeetingGrid from "./MeetingGrid";
 import TopWidget from "./TopWidget";
+import ChatPanel from "./ChatPanel";
 import { useMeetingStore } from "../stores/meetingStore";
 
 const RoomBinder: React.FC = () => {
@@ -99,6 +100,7 @@ const MeetingPanel: React.FC = () => {
           {/* Audio + controls (overlay) */}
           <RoomAudioRenderer />
           <MeetingControls />
+          <ChatPanel />
         </LiveKitRoom>
       )}
     </section>

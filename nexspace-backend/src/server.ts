@@ -7,6 +7,7 @@ import me from './routes/auth.me.js';
 import { ensureRedisReady, closeRedis } from './middleware/redis.js';
 import cookieParser from 'cookie-parser';
 import { responseWrapper } from './middleware/response.js';
+import { attachSession } from './middleware/auth.js';
 import { errorHandler, notFound } from './middleware/error.js';
 import { closePrisma } from './prisma.js';
 
@@ -17,6 +18,7 @@ if (config.nodeEnv === 'production') app.set('trust proxy', 1);
 app.use(json());
 app.use(cookieParser());
 app.use(responseWrapper);
+app.use(attachSession);
 
 // Minimal CORS (no extra deps) for browser client with credentials
 app.use((req, res, next) => {

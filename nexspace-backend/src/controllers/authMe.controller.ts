@@ -1,24 +1,21 @@
 import type { Request, Response } from "express";
-import { DEFAULT_TTL, attachDbUserIdToSession, getSession, isSessionValid } from "../session.js";
+import { DEFAULT_TTL, attachDbUserIdToSession } from "../session.js";
 import { loadUserWithMemberships, resolveUserIdBySub, toMeDTO, type MeResponse } from "../services/me.service.js";
 
 export async function headSession(req: Request, res: Response) {
-  const sid = (req.cookies && (req.cookies as any).sid) as string | undefined;
   res.setHeader("Cache-Control", "no-store");
-  if (!sid) return res.status(200).end();
-  const ok = await isSessionValid(sid);
-  return res.status(ok ? 204 : 200).end();
+  // attachSession runs globally; if req.auth exists, session is valid
+  return res.status(req.auth?.sid ? 204 : 200).end();
 }
 
 export async function getMe(req: Request, res: Response) {
-  const sid = (req.cookies && (req.cookies as any).sid) as string | undefined;
-  if (!sid) return res.success<MeResponse>({ isAuthenticated: false });
-
-  const sess = await getSession(sid, DEFAULT_TTL);
-  const sessUserId = (sess as any)?.userId as string | undefined;
-  const sessSub = (sess as any)?.sub as string | undefined;
-  const sessProvider = (sess as any)?.provider as "google" | "microsoft" | undefined;
-  const sessEmail = (sess as any)?.email as string | undefined;
+  const sess = req.auth?.session;
+  if (!sess) return res.success<MeResponse>({ isAuthenticated: false });
+  const sid = req.auth!.sid;
+  const sessUserId = req.auth?.userId as string | undefined;
+  const sessSub = req.auth?.sub as string | undefined;
+  const sessProvider = req.auth?.provider as "google" | "microsoft" | undefined;
+  const sessEmail = req.auth?.email as string | undefined;
 
   if (!sessUserId && !sessSub) {
     return res.success<MeResponse>({ isAuthenticated: false });
@@ -45,4 +42,3 @@ export async function getMe(req: Request, res: Response) {
   const dto = toMeDTO(user, sessEmail);
   return res.success<MeResponse>(dto);
 }
-
