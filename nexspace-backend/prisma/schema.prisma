@@ -33,6 +33,7 @@ model User {
   workspacesCreated Workspace[]       @relation("UserCreatedWorkspaces")
   memberships       WorkspaceMember[]
   invitesSent       Invitation[]      @relation("UserInvites")
+  chatMessages      ChatMessage[]
 }
 
 model AuthIdentity {
@@ -77,6 +78,7 @@ model Workspace {
 
   members     WorkspaceMember[]
   invitations Invitation[]
+  chatMessages ChatMessage[]
 
   @@index([createdById])
 }
@@ -130,4 +132,21 @@ model EmailTemplate {
   mailBody String               
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// Chat messages (per workspace/room)
+model ChatMessage {
+  id          BigInt   @id @default(autoincrement())
+  workspaceId BigInt
+  senderId    BigInt
+  roomUid     String   // LiveKit room id (we use Workspace.uid)
+  content     String
+  createdAt   DateTime @default(now())
+  deletedAt   DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  sender    User      @relation(fields: [senderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([senderId, createdAt])
 }

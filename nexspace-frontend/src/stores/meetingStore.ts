@@ -46,6 +46,7 @@ export type MeetingState = {          // 👈 export the type so consumers can a
   // chat controls
   toggleChat: () => void;
   sendMessage: (text: string) => Promise<void>;
+  loadChatHistory: (limit?: number) => Promise<void>;
 };
 
 export type ChatMessage = {
@@ -276,6 +277,10 @@ export const useMeetingStore = create<MeetingState>()(
         });
         syncAV(room);
         attachRoomListeners(room);
+        // load recent chat when connected
+        if (room) {
+          try { get().loadChatHistory?.(100); } catch {}
+        }
       },
 
       toggleMic: async () => {
@@ -429,6 +434,38 @@ export const useMeetingStore = create<MeetingState>()(
           set((s) => ({
             messages: [...s.messages, { id: msg.id, text: clean, ts: Date.now(), senderSid, senderName, isLocal: true }],
           }));
+          // Persist to server (best-effort)
+          try {
+            const { activeWorkspaceId } = useWorkspaceStore.getState();
+            if (activeWorkspaceId) {
+              await api.post(`/workspace/${activeWorkspaceId}/chat/messages`, { text: clean }, { withCredentials: true });
+            }
+          } catch {/* ignore persistence errors */}
+        } catch {/* ignore */}
+      },
+
+      loadChatHistory: async (limit = 100) => {
+        try {
+          const { activeWorkspaceId } = useWorkspaceStore.getState();
+          if (!activeWorkspaceId) return;
+          const { data } = await api.get(`/workspace/${activeWorkspaceId}/chat/messages`, {
+            params: { limit },
+            withCredentials: true,
+          });
+          if ((data as any)?.success && Array.isArray((data as any).data)) {
+            const items: Array<{ id: string; text: string; ts: string; sender: { id: string; name: string } }> = (data as any).data;
+            set((s) => ({
+              messages: items.map((m) => ({
+                id: m.id,
+                text: m.text,
+                ts: new Date(m.ts).getTime(),
+                senderSid: m.sender.id,
+                senderName: m.sender.name,
+                isLocal: false,
+              })),
+              unreadCount: s.chatOpen ? 0 : s.unreadCount,
+            }));
+          }
         } catch {/* ignore */}
       },
     };
