@@ -3,8 +3,8 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigate } from 'react-router-dom';
-import { useUserStore } from '../../stores/userStore';
-import { googleGetCode } from '../../lib/oauthClients';
+import { useUserStore } from '../stores/userStore';
+import { googleGetCode } from '../lib/oauthClients';
 
 type Provider = 'google' | 'microsoft';
 
@@ -121,26 +121,26 @@ export default function AuthenticationPage() {
     }
 
     return (
-        <div className="fixed inset-0 w-screen h-screen bg-[#202024] flex flex-col items-center justify-center overflow-hidden px-4 ">
+        <div className="fixed inset-0 w-screen h-screen bg-[#202024] flex flex-col items-center justify-center overflow-hidden px-4">
             {/* Logo */}
-            <div className=" rigin-top-left scale-[0.9] w-20 h-20 mb-8">
+            <div className="w-20 h-20 mb-8">
                 <div className="w-full h-full rounded-full bg-gradient-to-b from-[#B7F2D4] to-[#48FFA4] flex items-center justify-center">
                     <span className="text-black text-2xl font-bold">N</span>
                 </div>
             </div>
 
             {/* Heading */}
-            <h1 className="rigin-top-left scale-[0.9] text-white font-semibold text-center text-[24px] w-[254px] h-[36px]">
+            <h1 className="text-white font-semibold text-center text-[24px] w-[254px] h-[36px]">
                 Welcome to NexSpace
             </h1>
-            <p className="rigin-top-left scale-[0.9] text-white text-base mt-2 text-center max-w-md w-[400px] h-[48px] text-[16px]">
+            <p className="text-white text-base mt-2 text-center max-w-md w-[400px] h-[48px] text-[16px]">
                 Virtual coworking & accountability for connected, productive teams.
             </p>
 
             {/* Auth Card */}
             <form
                 onSubmit={handleSubmit(onSubmit)}
-                className="rigin-top-left scale-[0.9] mt-10 w-full max-w-md bg-[#1a1a1c] rounded-2xl p-6 flex flex-col gap-5"
+                className="mt-10 w-full max-w-md bg-[#1a1a1c] rounded-2xl p-6 flex flex-col gap-5"
             >
                 {/* Email Input */}
                 <div className="flex flex-col gap-2">
@@ -235,12 +235,11 @@ export default function AuthenticationPage() {
             </form>
 
             {/* Footer */}
-            <p className="rigin-top-left scale-[0.9] mt-8 text-sm text-gray-400 text-center max-w-xs">
+            <p className="mt-8 text-sm text-gray-400 text-center max-w-xs">
                 By signing up, you agree to our{' '}
                 <span className="underline cursor-pointer">Terms of Service</span> and{' '}
                 <span className="underline cursor-pointer">Privacy Policy</span>.
             </p>
-
-        </div >
+        </div>
     );
 }

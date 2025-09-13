@@ -1,119 +1,143 @@
-import { useForm } from "react-hook-form";
-import { z } from "zod";
-import { zodResolver } from "@hookform/resolvers/zod";
-import quill_link from "../assets/quill_link.svg"
+/** @jsxImportSource react */
+import React, { useState } from "react";
 
-// Optional email: blank is allowed; if present, must be a valid email
-const schema = z.object({
-  email: z
-    .string()
-    .optional()
-    .refine((val) => !val || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val), {
-      message: "Enter a valid email",
-    }),
-});
+const InviteTeam: React.FC = () => {
+  const [email, setEmail] = useState("");
+  const [invites, setInvites] = useState<string[]>([]);
+  const [copied, setCopied] = useState(false);
+  const [showAll, setShowAll] = useState(false);
 
-type FormValues = z.infer<typeof schema>;
+  const shareLink =
+    "https://nexspace.io/invite?user=loremipsumdolorsitamet"; // placeholder
 
-type Props = { finalSubmit: () => void;};
-
-export default function InvitationSetup({ finalSubmit }: Props) {
-  const {
-    register,
-    watch,
-    formState: { errors },
-  } = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    mode: "onChange",
-    defaultValues: { email: "" },
-  });
-
-  const email = watch("email");
-
-  const addInvite = () => {
-    alert("Invite sent (not really, this is a placeholder).");
-  }
-
-  const copyLink = async () => {
-    try {
-      await navigator.clipboard.writeText("");
-    } catch {
-      // ignore (no toast lib in this snippet)
+  const handleInvite = () => {
+    if (email.trim()) {
+      setInvites((prev) => [...prev, email.trim()]);
+      setEmail("");
     }
   };
 
+  const handleRemove = (index: number) => {
+    setInvites((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(shareLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Copy failed", err);
+    }
+  };
+
+  const visibleInvites = showAll ? invites : invites.slice(0, 3);
+  const remainingCount = invites.length - 3;
+
   return (
-    <div className="w-full max-w-[520px] px-6 py-8 section-pad space-y-6">
-      <div>
-        <h1 className="heading-xl">Invite team members</h1>
-      </div>
+    <div className="bg-[#18181B] rounded-2xl p-6 w-[544px] text-white">
+      {/* Title */}
+      <h2 className="text-lg font-bold mb-6">Invite Team</h2>
 
-      {/* <div>
-        <label className="label">Email</label>
-        <input
-          type="email"
-          placeholder="teammate@company.com"
-          {...register("email")}
-          className={`input-base ${
-            errors.email ? "input-error" : "input-normal"
-          }`}
-        />
-        {errors.email && (
-          <p className="error-text">{errors.email.message}</p>
-        )}
-        {!errors.email && email && (
-          <p className="text-sm text-green-600 mt-1">✓ Valid email</p>
-        )}
-      </div> */}
-
-      {/* Email + Invite */}
-      <label className="block text-sm font-medium text-[#111827]">Email</label>
-      <div className="flex items-stretch gap-3">
-        <input
-          type="email"
-          placeholder="email@domain.com"
-          className="w-full rounded-xl border border-[#E5E7EB] px-3 py-2 text-sm text-[#111827] outline-none focus:border-[#111827] focus:ring-2 focus:ring-[#111827]/15"
-          {...register("email")}
-        />
+      {/* Email Input */}
+      <div className="flex items-end gap-3 mb-6">
+        <div className="flex flex-col flex-1 gap-2">
+          <label className="text-sm font-medium">Email *</label>
+          <input
+            type="email"
+            placeholder="Enter email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full h-10 px-4 rounded-xl border-2 border-[#26272B] bg-[rgba(128,136,155,0.1)] focus:outline-none"
+          />
+        </div>
         <button
-          type="button"
-          onClick={addInvite}
-          className="rounded-xl border border-[#D1D5DB] px-4 text-sm text-[#111827] hover:bg-[#F9FAFB]"
+          disabled={!email}
+          onClick={handleInvite}
+          className={`h-10 px-4 rounded-xl font-medium transition-colors ${email
+            ? "bg-[#4285F4] text-white"
+            : "bg-[rgba(128,136,155,0.8)] opacity-50 cursor-not-allowed"
+            }`}
         >
           Invite
         </button>
       </div>
-      {errors.email && (
-        <p className="mt-1 text-xs text-[#DC2626]">{errors.email.message}</p>
+
+      {/* Invited List */}
+      {invites.length > 0 && (
+        <div className="bg-[rgba(128,136,155,0.05)] rounded-xl p-4 mb-6">
+          <p className="text-sm font-semibold mb-4">{invites.length} Invited</p>
+          <div className="flex flex-col gap-3">
+            {visibleInvites.map((inv, idx) => (
+              <div
+                key={idx}
+                className="flex items-center justify-between bg-transparent"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-[rgba(88,39,218,0.25)] flex items-center justify-center text-xs font-medium text-[#B69AFF]">
+                    {inv[0]?.toUpperCase()}
+                  </div>
+                  <span className="text-sm">{inv}</span>
+                </div>
+                <button
+                  onClick={() => handleRemove(idx)}
+                  className="w-8 h-8 flex items-center justify-center bg-[#202024] rounded-full hover:bg-red-500 transition"
+                >
+                  <span className="text-xs text-gray-400">✕</span>
+                </button>
+              </div>
+            ))}
+
+            {remainingCount > 0 && (
+              <button
+                onClick={() => setShowAll(!showAll)}
+                className="text-sm text-gray-400 underline self-start"
+              >
+                {showAll ? "Show Less" : `Show ${remainingCount} More`}
+              </button>
+            )}
+          </div>
+        </div>
       )}
 
-      {/* Copy link */}
-      <div className="mt-3 flex items-center gap-2">
+      {/* Share Link */}
+      <div className="flex items-end gap-3 mb-6">
+        <div className="flex flex-col flex-1 gap-2">
+          <label className="text-sm font-medium">Share Link</label>
+          <div className="flex items-center h-10 px-4 rounded-xl border-2 border-[#26272B] bg-[rgba(128,136,155,0.1)]">
+            <span className="truncate text-sm">{shareLink}</span>
+          </div>
+        </div>
         <button
-          type="button"
-          onClick={copyLink}
-          className="inline-flex items-center gap-2 text-sm text-[#3B82F6] hover:underline"
+          onClick={handleCopy}
+          className="w-10 h-10 flex items-center justify-center rounded-full bg-[rgba(128,136,155,0.25)]"
         >
-          {/* link icon */}
-          <img src={quill_link} alt="" aria-hidden="true" className="h-4 w-4 shrink-0" />
-          Copy Link
+          📋
         </button>
       </div>
 
-      {/* Divider */}
-      <div className="my-6 h-px w-full bg-[#F3F4F6]" />
-
-      <div className="mb-4">
-        <h2 className="mb-3 text-sm font-medium text-[#111827]">Team Members</h2>
-        <ul className="space-y-3">
-          <li className="text-sm text-[#6B7280]">No invites yet.</li>
-        </ul>
+      {/* Footer */}
+      <div className="flex justify-between items-center mt-4">
+        <button className="px-4 py-2 rounded-xl bg-[rgba(128,136,155,0.25)] font-medium">
+          I’ll do this later
+        </button>
+        <button
+          disabled={invites.length === 0}
+          className={`px-6 py-2 rounded-xl font-medium transition-colors flex items-center gap-2 ${invites.length > 0
+            ? "bg-[#4285F4] text-white"
+            : "bg-[rgba(128,136,155,0.25)] opacity-50 cursor-not-allowed"
+            }`}
+        >
+          Continue to NexSpace →
+        </button>
       </div>
 
-      {/* Button intentionally has no behavior */}
-      <button type="button" className="btn-primary mt-8" onClick={() => finalSubmit()}>
-        Continue to Nexspace
-      </button>
+      {/* Copy Feedback */}
+      {copied && (
+        <p className="text-xs text-green-400 mt-2">Copied to clipboard!</p>
+      )}
     </div>
   );
-}
+};
+
+export default InviteTeam;
