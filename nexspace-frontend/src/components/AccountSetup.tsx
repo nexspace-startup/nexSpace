@@ -41,7 +41,7 @@ export default function AccountSetup({ defaultValues, onNext, onCancel }: Props)
         .regex(/^[A-Za-z\-']+$/, "Only letters, hyphens, apostrophes"),
       lastName: z
         .string()
-        .min(2, "Last name is required")
+        .min(1, "Last name is required")
         .regex(/^[A-Za-z\-']+$/, "Only letters, hyphens, apostrophes"),
       email: z.string().email("Enter a valid email"),
       role: z.enum(["OWNER", "ADMIN", "MEMBER"]),
