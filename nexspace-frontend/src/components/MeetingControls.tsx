@@ -7,12 +7,11 @@ import { useTick } from "../hooks/useTick";
 
 const MeetingControls: React.FC = () => {
     const {
-        connected, startedAt, leave, micEnabled, camEnabled, toggleMic, toggleCam, chatOpen, unreadCount, toggleChat
+        connected, startedAt, micEnabled, camEnabled, toggleMic, toggleCam, chatOpen, unreadCount, toggleChat, screenShareEnabled, toggleScreenShare
     } = useMeetingStore(
         useShallow((s) => ({
             connected: s.connected,
             startedAt: s.startedAt,
-            leave: s.leave,
             micEnabled: s.micEnabled,
             camEnabled: s.camEnabled,
             toggleMic: s.toggleMic,
@@ -20,6 +19,8 @@ const MeetingControls: React.FC = () => {
             chatOpen: s.chatOpen,
             unreadCount: s.unreadCount,
             toggleChat: s.toggleChat,
+            screenShareEnabled: s.screenShareEnabled,
+            toggleScreenShare: s.toggleScreenShare,
         }))
     );
 
@@ -34,69 +35,77 @@ const MeetingControls: React.FC = () => {
 
     return (
         <div
-            className="absolute left-1/2 -translate-x-1/2 control-bar
-                        w-[calc(100%-16px)] max-w-[682px]
-                        h-auto sm:h-[72px]
-                        px-3 sm:px-6 py-2 sm:py-0
-                        bottom-2 sm:bottom-6 flex-wrap gap-3"
+            className="absolute left-1/2 -translate-x-1/2 control-bar w-[calc(100%-16px)] max-w-[720px]
+                        h-auto sm:h-[72px] px-3 sm:px-6 py-2 sm:py-0 bottom-2 sm:bottom-6"
             role="region"
             aria-label="Meeting controls"
         >
-            {/* Timer */}
-            <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full grid place-items-center bg-[rgba(254,116,31,0.15)]" aria-hidden="true">
-                    <svg width="20" height="20" viewBox="0 0 24 24">
-                        <path d="M12 7v5l3 2" stroke="#FE741F" strokeWidth="2" fill="none" strokeLinecap="round" />
-                        <circle cx="12" cy="12" r="8.5" stroke="#FE741F" strokeWidth="1.5" fill="none" />
-                    </svg>
-                </div>
-                <span className="time-readout" aria-live="polite">
-                    {elapsed}
-                </span>
-                <div className="mx-2 h-6 w-px bg-[#26272B]" />
-            </div>
-
-            {/* Middle controls */}
-            <div className="flex items-center gap-5">
-                {/* View mode (placeholder) */}
-                <div className="segmented" role="group" aria-label="View mode">
-                    <button className="segmented-active">Grid</button>
-                    <button className="segmented-inactive">3D</button>
+            <div className="w-full flex items-center justify-center gap-6 flex-wrap">
+                {/* Timer */}
+                <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full grid place-items-center bg-[rgba(254,116,31,0.15)]" aria-hidden="true">
+                        <svg width="20" height="20" viewBox="0 0 24 24">
+                            <path d="M12 7v5l3 2" stroke="#FE741F" strokeWidth="2" fill="none" strokeLinecap="round" />
+                            <circle cx="12" cy="12" r="8.5" stroke="#FE741F" strokeWidth="1.5" fill="none" />
+                        </svg>
+                    </div>
+                    <span className="time-readout" aria-live="polite">{elapsed}</span>
+                    <div className="mx-2 h-6 w-px bg-[#26272B]" />
                 </div>
 
-                {/* Mic */}
-                <button
-                    onClick={toggleMic}
-                    className="ctrl-btn"
-                    aria-pressed={!micEnabled}
-                    title={micEnabled ? "Mute microphone" : "Unmute microphone"}
-                >
-                    {micEnabled ? <MicIcon className="w-5 h-5 text-[#80889B]" /> : <MicDisabledIcon className="w-5 h-5 text-[#ed5c5b]" />}
-                </button>
+                {/* Main controls */}
+                <div className="flex items-center gap-5">
+                    {/* View mode (placeholder) */}
+                    <div className="segmented" role="group" aria-label="View mode">
+                        <button className="segmented-active">Grid</button>
+                        <button className="segmented-inactive">3D</button>
+                    </div>
 
-                {/* Camera */}
-                <button
-                    onClick={toggleCam}
-                    className="ctrl-btn"
-                    aria-pressed={!camEnabled}
-                    title={camEnabled ? "Turn camera off" : "Turn camera on"}
-                >
-                    {camEnabled ? <CameraIcon className="w-5 h-5 text-[#80889B]" /> : <CameraDisabledIcon className="w-5 h-5 text-[#ed5c5b]" />}
-                </button>
+                    {/* Mic */}
+                    <button
+                        onClick={toggleMic}
+                        className="ctrl-btn"
+                        aria-pressed={!micEnabled}
+                        title={micEnabled ? "Mute microphone" : "Unmute microphone"}
+                    >
+                        {micEnabled ? <MicIcon className="w-5 h-5 text-[#80889B]" /> : <MicDisabledIcon className="w-5 h-5 text-[#ed5c5b]" />}
+                    </button>
 
-                {/* Chat toggle */}
-                <button className={`ctrl-btn relative ${chatOpen ? 'ring-1 ring-[#3D93F8]' : ''}`} title="Chat" onClick={toggleChat} aria-pressed={chatOpen}>
-                    <ChatIcon className="w-5 h-5 text-[#80889B]" />
-                    {(!chatOpen && unreadCount > 0) && (
-                      <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#ED5C5B] text-white text-[10px] grid place-items-center">{unreadCount}</span>
-                    )}
-                </button>
+                    {/* Camera */}
+                    <button
+                        onClick={toggleCam}
+                        className="ctrl-btn"
+                        aria-pressed={!camEnabled}
+                        title={camEnabled ? "Turn camera off" : "Turn camera on"}
+                    >
+                        {camEnabled ? <CameraIcon className="w-5 h-5 text-[#80889B]" /> : <CameraDisabledIcon className="w-5 h-5 text-[#ed5c5b]" />}
+                    </button>
+
+                    {/* Screen share */}
+                    <button
+                        onClick={toggleScreenShare}
+                        className={`ctrl-btn ${screenShareEnabled ? 'ring-1 ring-[#3D93F8]' : ''}`}
+                        aria-pressed={screenShareEnabled}
+                        title={screenShareEnabled ? "Stop presenting" : "Present your screen"}
+                    >
+                        {screenShareEnabled ? (
+                            <svg className="w-5 h-5 text-[#3D93F8]" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                              <path d="M4 6h16v8H4z" stroke="currentColor" strokeWidth="2"/><path d="M8 20h8" stroke="currentColor" strokeWidth="2"/><path d="M12 14v6" stroke="currentColor" strokeWidth="2"/></svg>
+                        ) : (
+                            <svg className="w-5 h-5 text-[#80889B]" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                              <path d="M4 6h16v8H4z" stroke="currentColor" strokeWidth="2"/><path d="M8 20h8" stroke="currentColor" strokeWidth="2"/></svg>
+                        )}
+                    </button>
+
+                    {/* Chat toggle */}
+                    <button className={`ctrl-btn relative ${chatOpen ? 'ring-1 ring-[#3D93F8]' : ''}`} title="Chat" onClick={toggleChat} aria-pressed={chatOpen}>
+                        <ChatIcon className="w-5 h-5 text-[#80889B]" />
+                        {(!chatOpen && unreadCount > 0) && (
+                          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#ED5C5B] text-white text-[10px] grid place-items-center">{unreadCount}</span>
+                        )}
+                    </button>
+                </div>
             </div>
-
-            {/* Leave */}
-            <button onClick={leave} className="btn-cta">
-                Leave Meeting
-            </button>
         </div>
     );
 };

@@ -1,6 +1,6 @@
 // src/components/meeting/MeetingGrid.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { useRoomContext } from "@livekit/components-react";
+import { useRoomContext, useTracks, VideoTrack, isTrackReference } from "@livekit/components-react";
 import type { Participant, Room } from "livekit-client";
 import ProfileTile from "./ProfileTile";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -56,6 +56,13 @@ const MeetingGrid: React.FC<Props> = ({
 
   // Resolve LiveKit Participant objects in the same order as the store list
   const all = useMemo(() => collectParticipants(room, avatars), [room, avatars]);
+
+  // Find active screen share (first one)
+  const screenRefs = useTracks([{ source: 4 as any, withPlaceholder: false } as any], { onlySubscribed: true }); // Track.Source.ScreenShare === 4 in LK
+  const activeScreen = useMemo(() => {
+    const ref = screenRefs.find((tr) => isTrackReference(tr));
+    return isTrackReference(ref) ? ref : undefined;
+  }, [screenRefs]);
 
   const { mode, items } = useMemo(() => {
     const n = all.length;
@@ -143,9 +150,20 @@ const MeetingGrid: React.FC<Props> = ({
           className="h-full w-full flex items-center justify-center"
           style={{ paddingTop: 96, paddingBottom: bottomSafeAreaPx }}
         >
-          {mode === "one" && <GridOne />}
-          {mode === "five" && <GridFive />}
-          {mode === "many" && <GridMany />}
+          {activeScreen ? (
+            <div className="relative w-full h-full max-h-[70vh] rounded-xl overflow-hidden bg-black">
+              <VideoTrack trackRef={activeScreen} className="!w-full !h-full object-contain" data-lk-object-fit="contain" />
+              <div className="absolute left-3 top-3 px-2 py-1 rounded bg-black/50 text-white text-xs">
+                Presenting: {((activeScreen as any)?.participant?.name) || ((activeScreen as any)?.participant?.identity) || 'Screen'}
+              </div>
+            </div>
+          ) : (
+            <>
+              {mode === "one" && <GridOne />}
+              {mode === "five" && <GridFive />}
+              {mode === "many" && <GridMany />}
+            </>
+          )}
         </div>
 
         {/* Pagination for many */}

@@ -57,7 +57,21 @@ const MeetingPanel: React.FC = () => {
   return (
     <section className="relative flex-1 h-dvh overflow-hidden bg-[#202024]">
       {/* Top widget pill */}
-      {canConnect && <TopWidget />}
+      {canConnect && (
+        <>
+          <TopWidget />
+          {/* Leave button aligned with TopWidget (same height, top row, right aligned) */}
+          <div className="absolute right-12 top-8 z-20">
+            <button
+              onClick={onLeave}
+              className="h-[40px] w-[148px] rounded-[20px] bg-[#ED5C5B] text-white text-[14px] font-semibold flex items-center justify-center px-4 shadow-[1px_1px_15px_rgba(0,0,0,0.2)]"
+              aria-label="Leave Workspace"
+            >
+              Leave Workspace
+            </button>
+          </div>
+        </>
+      )}
       {/* Whisper indicator */}
       {canConnect && whisperActive && (
         <div className="absolute left-1/2 -translate-x-1/2 top-4 z-20 px-3 py-1.5 rounded-full bg-[rgba(254,116,31,0.15)] border border-[#FE741F]/40 text-[#FFD7BF] text-sm">

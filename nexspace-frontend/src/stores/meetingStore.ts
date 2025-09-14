@@ -34,6 +34,9 @@ export type MeetingState = {          // 👈 export the type so consumers can a
   unreadCount: number;
   messages: ChatMessage[];
 
+  // screen share state
+  screenShareEnabled: boolean;
+
   toggleMic: () => Promise<void>;
   toggleCam: () => Promise<void>;
   joinActiveWorkspace: () => Promise<void>;
@@ -47,6 +50,8 @@ export type MeetingState = {          // 👈 export the type so consumers can a
   toggleChat: () => void;
   sendMessage: (text: string) => Promise<void>;
   loadChatHistory: (limit?: number) => Promise<void>;
+  // screen share control
+  toggleScreenShare: () => Promise<void>;
 };
 
 export type ChatMessage = {
@@ -103,9 +108,19 @@ export const useMeetingStore = create<MeetingState>()(
 
       const updateParticipants = () => set({ participants: computeParticipants(room) });
 
-      // initial seed + A/V sync
+      const syncScreen = () => {
+        try {
+          const lp: any = room.localParticipant as any;
+          const pubs: any[] = lp?.getTrackPublications?.() ?? Array.from(lp?.trackPublications?.values?.() ?? []);
+          const hasShare = pubs?.some((pub: any) => (pub?.source === Track.Source.ScreenShare) && pub?.track);
+          set({ screenShareEnabled: !!hasShare });
+        } catch { /* ignore */ }
+      };
+
+      // initial seed: participants + A/V + screenshare
       updateParticipants();
       syncAV(room);
+      syncScreen();
 
       // settle device state shortly after connect
       const t1 = setTimeout(() => syncAV(room), 250);
@@ -118,6 +133,7 @@ export const useMeetingStore = create<MeetingState>()(
       const onAnyTrackChange = () => {
         updateParticipants();
         syncAV(room);
+        syncScreen();
       };
 
       // helper: (un)subscribe from a sender's audio on THIS client
@@ -265,6 +281,7 @@ export const useMeetingStore = create<MeetingState>()(
       camEnabled: true,
       whisperActive: false,
       whisperTargetSid: null,
+      screenShareEnabled: false,
       chatOpen: false,
       unreadCount: 0,
       messages: [],
@@ -321,6 +338,7 @@ export const useMeetingStore = create<MeetingState>()(
           chatOpen: false,
           unreadCount: 0,
           messages: [],
+          screenShareEnabled: false,
         });
       },
 
@@ -466,6 +484,19 @@ export const useMeetingStore = create<MeetingState>()(
               unreadCount: s.chatOpen ? 0 : s.unreadCount,
             }));
           }
+        } catch {/* ignore */}
+      },
+
+      toggleScreenShare: async () => {
+        const room = get().room;
+        if (!room) return;
+        try {
+          const next = !get().screenShareEnabled;
+          const fn = (room.localParticipant as any).setScreenShareEnabled;
+          if (typeof fn === 'function') {
+            await fn.call(room.localParticipant, next);
+          }
+          set({ screenShareEnabled: next });
         } catch {/* ignore */}
       },
     };
