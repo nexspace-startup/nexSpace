@@ -34,7 +34,6 @@ export async function listMyWorkspaces(req: Request, res: Response) {
   const sess = await getSession(sid, DEFAULT_TTL);
   const userId = (sess as any)?.userId as string | undefined;
   if (!userId) return res.fail?.([{ message: "Unauthorized", code: "UNAUTHORIZED" }], 401);
-
   const rows = await listWorkspacesForUser(userId);
   return res.success?.(rows, 200) ?? res.status(200).json({ success: true, data: rows, errors: [] });
 }

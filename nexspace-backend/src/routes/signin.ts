@@ -1,7 +1,7 @@
 // src/routes/google.ts
 import { Router } from "express";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { googleCallback, signin } from "../controllers/auth.controller.js";
+import { googleCallback, signin, checkEmail } from "../controllers/auth.controller.js";
 
 const router = Router();
 
@@ -10,6 +10,9 @@ router.post("/google/callback", asyncHandler(googleCallback));
 
 // POST /api/auth/signin
 router.post("/signin", asyncHandler(signin));
+
+// GET /api/auth/check-email?email=you@example.com
+router.get("/check-email", asyncHandler(checkEmail));
 
 
 export default router;

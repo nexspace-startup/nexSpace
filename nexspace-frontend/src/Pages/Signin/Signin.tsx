@@ -1,175 +1,322 @@
-import React, { useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useUserStore } from "../../stores/userStore";
-import { googleGetCode } from '../../lib/oauthClients';
-import { getMe } from '../../services/authService';
-import { api } from '../../services/httpService';
+import { googleGetCode } from "../../lib/oauthClients";
+import { AuthService, getMe, type MeResponse } from "../../services/authService";
 
-type Provider = 'google' | 'microsoft';
+type Provider = "google" | "microsoft";
 
-const Signin: React.FC = () => {
-    const setUser = useUserStore((state) => state.setUser);
-    const [isLoading, setIsLoading] = useState(false);
+type FormData = {
+    email: string;
+    // Keep key present for resolver typing; may be undefined when not required
+    password: string | undefined;
+};
+
+export default function Signin() {
+    const setUser = useUserStore((s) => s.setUser);
     const navigate = useNavigate();
-    const loc = useLocation();
+    const location = useLocation();
 
-    // NEW: figure out where to go after login
-    const resolveNext = () => {
-        const from = (loc.state as any)?.from;
-        const statePath = typeof from === 'string' ? from : from?.pathname;
-        const queryNext = new URLSearchParams(loc.search).get('next');
-        const raw = statePath || queryNext;
-        // allow only same-origin paths
-        return raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/dashboard';
+    const [isChecking, setIsChecking] = useState(false);
+    const [emailChecked, setEmailChecked] = useState(false);
+    const [emailExists, setEmailExists] = useState<boolean | null>(null);
+    const [showPassword, setShowPassword] = useState(false);
+    const [requirePassword, setRequirePassword] = useState(false);
+    const [authError, setAuthError] = useState<string>("");
+
+    const dynamicSchema = useMemo(
+        () =>
+            z.object({
+                email: z
+                    .email("Enter a valid email address")
+                    .min(1, "Email is required"),
+                password: requirePassword
+                    ? z.string().min(1, "Password is required")
+                    : z.string().optional(),
+            }),
+        [requirePassword]
+    );
+
+    const {
+        register,
+        handleSubmit,
+        formState: { errors },
+        setError,
+        clearErrors,
+        watch,
+        setValue,
+    } = useForm<FormData>({ resolver: zodResolver(dynamicSchema), shouldUnregister: true });
+
+    const email = watch("email");
+
+    // Password step controlled by state via showPassword
+
+    async function checkEmailExists(_email: string): Promise<boolean> {
+        return AuthService.checkEmail(_email);
+    }
+
+    async function loginWithEmailPassword(
+        _email: string,
+        _password: string
+    ): Promise<{ ok: boolean; user?: any; workspaces?: any[] }> {
+        const res = await AuthService.signin(_email, _password);
+        // keep same shape as before
+        if (res.ok) return { ok: true, user: { email: _email }, workspaces: [] };
+        return { ok: false } as any;
+    }
+
+    function computeRedirectTarget(): string | null {
+        // Priority: ?redirect=/path → location.state.from → null
+        const searchParams = new URLSearchParams(location.search || "");
+        const q = searchParams.get("redirect");
+        if (q && typeof q === "string") return q;
+        const from: any = (location as any).state?.from;
+        if (!from) return null;
+        if (typeof from === "string") return from;
+        if (typeof from === "object" && from.pathname) {
+            return `${from.pathname}${from.search || ""}${from.hash || ""}`;
+        }
+        return null;
+    }
+
+    async function redirectPostLogin(): Promise<void> {
+        const me: MeResponse | null = await getMe();
+        const target = computeRedirectTarget();
+        // update store with basic identity
+        if (me?.user) {
+            const first = me.user.first_name || "";
+            const last = me.user.last_name || "";
+            const name = [first, last].filter(Boolean).join(" ") || undefined;
+            setUser({ id: me.user.id, name, email: me.user.email });
+        }
+        if (target && target !== "/signin") {
+            navigate(target, { replace: true });
+        } else if (me?.workspaces && me.workspaces.length > 0) {
+            navigate("/dashboard", { replace: true });
+        } else {
+            navigate("/setup", { replace: true });
+        }
+    }
+
+    // Reset flow when email changes
+    useEffect(() => {
+        setEmailChecked(false);
+        setEmailExists(null);
+        setShowPassword(false);
+        setRequirePassword(false);
+        setAuthError("");
+        clearErrors(["email", "password"]);
+        setValue("password", "");
+    }, [email, clearErrors, setValue]);
+
+    const onSubmit = async (data: FormData) => {
+        setAuthError("");
+        if (!emailChecked) {
+            if (!data.email) {
+                setError("email", { message: "Enter an email" });
+                return;
+            }
+            setIsChecking(true);
+            try {
+                const exists = await checkEmailExists(data.email);
+                setEmailExists(exists);
+                setEmailChecked(true);
+                clearErrors("email");
+                if (exists) {
+                    setShowPassword(true);
+                    setRequirePassword(true);
+                    setAuthError("");
+                } else {
+                    setShowPassword(false);
+                    setRequirePassword(false);
+                    setValue("password", "");
+                    setAuthError("No account found");
+                }
+            } catch (e: any) {
+                setAuthError(e?.message || "Could not verify email");
+            } finally {
+                setIsChecking(false);
+            }
+            return;
+        }
+
+        if (emailExists && showPassword) {
+            if (!data.password) {
+                setError("password", { message: "Enter password" });
+                return;
+            }
+            setIsChecking(true);
+            try {
+                const res = await loginWithEmailPassword(data.email, data.password);
+                if (!res.ok || !res.user) {
+                    setAuthError("Enter your correct password.");
+                    return;
+                }
+                await redirectPostLogin();
+            } catch (e: any) {
+                setAuthError(e?.message || "Authentication error");
+            } finally {
+                setIsChecking(false);
+            }
+            return;
+        }
+
+        // Email was checked and does not exist
+        setValue("password", "");
+        setAuthError("No account found");
     };
 
-    const handleGoogleLogin = () => {
-        handleOAuth('google');
-    };
-    const handleMicrosoftLogin = () => {
-        handleOAuth('microsoft');
-    };
+    const handleGoogleLogin = () => handleOAuth("google");
+    const handleMicrosoftLogin = () => handleOAuth("microsoft");
 
     async function handleOAuth(provider: Provider) {
         try {
-            setIsLoading(true);
-            if (provider === 'google') {
+            if (provider === "google") {
                 const code = await googleGetCode();
-                if (!code) throw new Error('Google sign-in was cancelled.');
-                await completeAuthentication('google', {
-                    code,
-                    redirectUri: 'postmessage',
-                });
+                if (!code) throw new Error("Google sign-in was cancelled.");
+                const ok = await AuthService.googleCallback(code, "postmessage");
+                if (!ok) throw new Error("Google authentication failed");
+                await redirectPostLogin();
+                return;
             }
-            // (If you add Microsoft, call completeAuthentication similarly)
+            // Preserve existing Microsoft mock behavior
+
         } catch (e: any) {
             console.error(e);
-            setIsLoading(false);
-            alert(e?.message || 'Authentication error');
+            alert(e?.message || "Authentication error");
         }
     }
-
-    async function completeAuthentication(
-        provider: Provider,
-        payload: Record<string, unknown>
-    ): Promise<any> {
-        const endpoint =
-            provider === 'google'
-                ? '/auth/google/callback'
-                : '/auth/microsoft/callback';
-
-        const res = await api.post(endpoint, payload);
-        const resp = res?.data;
-        // success can be 204 (No Content) — tolerate both 2xx + 204
-        if (!resp?.success) {
-            const msg = await resp.text().catch(() => 'Auth failed');
-            throw new Error(msg || 'Authentication failed');
-        }
-
-        getMe()
-            .then((res) => {
-                if (res?.isAuthenticated && res?.user) {
-                    const { id, first_name, last_name, email } = res.user;
-                    const name = [first_name, last_name].filter(Boolean).join(' ');
-                    setIsLoading(false);
-                    setUser({ id, firstName: first_name, lastName: last_name, name, email });
-
-                    // CHANGED: use intended route if available; otherwise dashboard.
-                    const path = resolveNext();
-
-                    if (id) {
-                        navigate(path, { replace: true });
-                    } else {
-                        // if the user record isn't created yet → onboarding
-                        if (path !== '/dashboard') {
-                            navigate(path, { replace: true });
-                        } else
-                            navigate('/setup', { replace: true });
-                    }
-                } else {
-                    setIsLoading(false);
-                    alert('Authentication failed. Please try again.');
-                }
-            })
-            .catch((e) => {
-                console.error(e);
-                setIsLoading(false);
-                alert(e?.message || 'Authentication error');
-            });
-    }
-
 
     return (
-        <div className="relative min-h-screen w-full bg-white flex items-center justify-center">
-            {/* Centered Frame */}
-            <div className="flex flex-col items-center gap-8 w-[400px]">
-                {/* Logo and Title */}
-                <div className="flex flex-col items-center gap-3">
-                    {/* Logo */}
-                    <div className="w-20 h-20 relative">
-                        <div className="absolute inset-0 bg-[#EFF5FF] rounded-full flex items-center justify-center">
-                            <div className="w-10 h-10 bg-[#D5E5FF] rounded-full flex items-center justify-center">
-                                <div className="w-6 h-6 bg-[#4285F4] rounded-full" />
-                            </div>
+        <main className="min-h-screen w-full bg-[#202024] text-white font-manrope flex flex-col">
+            <div className="flex-1 flex items-center justify-center px-5 py-10">
+                <div className="w-full max-w-[580px] flex flex-col items-center gap-10">
+                    <div className="flex flex-col items-center gap-4">
+                        <div className="w-20 h-20 rounded-full bg-gradient-to-b from-[#B7F2D4] to-[#48FFA4]" aria-hidden="true" />
+                        <div className="w-full max-w-[400px] flex flex-col items-center gap-2">
+                            <h1 className="text-center font-semibold tracking-[-0.01em] leading-[1.5] text-xl sm:text-2xl">Welcome to NexSpace</h1>
+                            <p className="text-center leading-[1.5]  opacity-95 text-sm sm:text-base">
+                                Virtual coworking & accountability for connected, productive teams.
+                            </p>
                         </div>
                     </div>
 
-                    <h2 className="text-[24px] font-bold text-[#212121] text-center leading-[36px]">
-                        Welcome to NexSpace
-                    </h2>
-                    <p className="text-[16px] text-[#212121] text-center leading-[24px] font-normal">
-                        Virtual coworking & accountability for connected, productive teams.
-                    </p>
-                </div>
+                    <form
+                        onSubmit={handleSubmit(onSubmit)}
+                        className="w-full max-w-[480px] bg-[#18181B] rounded-2xl p-6 sm:p-10 flex flex-col gap-8"
+                    >
+                        <div className="flex flex-col gap-4">
+                            <div className="flex flex-col gap-3">
+                                <label htmlFor="email" className="text-xs sm:text-sm font-medium font-clashGrotesk">
+                                    Email*
+                                </label>
+                                <input
+                                    id="email"
+                                    type="email"
+                                    inputMode="email"
+                                    autoComplete="email"
+                                    placeholder="you@company.com"
+                                    {...register("email")}
+                                    className={`h-10 w-full rounded-2xl px-4 text-[14px] bg-[rgba(128,136,155,0.10)] placeholder-[#A3A3A3] focus:outline-none border ${errors.email ? "border-[#FF6060]" : "border-transparent focus:border-[#4285F4]"
+                                        }`}
+                                />
+                                {errors.email && (
+                                    <p className="text-[#FF6060] text-xs">{errors.email.message}</p>
+                                )}
+                            </div>
 
-                {/* Email Input & Button (placeholder for later) */}
-                <div className="flex flex-col items-start gap-4 w-full">
-                    <div className="flex flex-col gap-1 w-full">
-                        <label className="text-sm text-[#212121] font-medium">Email</label>
-                        <input
-                            type="email"
-                            placeholder="Enter your email"
-                            className="w-full px-4 py-2 border border-[#E0E0E0] rounded-xl text-sm text-[#212121] placeholder-[#BFBFBF] outline-none"
-                        />
-                    </div>
+                            {showPassword && (
+                                <div className="flex flex-col gap-3">
+                                    <label htmlFor="password" className="text-xs sm:text-sm font-medium">
+                                        Password*
+                                    </label>
+                                    <input
+                                        id="password"
+                                        type="password"
+                                        autoComplete="current-password"
+                                        placeholder="Enter your password"
+                                        {...register("password")}
+                                        className={`h-10 w-full rounded-2xl px-4 text-[14px] bg-[rgba(128,136,155,0.10)] placeholder-[#A3A3A3] focus:outline-none border ${errors.password ? "border-[#FF6060]" : "border-transparent focus:border-[#4285F4]"
+                                            }`}
+                                    />
+                                    {errors.password && (
+                                        <p className="text-[#FF6060] text-xs">{errors.password.message}</p>
+                                    )}
+                                </div>
+                            )}
 
-                    <button className="w-full bg-[#212121] text-white text-sm font-semibold py-2 rounded-xl shadow">
-                        Continue with email
-                    </button>
-                </div>
+                            {authError && (
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <span className="inline-block w-[14px] h-[14px] rounded-full bg-[#FF6060]" aria-hidden="true" />
+                                        <span className="text-xs text-[#FF6060]">{authError}</span>
+                                    </div>
+                                    {emailChecked && emailExists === false && (
+                                        <button
+                                            type="button"
+                                            onClick={() => navigate("/setup", { state: { email } })}
+                                            className="text-[14px] font-semibold underline text-[#4285F4]"
+                                        >
+                                            Create Account?
+                                        </button>
+                                    )}
+                                </div>
+                            )}
 
-                {/* Divider */}
-                <div className="flex items-center justify-center gap-2 w-full">
-                    <div className="flex-1 h-px bg-[#E6E6E6]" />
-                    <span className="text-sm text-[#828282]">or</span>
-                    <div className="flex-1 h-px bg-[#E6E6E6]" />
-                </div>
+                            {/* Primary action button moved here to reduce gap */}
+                            <button
+                                type="submit"
+                                disabled={isChecking}
+                                className="w-full h-10 rounded-xl bg-[#4285F4] text-white text-[13px] sm:text-[14px] font-semibold shadow-[0px_4px_30px_rgba(142,166,246,0.2)] hover:bg-[#4b90ff] disabled:opacity-70 disabled:cursor-not-allowed"
+                            >
+                                {showPassword ? "Continue" : isChecking ? "Checking..." : "Continue with Email"}
+                            </button>
+                        </div>
 
-                {/* OAuth Buttons */}
-                <div className="flex flex-col gap-6 w-full">
-                    <button onClick={handleGoogleLogin} className="w-full flex items-center justify-center gap-3 py-2 border border-[#E0E0E0] rounded-xl bg-[#F2F4F6]">
-                        <img src="/google-icon.svg" alt="Google" className="w-5 h-5" />
-                        <span className="text-sm font-semibold text-[#212121]">Continue with Google</span>
-                    </button>
+                        <div className="flex items-center gap-2 text-sm text-[#828282]">
+                            <div className="h-px bg-[#26272B] flex-1" />
+                            <span>or</span>
+                            <div className="h-px bg-[#26272B] flex-1" />
+                        </div>
 
-                    <button onClick={handleMicrosoftLogin} className="w-full flex items-center justify-center gap-3 py-2 border border-[#E0E0E0] rounded-xl bg-[#F2F4F6]">
-                        <img src="/microsoft-icon.svg" alt="Microsoft" className="w-5 h-5" />
-                        <span className="text-sm font-semibold text-[#212121]">Continue with Microsoft</span>
-                    </button>
+                        <div className="flex flex-col gap-6">
+                            <button
+                                type="button"
+                                onClick={handleGoogleLogin}
+                                className="w-full h-10 rounded-xl bg-[rgba(128,136,155,0.25)] text-white inline-flex items-center justify-center gap-3 hover:bg-[rgba(128,136,155,0.35)]"
+                            >
+                                <img
+                                    src="https://www.svgrepo.com/show/475656/google-color.svg"
+                                    alt="Google"
+                                    className="w-5 h-5"
+                                />
+                                <span className="text-[13px] sm:text-[14px] font-semibold">Continue with Google</span>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={handleMicrosoftLogin}
+                                className="w-full h-10 rounded-xl bg-[rgba(128,136,155,0.25)] text-white inline-flex items-center justify-center gap-3 hover:bg-[rgba(128,136,155,0.35)]"
+                            >
+                                <img
+                                    src="https://www.svgrepo.com/show/452213/microsoft.svg"
+                                    alt="Microsoft"
+                                    className="w-5 h-5"
+                                />
+                                <span className="text-[13px] sm:text-[14px] font-semibold">Continue with Microsoft</span>
+                            </button>
+                        </div>
+                    </form>
                 </div>
             </div>
-
-            <p className="absolute bottom-8 text-center text-sm text-[#828282] w-[322px]">
-                By signing up, you agree to our Terms of Service and Privacy Policy
-            </p>
-
-            {isLoading && (
-                <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-                    <div className="loader ease-linear rounded-full border-8 border-t-8 border-gray-200 h-16 w-16"></div>
-                </div>
-            )}
-        </div>
+            <footer className="px-6 pb-4">
+                <p className="text-center text-xs sm:text-sm text-[#80889B] mx-auto max-w-xs">
+                    By signing up, you agree to our <span className="underline">Terms of Service</span> and <span className="underline">Privacy Policy</span>.
+                </p>
+            </footer>
+        </main>
     );
-};
-
-export default Signin;
+}

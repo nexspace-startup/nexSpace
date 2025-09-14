@@ -8,9 +8,7 @@ type NavItem = { id: string; label: string };
 
 const DashboardPage: React.FC = () => {
   const fetchWorkspaces = useWorkspaceStore((s) => s.fetchWorkspaces);
-
   const [activeNav, setActiveNav] = useState<string>("workspace");
-
   useEffect(() => {
     fetchWorkspaces();
   }, [fetchWorkspaces]);
