@@ -21,7 +21,7 @@ export const passwordSchema = z
 // Define the name validation schema
 export const nameSchemaWithoutSpaces = z
   .string()
-  .min(2, { message: 'Name must be at least 2 characters long' })
+  .min(1, { message: 'Name must be at least 2 characters long' })
   .max(50, { message: 'Name must be at most 50 characters long' })
   // The (?!['-]) prevents ' or - from being followed by another ' or -
   .regex(/^[A-Za-z-']+$/, {
