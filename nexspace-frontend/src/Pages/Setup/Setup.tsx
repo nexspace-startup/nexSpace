@@ -1,103 +1,85 @@
-import React from "react";
-import { useNavigate } from 'react-router-dom';
-import ProgressBar from "../../components/ProgressBar";
-import AccountSetup from "../../components/AccountSetup";
-import WorkspaceSetup from "../../components/WorkspaceSetup";
-import InvitationSetup from "../../components/InvitationSetup";
-import type { AccountData, WorkspaceData, OnboardingPayload } from "../../types";
-import "./Setup.css"; // import the shared styles
-import Sidebar from "../../components/Setup/_nexSideBar";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import AccountSetup, { type AccountStep } from "../../components/AccountSetup";
+import WorkspaceSetup, { type WorkspaceStep } from "../../components/WorkspaceSetup";
 import { api } from "../../services/httpService";
-
-
-const steps = [
-  { id: "account", label: "Account" },
-  { id: "workspace", label: "Workspace" },
-  { id: "invite", label: "Invite" },
-] as const;
+import { ENDPOINTS } from "../../constants/endpoints";
+import { useUserStore } from "../../stores/userStore";
+import { getMe, type MeResponse } from "../../services/authService";
 
 export default function Setup() {
   const navigate = useNavigate();
-  const [index, setIndex] = React.useState(0);
-  const [account, setAccount] = React.useState<Partial<AccountData>>({});
-  const [workspace, setWorkspace] = React.useState<Partial<WorkspaceData>>({});
-  const [isLoading, setIsLoading] = React.useState(false);
-  //const [invites, setInvites] = React.useState<Partial<InviteData>>({ invites: [] });
+  const [step, setStep] = useState<"account" | "workspace">("account");
+  const [account, setAccount] = useState<Partial<AccountStep>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const setUser = useUserStore((s) => s.setUser);
+  const setStatus = useUserStore((s) => s.setStatus);
 
-  const next = () => setIndex((i) => Math.min(i + 1, steps.length - 1));
+  function buildOnboardingPayload(ws: WorkspaceStep) {
+    return {
+      firstName: account.firstName || "",
+      lastName: account.lastName || "",
+      email: account.email || "",
+      password: account.password || undefined,
+      company: account.company || undefined,
+      role: (account.role as AccountStep["role"]) || "OWNER",
+      workspaceName: ws.workspaceName,
+      teamSize: ws.teamSize,
+    } as const;
+  }
 
-  const finalSubmit = async () => {
-    //setInvites(inviteData);
-    const payload: OnboardingPayload = {
-      ...(account as AccountData),
-      ...(workspace as WorkspaceData),
-      //...(inviteData as InviteData),
-    };
+  async function handleWorkspaceSubmit(ws: WorkspaceStep) {
     try {
-      setIsLoading(true);
-      payload.role = "OWNER"
-      const res = await api.post("/onboarding", payload)
-
-      if (res?.data?.success === true) {
-        // Success → alert with workspace name or a simple message
-        setIsLoading(false);
-        alert(`Workspace "${res.data?.workspaceName}" created successfully!`)
-        // Redirect to dashboard
-        navigate('/dashboard');
-
-      }
-    } catch (err: any) {
-      // Error handling
-      setIsLoading(false);
-      console.log(err);
-      if (err.response) {
-        alert(`Error: ${err?.response?.data?.error}`)
+      setIsSubmitting(true);
+      const payload = buildOnboardingPayload(ws);
+      const res = await api.post(ENDPOINTS.ONBOARDING, payload as any);
+      if (res?.data?.success) {
+        // refresh session/user and navigate
+        const me: MeResponse | null = await getMe();
+        if (me?.user) {
+          const first = me.user.first_name || "";
+          const last = me.user.last_name || "";
+          const name = [first, last].filter(Boolean).join(" ") || undefined;
+          setUser({ id: me.user.id, name, email: me.user.email });
+          setStatus("authed");
+        }
+        navigate("/dashboard", { replace: true });
       } else {
-        alert("Something went wrong")
+        alert(res?.data?.errors?.[0]?.message || "Failed to create workspace");
       }
-    };
-  };
-
-  const onStepClick = (targetIndex: number) => {
-    // allow only going to current or previous steps
-    setIndex((current) => (targetIndex <= current ? targetIndex : current));
-  };
+    } catch (e: any) {
+      alert(e?.response?.data?.errors?.[0]?.message || "Something went wrong");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
   return (
-    <div className="flex min-h-screen bg-white">
-      <Sidebar />
-      <main className="flex-1 relative bg-white">
-        <div className="absolute left-10 w-[460px]">
-          <ProgressBar currentStep={index} onStepClick={onStepClick} />
+    <main className="min-h-screen w-full bg-[#202024] text-white font-manrope flex flex-col">
+      {/* Header brand */}
+      <div className="absolute left-9 top-9 flex items-center gap-3">
+        <div className="w-10 h-10 rounded-full bg-gradient-to-b from-[#B7F2D4] to-[#48FFA4]" aria-hidden="true" />
+        <div className="hidden sm:block text-[20px] font-semibold tracking-[-0.01em]">NexSpace</div>
+      </div>
 
-        </div>
-
-        <div className="flex h-full items-center justify-center">
-          {index === 0 && (
-            <AccountSetup
-              defaultValues={account}
-              onValidNext={(d) => { setAccount(d); next(); }}
-            />
-          )}
-
-          {index === 1 && (
-            <WorkspaceSetup
-              defaultValues={workspace}
-              onValidNext={(d) => { setWorkspace(d); next(); }}
-            />
-          )}
-
-          {index === 2 && (
-            <InvitationSetup finalSubmit={finalSubmit}
-            />
-          )}
-        </div>
-      </main>
-      {isLoading && (
-                <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-                    <div className="loader ease-linear rounded-full border-8 border-t-8 border-gray-200 h-16 w-16"></div>
-                </div>
-            )}
-    </div>
+      <div className="flex-1 flex items-center justify-center px-5 py-10">
+        {step === "account" ? (
+          <AccountSetup
+            defaultValues={account}
+            onCancel={() => navigate(-1)}
+            onNext={(data) => {
+              setAccount(data);
+              setStep("workspace");
+            }}
+          />
+        ) : (
+          <WorkspaceSetup
+            onBack={() => setStep("account")}
+            isSubmitting={isSubmitting}
+            onSubmit={handleWorkspaceSubmit}
+          />
+        )}
+      </div>
+    </main>
   );
 }

@@ -1,28 +1,35 @@
 // src/App.tsx
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
-import LandingPage from "./components/LandingView/_landingView";
-import Setup from "./Pages/Setup/Setup";
+import { useEffect } from "react";
+import { useUserStore } from "./stores/userStore";
+import LandingPage from "./components/LandingPage";
 import Dashboard from "./Pages/Dashboard/Dashboard";
-import Signin from "./Pages/Signin/Signin";
 import { GuestRoute, ProtectedRoute } from "./routerGuard";
 import InvitePage from "./Pages/AcceptInvitation";
+import Signin from "./Pages/Signin/Signin";
+import Setup from "./Pages/Setup/Setup";
 
 function App() {
+  const status = useUserStore((s) => s.status);
+  const init = useUserStore((s) => s.init);
+
+  useEffect(() => {
+    if (status === "idle") void init();
+  }, [status, init]);
+
   return (
     <Router>
       <Routes>
         <Route element={<GuestRoute />}>
           <Route path="/" element={<LandingPage />} />
           <Route path="/signin" element={<Signin />} />
-          <Route path="/invite/:token" element={<InvitePage />} /> 
+          <Route path="/invite/:token" element={<InvitePage />} />
+          <Route path="/setup" element={< Setup />} />
         </Route>
 
         <Route element={<ProtectedRoute />}>
           <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/setup" element={<Setup />} />
         </Route>
-        {/* <Route path="/" element={<LandingPage />} />
-        <Route path="/signin" element={<Signin />} /> */}
       </Routes>
     </Router>
   );

@@ -1,9 +1,10 @@
 import type { Request, Response } from "express";
 import { DEFAULT_TTL, createSession, rotateSession, setSessionCookie } from "../session.js";
 import { AppError } from "../middleware/error.js";
-import { GoogleCallbackSchema, SigninSchema } from "../validators/authValidators.js";
+import { GoogleCallbackSchema, SigninSchema, CheckEmailSchema } from "../validators/authValidators.js";
 import type { z } from "zod";
 import { googleExchangeAndVerify, signInWithEmailPassword } from "../services/auth.service.js";
+import { findUserByEmail } from "../repositories/user.repository.js";
 
 export async function googleCallback(req: Request, res: Response) {
   const parsed = GoogleCallbackSchema.safeParse(req.body);
@@ -56,3 +57,17 @@ export async function signin(req: Request, res: Response) {
   setSessionCookie(res as any, session.sid);
   return res.success?.({ isAuthenticated: true }, 200);
 }
+
+export async function checkEmail(req: Request, res: Response) {
+  const emailParam = (req.query?.email as string | undefined) ?? (req.body as any)?.email ?? "";
+  const parsed = CheckEmailSchema.safeParse({ email: String(emailParam || "").trim() });
+  if (!parsed.success) {
+    const details = parsed.error.issues.map((i: z.ZodIssue) => ({ path: i.path.join("."), message: i.message }));
+    return res.fail?.([{ message: "Validation failed", code: "VALIDATION_ERROR", details }], 400);
+  }
+  const emailLc = parsed.data.email.toLowerCase();
+  const user = await findUserByEmail(emailLc);
+  return res.success?.({ exists: !!user }, 200);
+}
+
+

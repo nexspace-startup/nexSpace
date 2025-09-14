@@ -52,4 +52,12 @@
     .section-pad { @apply px-10; }     /* add on top of base px-6 via JSX */
     .heading-xl  { @apply text-xl; }  /* responsive title size */
   }
+  input:-webkit-autofill {
+  background-color: rgba(128, 136, 155, 0.1) !important;
+  color: white !important;
+  transition: background-color 9999s ease-in-out 0s;
+  -webkit-text-fill-color: white !important;
+  box-shadow: 0 0 0px 1000px rgba(128, 136, 155, 0.1) inset !important;
+}
+
 }

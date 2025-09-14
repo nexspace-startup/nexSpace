@@ -2,7 +2,7 @@
 import React from "react";
 import { useUIStore } from "../stores/uiStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
-import WorkspaceTile from "./workspace/WorkspaceTile";
+import WorkspaceTile from "./WorkspaceTile";
 import minimiseIcon from "../assets/minimise_icon.svg"
 import maximiseIcon from "../assets/maximise_icon.svg"
 
@@ -126,7 +126,7 @@ const WorkspacePanel: React.FC = () => {
           </div>
         </div>
       </aside>
-      
+
     </>
   );
 };

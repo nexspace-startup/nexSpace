@@ -6,6 +6,7 @@ export const ENDPOINTS = {
   OAUTH_GOOGLE_CALLBACK: '/auth/google/callback',
   OAUTH_MICROSOFT_AUTHORIZATION: '/auth/microsoft/authorization',
   OAUTH_MICROSOFT_CALLBACK: '/auth/microsoft/callback',
+  AUTH_CHECK_EMAIL: '/auth/check-email',
   ONBOARDING: '/onboarding',
   INVITEUSER: '/invite',
   ACCEPTINVITATION: (token: string) => `/invitations/${token}/accept`,

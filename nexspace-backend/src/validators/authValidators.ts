@@ -15,3 +15,10 @@ export const GoogleCallbackSchema = z.object({
 
 export type GoogleCallbackInput = z.infer<typeof GoogleCallbackSchema>;
 
+// Email existence check
+export const CheckEmailSchema = z.object({
+  email: z.email(),
+});
+
+export type CheckEmailInput = z.infer<typeof CheckEmailSchema>;
+
