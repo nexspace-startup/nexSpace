@@ -17,7 +17,7 @@ export type OnboardingInput = z.infer<typeof OnboardingSchema>;
 
 export const InvitationSchema = z.object({
   email: z.string().email(),
-  workspaceId: z.number().int().positive(),
+  workspaceUid: z.string().min(1),
 });
 export type InvitationInput = z.infer<typeof InvitationSchema>;
 

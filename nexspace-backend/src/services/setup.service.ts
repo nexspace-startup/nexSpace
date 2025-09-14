@@ -7,7 +7,7 @@ import { sendInviteEmail } from "../utils/mailer.js";
 
 export type OnboardingResult = {
   user: { id: string; firstName: string; lastName: string; email: string };
-  workspace: { id: string; uid: string; name: string };
+  workspace: { uid: string; name: string };
   membership: { role: WorkspaceRole };
 };
 
@@ -44,14 +44,14 @@ export async function onboardingLocal(input: OnboardingInput): Promise<{ payload
   }
 
   const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    const dup = await tx.workspace.findFirst({ where: { name: input.workspaceName, createdById: (user as any).id }, select: { id: true } });
+    const dup = await tx.workspace.findFirst({ where: { name: input.workspaceName, createdById: (user as any).id }, select: { uid: true } });
     if (dup) throw new Error("WORKSPACE_CONFLICT");
 
     const workspace = await tx.workspace.create({ data: { name: input.workspaceName, createdById: (user as any).id } });
-    const membership = await tx.workspaceMember.create({ data: { workspaceId: workspace.id, userId: (user as any).id, role: input.role } });
+    const membership = await tx.workspaceMember.create({ data: { workspaceUid: workspace.uid, userId: (user as any).id, role: input.role } });
     const payload: OnboardingResult = {
       user: { id: String((user as any).id), firstName: input.firstName, lastName: input.lastName, email },
-      workspace: { id: String(workspace.id), uid: workspace.uid, name: workspace.name },
+      workspace: { uid: workspace.uid, name: workspace.name },
       membership: { role: membership.role },
     };
     return payload;
@@ -84,14 +84,14 @@ export async function onboardingOAuth(input: OnboardingInput, sub: string, hinte
       }
     }
 
-    const dup = await tx.workspace.findFirst({ where: { name: input.workspaceName, createdById: userId }, select: { id: true } });
+    const dup = await tx.workspace.findFirst({ where: { name: input.workspaceName, createdById: userId }, select: { uid: true } });
     if (dup) throw new Error("WORKSPACE_CONFLICT");
 
     const workspace = await tx.workspace.create({ data: { name: input.workspaceName, createdById: userId } });
-    const membership = await tx.workspaceMember.create({ data: { workspaceId: workspace.id, userId, role: input.role } });
+    const membership = await tx.workspaceMember.create({ data: { workspaceUid: workspace.uid, userId, role: input.role } });
     return {
       user: { id: String(userId), firstName: input.firstName, lastName: input.lastName, email },
-      workspace: { id: String(workspace.id), uid: workspace.uid, name: workspace.name },
+      workspace: { uid: workspace.uid, name: workspace.name },
       membership: { role: membership.role },
     } satisfies OnboardingResult;
   });
@@ -101,22 +101,21 @@ export async function onboardingOAuth(input: OnboardingInput, sub: string, hinte
 
 export async function createInvitationForWorkspace(inviterUserId: string, input: InvitationInput) {
   const emailNorm = input.email.trim().toLowerCase();
-  const workspaceIdBig = BigInt(input.workspaceId);
 
   const inviter = await prisma.user.findUnique({ where: { id: BigInt(inviterUserId) }, select: { id: true, first_name: true, last_name: true } });
   if (!inviter) throw new Error("INVITER_NOT_FOUND");
 
-  const canInvite = await prisma.workspaceMember.findFirst({ where: { workspaceId: workspaceIdBig, userId: inviter.id, role: { in: ["OWNER", "ADMIN"] } }, select: { userId: true } });
+  const canInvite = await prisma.workspaceMember.findFirst({ where: { workspaceUid: input.workspaceUid, userId: inviter.id, role: { in: ["OWNER", "ADMIN"] } }, select: { userId: true } });
   if (!canInvite) throw new Error("FORBIDDEN");
 
   const existing = await prisma.invitation.findFirst({
-    where: { invitedEmail: emailNorm, workspaceId: workspaceIdBig, status: InvitationStatus.PENDING, expiresAt: { gt: new Date() } },
+    where: { invitedEmail: emailNorm, workspaceUid: input.workspaceUid, status: InvitationStatus.PENDING, expiresAt: { gt: new Date() } },
     include: { workspace: { select: { name: true } } },
     orderBy: { createdAt: "desc" },
   });
 
   const invitation = existing ?? (await prisma.invitation.create({
-    data: { invitedEmail: emailNorm, workspaceId: workspaceIdBig, invitedBy: inviter.id, status: InvitationStatus.PENDING, expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000), role: WorkspaceRole.MEMBER },
+    data: { invitedEmail: emailNorm, workspaceUid: input.workspaceUid, invitedBy: inviter.id, status: InvitationStatus.PENDING, expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000), role: WorkspaceRole.MEMBER },
     include: { workspace: { select: { name: true } } },
   }));
 
@@ -133,7 +132,7 @@ export async function createInvitationForWorkspace(inviterUserId: string, input:
 }
 
 export async function acceptInvitation(token: string, userId: string, email: string) {
-  const invite = await prisma.invitation.findUnique({ where: { id: token }, include: { workspace: { select: { id: true, uid: true, name: true } } } });
+  const invite = await prisma.invitation.findUnique({ where: { id: token }, include: { workspace: { select: { uid: true, name: true } } } });
   if (!invite) throw new Error("NOT_FOUND");
   if (invite.status !== InvitationStatus.PENDING) throw new Error("ALREADY_USED");
   if (invite.expiresAt.getTime() < Date.now()) {
@@ -146,9 +145,9 @@ export async function acceptInvitation(token: string, userId: string, email: str
     const claimed = await tx.invitation.updateMany({ where: { id: invite.id, status: InvitationStatus.PENDING }, data: { status: InvitationStatus.ACCEPTED, updatedAt: new Date() } });
     if (claimed.count !== 1) throw new Error("ALREADY_USED");
 
-    const existing = await tx.workspaceMember.findUnique({ where: { workspaceId_userId: { workspaceId: invite.workspaceId, userId: BigInt(userId) } }, select: { userId: true } });
+    const existing = await tx.workspaceMember.findFirst({ where: { workspaceUid: invite.workspaceUid, userId: BigInt(userId) }, select: { userId: true } });
     if (!existing) {
-      await tx.workspaceMember.create({ data: { workspaceId: invite.workspaceId, userId: BigInt(userId), role: invite.role ?? WorkspaceRole.MEMBER } });
+      await tx.workspaceMember.create({ data: { workspaceUid: invite.workspaceUid, userId: BigInt(userId), role: invite.role ?? WorkspaceRole.MEMBER } });
     }
     return { alreadyMember: !!existing };
   });
@@ -156,7 +155,6 @@ export async function acceptInvitation(token: string, userId: string, email: str
   return {
     accepted: true,
     alreadyMember: outcome.alreadyMember,
-    workspaceId: String(invite.workspaceId),
     workspaceUid: invite.workspace!.uid,
     workspaceName: invite.workspace!.name,
   } as const;

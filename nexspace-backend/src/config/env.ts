@@ -36,6 +36,9 @@ export interface Config {
   postLogoutRedirect: string;
   mail: MailConfig;
   liveKit: liveKitConfig;
+  chat: {
+    retentionDays: number; // data minimization
+  };
 }
 
 export const config: Config = {
@@ -68,6 +71,9 @@ export const config: Config = {
     url: process.env.LIVEKIT_URL || '',
     apiKey: process.env.LIVEKIT_API_KEY || '',
     apiSecret: process.env.LIVEKIT_API_SECRET || '',
+  },
+  chat: {
+    retentionDays: Number(process.env.CHAT_RETENTION_DAYS || 30),
   },
   postLogoutRedirect:
     process.env.POST_LOGOUT_REDIRECT || 'http://localhost:3000/',

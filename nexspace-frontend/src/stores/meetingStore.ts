@@ -29,6 +29,11 @@ export type MeetingState = {          // 👈 export the type so consumers can a
   whisperActive: boolean;
   whisperTargetSid: string | null;
 
+  // chat state
+  chatOpen: boolean;
+  unreadCount: number;
+  messages: ChatMessage[];
+
   toggleMic: () => Promise<void>;
   toggleCam: () => Promise<void>;
   joinActiveWorkspace: () => Promise<void>;
@@ -37,6 +42,20 @@ export type MeetingState = {          // 👈 export the type so consumers can a
   // whisper controls
   startWhisper: (targetSid: string) => Promise<void>;
   stopWhisper: () => Promise<void>;
+
+  // chat controls
+  toggleChat: () => void;
+  sendMessage: (text: string) => Promise<void>;
+  loadChatHistory: (limit?: number) => Promise<void>;
+};
+
+export type ChatMessage = {
+  id: string;
+  text: string;
+  ts: number; // epoch ms
+  senderSid: string;
+  senderName: string;
+  isLocal: boolean;
 };
 
 /**
@@ -140,20 +159,39 @@ export const useMeetingStore = create<MeetingState>()(
         topic?: string
       ) => {
         try {
-          // If topic is provided and it's not for whisper, ignore
-          if (typeof topic === 'string' && topic !== 'whisper') return;
           const text = typeof (payload as any) === 'string' ? (payload as any) : new TextDecoder().decode(payload);
           const msg = JSON.parse(text);
-          if (!msg || msg.type !== 'whisper') return;
+          if (!msg) return;
           const localSid = (room.localParticipant as any)?.sid ?? room.localParticipant.identity;
-          const senderSid: string | undefined = msg.originSid;
-          if (!senderSid) return;
-          if (msg.action === 'start') {
-            const targetSid: string | undefined = msg.targetSid;
-            const shouldHear = !!targetSid && targetSid === localSid;
-            setHearSender(senderSid, shouldHear);
-          } else if (msg.action === 'stop') {
-            setHearSender(senderSid, true);
+
+          // Handle whisper messages (topic may be undefined in older SDKs)
+          if ((topic === undefined || topic === 'whisper') && msg.type === 'whisper') {
+            const senderSid: string | undefined = msg.originSid;
+            if (!senderSid) return;
+            if (msg.action === 'start') {
+              const targetSid: string | undefined = msg.targetSid;
+              const shouldHear = !!targetSid && targetSid === localSid;
+              setHearSender(senderSid, shouldHear);
+            } else if (msg.action === 'stop') {
+              setHearSender(senderSid, true);
+            }
+            return;
+          }
+
+          // Handle chat messages
+          if ((topic === undefined || topic === 'chat') && msg.type === 'chat') {
+            const senderSid: string = msg.senderSid ?? _participant?.identity ?? 'unknown';
+            const senderName: string = msg.senderName ?? msg.senderSid ?? 'unknown';
+            const id: string = msg.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const text: string = String(msg.text ?? '');
+            if (!text) return;
+            const isLocal = senderSid === localSid;
+            if (isLocal) return; // already appended locally on send
+            set((s) => ({
+              messages: [...s.messages, { id, text, ts: Date.now(), senderSid, senderName, isLocal }],
+              unreadCount: s.chatOpen || isLocal ? s.unreadCount : s.unreadCount + 1,
+            }));
+            return;
           }
         } catch { /* ignore */ }
       };
@@ -227,6 +265,9 @@ export const useMeetingStore = create<MeetingState>()(
       camEnabled: true,
       whisperActive: false,
       whisperTargetSid: null,
+      chatOpen: false,
+      unreadCount: 0,
+      messages: [],
 
       setRoom: (room) => {
         set({
@@ -236,6 +277,10 @@ export const useMeetingStore = create<MeetingState>()(
         });
         syncAV(room);
         attachRoomListeners(room);
+        // load recent chat when connected
+        if (room) {
+          try { get().loadChatHistory?.(100); } catch {}
+        }
       },
 
       toggleMic: async () => {
@@ -273,6 +318,9 @@ export const useMeetingStore = create<MeetingState>()(
           camEnabled: true,
           whisperActive: false,
           whisperTargetSid: null,
+          chatOpen: false,
+          unreadCount: 0,
+          messages: [],
         });
       },
 
@@ -358,6 +406,67 @@ export const useMeetingStore = create<MeetingState>()(
             error: e?.message ?? "Network error while joining",
           });
         }
+      },
+
+      toggleChat: () => {
+        set((s) => ({ chatOpen: !s.chatOpen, unreadCount: !s.chatOpen ? 0 : s.unreadCount }));
+      },
+
+      sendMessage: async (text: string) => {
+        const room = get().room;
+        if (!room) return;
+        const clean = text.trim();
+        if (!clean) return;
+        try {
+          const lp: any = room.localParticipant as any;
+          const senderSid = (lp?.sid ?? lp?.identity) as string;
+          const senderName = (lp?.name ?? lp?.identity) as string;
+          const msg = {
+            type: 'chat',
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            text: clean,
+            senderSid,
+            senderName,
+          };
+          const bytes = new TextEncoder().encode(JSON.stringify(msg));
+          await room.localParticipant.publishData(bytes, { reliable: true, topic: 'chat' } as any);
+          // Also append locally immediately
+          set((s) => ({
+            messages: [...s.messages, { id: msg.id, text: clean, ts: Date.now(), senderSid, senderName, isLocal: true }],
+          }));
+          // Persist to server (best-effort)
+          try {
+            const { activeWorkspaceId } = useWorkspaceStore.getState();
+            if (activeWorkspaceId) {
+              await api.post(`/workspace/${activeWorkspaceId}/chat/messages`, { text: clean }, { withCredentials: true });
+            }
+          } catch {/* ignore persistence errors */}
+        } catch {/* ignore */}
+      },
+
+      loadChatHistory: async (limit = 100) => {
+        try {
+          const { activeWorkspaceId } = useWorkspaceStore.getState();
+          if (!activeWorkspaceId) return;
+          const { data } = await api.get(`/workspace/${activeWorkspaceId}/chat/messages`, {
+            params: { limit },
+            withCredentials: true,
+          });
+          if ((data as any)?.success && Array.isArray((data as any).data)) {
+            const items: Array<{ id: string; text: string; ts: string; sender: { id: string; name: string } }> = (data as any).data;
+            set((s) => ({
+              messages: items.map((m) => ({
+                id: m.id,
+                text: m.text,
+                ts: new Date(m.ts).getTime(),
+                senderSid: m.sender.id,
+                senderName: m.sender.name,
+                isLocal: false,
+              })),
+              unreadCount: s.chatOpen ? 0 : s.unreadCount,
+            }));
+          }
+        } catch {/* ignore */}
       },
     };
   })

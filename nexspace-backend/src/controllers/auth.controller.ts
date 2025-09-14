@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { DEFAULT_TTL, createSession, getSession, rotateSession, setSessionCookie } from "../session.js";
+import { DEFAULT_TTL, createSession, rotateSession, setSessionCookie } from "../session.js";
 import { AppError } from "../middleware/error.js";
 import { GoogleCallbackSchema, SigninSchema, CheckEmailSchema } from "../validators/authValidators.js";
 import type { z } from "zod";
@@ -45,13 +45,12 @@ export async function signin(req: Request, res: Response) {
     return res.fail?.([{ message: "Invalid email or password", code: "INVALID_CREDENTIALS" }], 401);
   }
 
-  const sid = (req.cookies && (req.cookies as any).sid) as string | undefined;
+  const sid = req.auth?.sid as string | undefined;
   const ttl = remember ? 60 * 60 * 24 * 30 : DEFAULT_TTL;
 
   let session = null as any;
   if (sid) {
-    const existing = await getSession(sid);
-    if (existing) session = await rotateSession(sid, ttl);
+    session = await rotateSession(sid, ttl);
   }
   if (!session) session = await createSession({ userId: String(result.user.id), email: result.user.email }, ttl);
 
