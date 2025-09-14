@@ -10,8 +10,8 @@ export type AccountStep = {
   email: string;
   role: "OWNER" | "ADMIN" | "MEMBER";
   company?: string;
-  password: string;
-  confirmPassword: string;
+  password?: string;
+  confirmPassword?: string;
 };
 
 type Props = {
@@ -33,7 +33,7 @@ export default function AccountSetup({ defaultValues, onNext, onCancel }: Props)
   const status = useUserStore((s) => s.status);
   // Infer OAuth pre-onboarding: authenticated session exists, but DB user id isn't attached yet
   const isOAuth = status === "authed" && !user?.id;
-  const schema = useMemo(() => {
+  const schema: z.ZodType<AccountStep> = useMemo(() => {
     const core = z.object({
       firstName: z
         .string()
