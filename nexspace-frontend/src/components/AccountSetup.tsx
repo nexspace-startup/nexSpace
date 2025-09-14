@@ -102,113 +102,107 @@ export default function AccountSetup({ defaultValues, onNext, onCancel }: Props)
 
       {/* Card form */}
       <form id="account-setup-form" onSubmit={handleSubmit(onNext)} className="w-full bg-[#18181B] rounded-2xl p-6 sm:p-10 flex flex-col gap-8">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 w-full">
-        <div className="flex flex-col gap-2">
-          <label className="text-sm">First Name*</label>
-          <input
-            {...register("firstName")}
-            className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.firstName ? "border-[#FF6060]" : "border-[#26272B]"}`}
-            placeholder="Jane"
-          />
-          {errors.firstName && <p className="text-[#FF6060] text-xs">{String(errors.firstName.message)}</p>}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 w-full">
+          <div className="flex flex-col gap-2">
+            <label className="text-sm">First Name*</label>
+            <input
+              {...register("firstName")}
+              className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.firstName ? "border-[#FF6060]" : "border-[#26272B]"}`}
+            />
+            {errors.firstName && <p className="text-[#FF6060] text-xs">{String(errors.firstName.message)}</p>}
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="text-sm">Last Name*</label>
+            <input
+              {...register("lastName")}
+              className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.lastName ? "border-[#FF6060]" : "border-[#26272B]"}`}
+            />
+            {errors.lastName && <p className="text-[#FF6060] text-xs">{String(errors.lastName.message)}</p>}
+          </div>
         </div>
+
         <div className="flex flex-col gap-2">
-          <label className="text-sm">Last Name*</label>
+          <label className="text-sm">Email*</label>
           <input
-            {...register("lastName")}
-            className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.lastName ? "border-[#FF6060]" : "border-[#26272B]"}`}
-            placeholder="Doe"
+            type="email"
+            autoComplete="email"
+            {...register("email")}
+            disabled={!!user?.email}
+            className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.25)] border ${errors.email ? "border-[#FF6060]" : "border-[#26272B]"}`}
           />
-          {errors.lastName && <p className="text-[#FF6060] text-xs">{String(errors.lastName.message)}</p>}
+          {errors.email && <p className="text-[#FF6060] text-xs">{String(errors.email.message)}</p>}
         </div>
-      </div>
 
-      <div className="flex flex-col gap-2">
-        <label className="text-sm">Email*</label>
-        <input
-          type="email"
-          autoComplete="email"
-          {...register("email")}
-          disabled={!!user?.email}
-          className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.25)] border ${errors.email ? "border-[#FF6060]" : "border-[#26272B]"}`}
-          placeholder="you@nexspace.com"
-        />
-        {errors.email && <p className="text-[#FF6060] text-xs">{String(errors.email.message)}</p>}
-      </div>
+        <div className="flex flex-col gap-2">
+          <label className="text-sm">Designation*</label>
+          <select
+            {...register("role")}
+            className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.role ? "border-[#FF6060]" : "border-[#26272B]"}`}
+          >
+            <option value="OWNER">Owner</option>
+            <option value="ADMIN">Admin</option>
+            <option value="MEMBER">Member</option>
+          </select>
+          {errors.role && <p className="text-[#FF6060] text-xs">{String(errors.role.message)}</p>}
+        </div>
 
-      <div className="flex flex-col gap-2">
-        <label className="text-sm">Designation*</label>
-        <select
-          {...register("role")}
-          className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.role ? "border-[#FF6060]" : "border-[#26272B]"}`}
-        >
-          <option value="OWNER">Owner</option>
-          <option value="ADMIN">Admin</option>
-          <option value="MEMBER">Member</option>
-        </select>
-        {errors.role && <p className="text-[#FF6060] text-xs">{String(errors.role.message)}</p>}
-      </div>
+        <div className="flex flex-col gap-2">
+          <label className="text-sm">Company</label>
+          <input
+            {...register("company")}
+            className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border border-[#26272B]`}
+          />
+        </div>
 
-      <div className="flex flex-col gap-2">
-        <label className="text-sm">Company</label>
-        <input
-          {...register("company")}
-          className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border border-[#26272B]`}
-          placeholder="NexSpace"
-        />
-      </div>
+        {!isOAuth && <hr className="border-[#26272B]" />}
 
-      {!isOAuth && <hr className="border-[#26272B]" />}
+        {!isOAuth && (
+          <div className="flex flex-col gap-2 relative">
+            <label className="text-sm">Password*</label>
+            <input
+              type="password"
+              {...register("password")}
+              onFocus={() => setPwFocused(true)}
+              onBlur={() => setPwFocused(false)}
+              className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.password ? "border-[#FF6060]" : "border-[#26272B]"}`}
+            />
+            {errors.password && <p className="text-[#FF6060] text-xs">{String(errors.password.message)}</p>}
 
-      {!isOAuth && (
-      <div className="flex flex-col gap-2 relative">
-        <label className="text-sm">Password*</label>
-        <input
-          type="password"
-          {...register("password")}
-          onFocus={() => setPwFocused(true)}
-          onBlur={() => setPwFocused(false)}
-          className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.password ? "border-[#FF6060]" : "border-[#26272B]"}`}
-          placeholder="Create a strong password"
-        />
-        {errors.password && <p className="text-[#FF6060] text-xs">{String(errors.password.message)}</p>}
-
-        {pwFocused && (
-          <div className="absolute z-10 right-0 top-[52px] w-72 bg-[#333336] rounded-lg p-4 shadow-lg">
-            <p className="text-[14px] font-bold mb-3">Your password must contain</p>
-            <ul className="space-y-2 text-[12px]">
-              {[
-                { ok: passwordRules.length(password), label: "At least 8 characters" },
-                { ok: passwordRules.upper(password), label: "At least 1 uppercase" },
-                { ok: passwordRules.lower(password), label: "At least 1 lowercase" },
-                { ok: passwordRules.digit(password), label: "At least 1 number" },
-                { ok: passwordRules.special(password), label: "At least 1 special character" },
-              ].map((r, i) => (
-                <li key={i} className={`flex items-center gap-2 ${r.ok ? "text-[#48FFA4]" : "text-[#FF6060]"}`}>
-                  <span className={`inline-block w-4 h-4 rounded-full ${r.ok ? "bg-[#48FFA4]" : "bg-[#FF6060]"}`} />
-                  {r.label}
-                </li>
-              ))}
-            </ul>
+            {pwFocused && (
+              <div className="absolute z-10 right-0 top-[52px] w-72 bg-[#333336] rounded-lg p-4 shadow-lg">
+                <p className="text-[14px] font-bold mb-3">Your password must contain</p>
+                <ul className="space-y-2 text-[12px]">
+                  {[
+                    { ok: passwordRules.length(password), label: "At least 8 characters" },
+                    { ok: passwordRules.upper(password), label: "At least 1 uppercase" },
+                    { ok: passwordRules.lower(password), label: "At least 1 lowercase" },
+                    { ok: passwordRules.digit(password), label: "At least 1 number" },
+                    { ok: passwordRules.special(password), label: "At least 1 special character" },
+                  ].map((r, i) => (
+                    <li key={i} className={`flex items-center gap-2 ${r.ok ? "text-[#48FFA4]" : "text-[#FF6060]"}`}>
+                      <span className={`inline-block w-4 h-4 rounded-full ${r.ok ? "bg-[#48FFA4]" : "bg-[#FF6060]"}`} />
+                      {r.label}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
-      </div>
-      )}
 
-      {!isOAuth && (
-      <div className="flex flex-col gap-2">
-        <label className="text-sm">Confirm Password*</label>
-        <input
-          type="password"
-          {...register("confirmPassword")}
-          className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.confirmPassword ? "border-[#FF6060]" : "border-[#26272B]"}`}
-          placeholder="Re-enter your password"
-        />
-        {errors.confirmPassword && (
-          <p className="text-[#FF6060] text-xs">{String(errors.confirmPassword.message)}</p>
+        {!isOAuth && (
+          <div className="flex flex-col gap-2">
+            <label className="text-sm">Confirm Password*</label>
+            <input
+              type="password"
+              {...register("confirmPassword")}
+              className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.confirmPassword ? "border-[#FF6060]" : "border-[#26272B]"}`}
+            />
+            {errors.confirmPassword && (
+              <p className="text-[#FF6060] text-xs">{String(errors.confirmPassword.message)}</p>
+            )}
+          </div>
         )}
-      </div>
-      )}
 
       </form>
 

@@ -51,7 +51,6 @@ export default function WorkspaceSetup({ defaultValues, onBack, onSubmit, isSubm
           <input
             {...register("workspaceName")}
             className={`h-14 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.workspaceName ? "border-[#FF6060]" : "border-[#26272B]"}`}
-            placeholder="e.g., Nexspace Core"
           />
           {errors.workspaceName && <p className="text-[#FF6060] text-xs">{String(errors.workspaceName.message)}</p>}
         </div>
