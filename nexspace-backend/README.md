@@ -1,47 +1,60 @@
-# Node Auth Starter (Google + Microsoft, OIDC + PKCE)
+# Nexspace Backend – Layered Architecture
 
-Minimal Express scaffold wired for Google and Microsoft sign-in using `openid-client`.
+TypeScript + Express + Prisma backend, refactored to a clean layered architecture with clear separation of concerns.
 
-## Quick start
-
-```bash
-# 1) Unzip, then inside the folder
-npm install
-
-# 2) Create your .env from example
-cp .env.example .env
-# Fill client IDs/Secrets + redirect URIs
-
-# 3) Run
-npm run dev
-# Visit http://localhost:3000
-```
-
-## Redirect URIs to register (local dev)
-
-- Google:     `http://localhost:3000/auth/google/callback`
-- Microsoft:  `http://localhost:3000/auth/microsoft/callback`
-
-## Project structure
+## Folder layout
 
 ```
 src/
-  auth/
-    providers.mjs         # OIDC discovery + clients
-  config/
-    env.js                # dotenv + config
-  middleware/
-    requireAuth.mjs
-  routes/
-    auth.mjs              # /auth/google|microsoft (+ callbacks)
-    index.mjs             # home, profile, logout
-  server.mjs              # Express bootstrap
-.env.example
+  config/                 # env.ts (dotenv + config)
+  controllers/            # Express controllers: validate -> call service -> respond
+    auth.controller.ts
+    authMe.controller.ts
+    setup.controller.ts
+    workspace.controller.ts
+  middleware/             # error, redis, response wrapper, etc.
+  repositories/           # Prisma-only data access
+    auth.repository.ts
+    user.repository.ts
+    workspace.repository.ts
+  routes/                 # endpoint wiring only
+    auth.me.ts
+    setup.ts
+    signin.ts
+    workspace.ts
+  services/               # business logic only
+    auth.service.ts
+    me.service.ts
+    meeting.service.ts
+    setup.service.ts
+  validators/             # Zod schemas
+    authValidators.ts
+    setup.validators.ts
+    workspace.validators.ts
+  prisma.ts               # Prisma client
+  server.ts               # Express bootstrap
+  session.ts              # Session management (Redis)
 ```
 
-## Notes
+## Sessions – single active session per identity
 
-- Uses Authorization Code **with PKCE**.
-- Session store is in-memory for dev. Use Redis/DB in production.
-- For cross-subdomain cookies in prod, set `sameSite: 'none'` and `secure: true`.
-- To call provider APIs, request additional scopes and use `tokenSet.access_token`.
+Sessions are stored in Redis and indexed by both DB `userId` and OAuth `sub`:
+
+- Creating a session (`createSession`) now revokes any existing sessions for the same `userId` or `sub` before creating a new one.
+- Attaching a DB user id (`attachDbUserIdToSession`) revokes any other sessions for that `userId`, keeping only the current SID.
+- Rotating a session (`rotateSession`) updates both user and sub indices atomically.
+- Helpers include `revokeSession`, `revokeAllSessions(userId)`, and `revokeAllSessionsBySub(sub)`.
+
+This guarantees a single active session per identity, whether the user came via local sign-in or OAuth-first.
+
+## Build
+
+```
+cd nexspace-backend
+npm install
+npm run build
+```
+
+## Environment
+
+See `src/config/env.ts` for required variables: Postgres `DATABASE_URL`, Redis `REDIS_URL`, and LiveKit `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`. `WEB_ORIGIN` is used for CORS and invite URLs.

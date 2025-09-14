@@ -1,5 +1,5 @@
 export const ENDPOINTS = {
-  BASE_URL: '/api',
+  BASE_URL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000',
   AUTH_ME: '/auth/me',
   AUTH_SESSION: '/auth/session',
   OAUTH_GOOGLE_AUTHORIZATION: '/auth/google/authorization',
