@@ -75,7 +75,7 @@ export default function AccountSetup({ defaultValues, onNext, onCancel }: Props)
     formState: { errors, isSubmitting },
     watch,
   } = useForm<AccountStep>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(schema as any) as any,
     mode: "onSubmit",
     defaultValues: {
       firstName: "",
