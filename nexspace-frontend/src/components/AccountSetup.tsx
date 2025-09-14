@@ -32,7 +32,7 @@ export default function AccountSetup({ defaultValues, onNext, onCancel }: Props)
   const user = useUserStore((s) => s.user);
   const status = useUserStore((s) => s.status);
   // Infer OAuth pre-onboarding: authenticated session exists, but DB user id isn't attached yet
-  const isOAuth = status === "authed" && !user?.id;
+  const isOAuth = (status === "authed" && !user?.id) || user?.provider == "google" || user?.provider == "microsoft";
   const schema: z.ZodType<AccountStep> = useMemo(() => {
     const core = z.object({
       firstName: z
