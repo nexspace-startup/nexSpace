@@ -1,6 +1,6 @@
 import { AccessToken } from "livekit-server-sdk";
 import { config } from "../config/env.js";
-import { findWorkspaceById, isWorkspaceMember, findWorkspacesForUser } from "../repositories/workspace.repository.js";
+import { findWorkspaceByUid, isWorkspaceMember, findWorkspacesForUser } from "../repositories/workspace.repository.js";
 
 export async function buildMeetingJoinToken(userId: string, workspaceUid: string, sess: any) {
   const LIVEKIT_URL = config.liveKit.url;
@@ -10,11 +10,10 @@ export async function buildMeetingJoinToken(userId: string, workspaceUid: string
     throw new Error("LIVEKIT_MISCONFIGURED");
   }
 
-  const wsId = BigInt(workspaceUid);
-  const ws = await findWorkspaceById(wsId);
+  const ws = await findWorkspaceByUid(workspaceUid);
   if (!ws) throw new Error("WORKSPACE_NOT_FOUND");
 
-  const member = await isWorkspaceMember(ws.id, BigInt(userId));
+  const member = await isWorkspaceMember(ws.uid, BigInt(userId));
   if (!member) throw new Error("FORBIDDEN");
   if ((member as any)?.status === "SUSPENDED") throw new Error("FORBIDDEN");
 
@@ -29,6 +28,6 @@ export async function buildMeetingJoinToken(userId: string, workspaceUid: string
 
 export async function listWorkspacesForUser(userId: string) {
   const rows = await findWorkspacesForUser(BigInt(userId));
-  return rows.map((ws) => ({ id: String(ws.id), name: ws.name }));
+  return rows.map((ws) => ({ id: ws.uid, name: ws.name }));
 }
 

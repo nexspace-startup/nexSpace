@@ -1,16 +1,16 @@
 import { prisma } from "../prisma.js";
 
-export async function createChatMessage(workspaceId: bigint, senderId: bigint, roomUid: string, content: string) {
+export async function createChatMessage(workspaceUid: string, senderId: bigint, roomUid: string, content: string) {
   return prisma.chatMessage.create({
-    data: { workspaceId, senderId, roomUid, content },
-    select: { id: true, workspaceId: true, senderId: true, roomUid: true, content: true, createdAt: true, deletedAt: true },
+    data: { workspaceUid, senderId, roomUid, content },
+    select: { id: true, workspaceUid: true, senderId: true, roomUid: true, content: true, createdAt: true, deletedAt: true },
   });
 }
 
-export async function listChatMessages(workspaceId: bigint, limit = 50, before?: Date) {
+export async function listChatMessages(workspaceUid: string, limit = 50, before?: Date) {
   return prisma.chatMessage.findMany({
     where: {
-      workspaceId,
+      workspaceUid,
       deletedAt: null,
       ...(before ? { createdAt: { lt: before } } : {}),
     },
@@ -27,9 +27,8 @@ export async function listChatMessages(workspaceId: bigint, limit = 50, before?:
   });
 }
 
-export async function softDeleteMessage(id: bigint, workspaceId: bigint, byUserId: bigint, allowAny = false) {
-  // If allowAny=false, restrict to own messages only
-  const where: any = { id, workspaceId };
+export async function softDeleteMessage(id: bigint, workspaceUid: string, byUserId: bigint, allowAny = false) {
+  const where: any = { id, workspaceUid };
   if (!allowAny) where.senderId = byUserId;
   return prisma.chatMessage.updateMany({
     where,
@@ -37,16 +36,16 @@ export async function softDeleteMessage(id: bigint, workspaceId: bigint, byUserI
   });
 }
 
-export async function softDeleteAllByUserInWorkspace(userId: bigint, workspaceId: bigint) {
+export async function softDeleteAllByUserInWorkspace(userId: bigint, workspaceUid: string) {
   return prisma.chatMessage.updateMany({
-    where: { senderId: userId, workspaceId },
+    where: { senderId: userId, workspaceUid },
     data: { deletedAt: new Date(), content: "" },
   });
 }
 
-export async function purgeOlderThan(workspaceId: bigint, olderThan: Date) {
+export async function purgeOlderThan(workspaceUid: string, olderThan: Date) {
   return prisma.chatMessage.deleteMany({
-    where: { workspaceId, createdAt: { lt: olderThan } },
+    where: { workspaceUid, createdAt: { lt: olderThan } },
   });
 }
 
