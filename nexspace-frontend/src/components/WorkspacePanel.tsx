@@ -49,20 +49,14 @@ const WorkspacePanel: React.FC = () => {
         </div>
       )}
 
-      {/* Expanded panel wrapper */}
+      {/* Expanded panel wrapper (desktop) */}
       <aside
-        className="
-          relative shrink-0
-          border-r border-[#26272B]
-          bg-[#18181B]
-          transition-[opacity] duration-500
-        "
+        className="hidden lg:block relative shrink-0 border-r border-[#26272B] bg-[#18181B] transition-[opacity] duration-500"
         style={{
           width: isOpen ? PANEL_WIDTH : 0,
           opacity: isOpen ? 1 : 0,
           pointerEvents: isOpen ? "auto" : "none",
         }}
-        //style={{ width: PANEL_WIDTH, opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none" }}
         aria-expanded={isOpen}
       >
         {/* Header row stays fixed at top; content below vertically collapses */}
@@ -126,6 +120,56 @@ const WorkspacePanel: React.FC = () => {
           </div>
         </div>
       </aside>
+
+      {/* Overlay drawer (mobile/tablet) */}
+      {isOpen && (
+        <div className="lg:hidden">
+          {/* Scrim */}
+          <div className="fixed inset-0 z-30 bg-black/40" onClick={() => toggle(false)} aria-hidden />
+          {/* Drawer */}
+          <aside className="fixed left-0 top-0 z-40 h-full w-[min(88vw,320px)] bg-[#18181B] border-r border-[#26272B]">
+            <div className="px-3 pt-5">
+              <div className="h-8 flex items-center justify-between">
+                <span className="text-white text-[16px] font-semibold tracking-[-0.01em]">Workspaces</span>
+                <button
+                  onClick={() => toggle(false)}
+                  className="w-7 h-7 rounded-full border grid place-items-center hover:border-zinc-600 transition"
+                  style={{ borderColor: "#26272B" }}
+                  aria-label="Close workspace panel"
+                >
+                  <img src={minimiseIcon} alt="Close" className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+            <div className="px-3 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 120px)' }}>
+              <div className="mt-6 space-y-2">
+                {workspaces?.map((ws) => (
+                  <div key={ws.id}>
+                    <WorkspaceTile
+                      name={ws.name}
+                      initials={initialsFrom(ws.name)}
+                      active={activeId === ws.id}
+                      onTileClick={() => { setActive(ws.id); toggle(false); }}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-6 pb-5">
+                <button
+                  onClick={() => { /* open create workflow */ }}
+                  className="w-full h-10 rounded-2xl bg-[rgba(128,136,155,0.25)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 hover:bg-white/20 transition-colors"
+                >
+                  <svg viewBox="0 0 20 20" className="w-5 h-5">
+                    <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                  </svg>
+                  New Workspace
+                </button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
 
     </>
   );

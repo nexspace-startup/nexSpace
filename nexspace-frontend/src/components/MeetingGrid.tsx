@@ -89,10 +89,7 @@ const MeetingGrid: React.FC<Props> = ({
   const GridMany = useMemo(() =>
     function GridManyInner() {
       return (
-        <div
-          className="grid gap-x-2 gap-y-2 w-full"
-          style={{ gridTemplateColumns: "repeat(6, minmax(0, 1fr))", justifyItems: "center" }}
-        >
+        <div className="grid gap-2 w-full grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 justify-items-center">
           {current.map((p) => (
             <ProfileTile key={(p as any)?.sid ?? p.identity} participant={p} />
           ))}

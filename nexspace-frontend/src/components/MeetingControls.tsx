@@ -35,8 +35,8 @@ const MeetingControls: React.FC = () => {
 
     return (
         <div
-            className="absolute left-1/2 -translate-x-1/2 control-bar w-[calc(100%-16px)] max-w-[720px]
-                        h-auto sm:h-[72px] px-3 sm:px-6 py-2 sm:py-0 bottom-2 sm:bottom-6"
+            className="absolute left-1/2 -translate-x-1/2 control-bar w-[calc(100%-16px)] max-w-[720px] h-auto sm:h-[72px] px-3 sm:px-6 py-2 sm:py-0"
+            style={{ bottom: 'calc(8px + env(safe-area-inset-bottom))' }}
             role="region"
             aria-label="Meeting controls"
         >

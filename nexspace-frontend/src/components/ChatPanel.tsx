@@ -25,7 +25,7 @@ const ChatPanel: React.FC = () => {
 
   return (
     <aside
-      className="absolute right-2 sm:right-6 bottom-[92px] sm:bottom-[120px] z-30 w-[min(92vw,360px)] h-[min(60vh,520px)] bg-[#1C1C1F] border border-[#2A2B31] rounded-xl shadow-xl flex flex-col overflow-hidden"
+      className="fixed inset-0 sm:absolute sm:inset-auto sm:right-6 sm:bottom-[120px] z-30 w-full h-full sm:w-[min(92vw,360px)] sm:h:[min(60vh,520px)] bg-[#1C1C1F] border border-[#2A2B31] rounded-none sm:rounded-xl shadow-xl flex flex-col overflow-hidden"
       role="region"
       aria-label="Meeting chat"
     >

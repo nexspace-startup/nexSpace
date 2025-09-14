@@ -24,13 +24,17 @@ const DashboardPage: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen w-full bg-white">
-      <div className="relative w-full h-screen bg-[#202024] text-white">
-        <div className="flex">
-          <NavbarPanel items={navItems} activeId={activeNav} onSelect={setActiveNav} />
-          <WorkspacePanel />
-          <MeetingPanel />
-        </div>
+    <div className="relative min-h-screen bg-[#202024] text-white">
+      {/* Responsive grid: 1 col on mobile, nav+main on md, nav+ws+main on lg */}
+      <div className="grid h-screen grid-cols-1 md:grid-cols-[76px_1fr] lg:grid-cols-[76px_auto_1fr]">
+        {/* Left rail (desktop/tablet). NavbarPanel also renders a mobile bottom bar internally */}
+        <NavbarPanel items={navItems} activeId={activeNav} onSelect={setActiveNav} />
+
+        {/* Workspace panel: overlay on md-, inline column on lg+ */}
+        <WorkspacePanel />
+
+        {/* Meeting stage */}
+        <MeetingPanel />
       </div>
     </div>
   );
