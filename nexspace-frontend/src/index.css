@@ -103,3 +103,10 @@
   .menu { @apply absolute mt-2 left-0 w-44 rounded-lg bg-[#202024] shadow-lg border border-[#26272B] py-1; }
   .menu-item { @apply px-3 py-2 text-sm text-white/90 hover:bg-white/5 flex items-center gap-2; }
 }
+
+/* Speaking pulse halo for profile tiles */
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: .55; }
+  100% { transform: scale(1.10); opacity: .90; }
+}
+.pulse-ring { animation: pulse-ring 900ms ease-out infinite alternate; }
