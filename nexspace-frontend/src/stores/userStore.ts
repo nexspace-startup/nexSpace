@@ -11,6 +11,9 @@ export interface User {
   name?: string;
   email?: string;
   avatar?: string;
+  // OAuth fields (optional): present when authenticating via Google/Microsoft before DB user exists
+  sub?: string;
+  provider?: "google" | "microsoft" | "local";
   token?: string; // keep if you plan to store non-sensitive tokens (not needed for httpOnly cookie sessions)
 }
 

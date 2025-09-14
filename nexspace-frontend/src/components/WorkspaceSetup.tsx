@@ -1,70 +1,70 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { WorkspaceData } from "../types";
+
+export type WorkspaceStep = {
+  workspaceName: string;
+  teamSize?: "1-5" | "6-10" | "11-25" | "26-50" | "51-100" | "100+";
+};
+
+type Props = {
+  defaultValues?: Partial<WorkspaceStep>;
+  onBack: () => void;
+  onSubmit: (data: WorkspaceStep) => void;
+  isSubmitting?: boolean;
+};
 
 const schema = z.object({
-  workspaceName: z.string()
+  workspaceName: z
+    .string()
     .min(2, "Workspace name must be at least 2 characters")
-    .max(50, "Workspace name must be 50 characters or fewer")
-    .regex(/^[\p{L}\p{N}\s.'-]+$/u, "Only letters, numbers, spaces, . ' - are allowed"),
-  teamSize: z.enum(["1-5","6-10","11-25","26-50","51-100","100+"]).refine((val) => ["1-5","6-10","11-25","26-50","51-100","100+"].includes(val), {
-    message: "Select a valid team size",
-  }),
+    .max(120, "Workspace name must be at most 120 characters"),
+  teamSize: z.enum(["1-5", "6-10", "11-25", "26-50", "51-100", "100+"]).optional(),
 });
 
-type Props = { defaultValues?: Partial<WorkspaceData>; onValidNext: (d: WorkspaceData) => void; };
-
-export default function WorkspaceSetup({ defaultValues, onValidNext }: Props) {
-  const { register, handleSubmit, formState: { errors, isSubmitting } } =
-    useForm<WorkspaceData>({
+export default function WorkspaceSetup({ defaultValues, onBack, onSubmit, isSubmitting }: Props) {
+  const { register, handleSubmit, formState: { errors, isSubmitting: isFormSubmitting } } =
+    useForm<WorkspaceStep>({
       resolver: zodResolver(schema),
       mode: "onSubmit",
       defaultValues: { workspaceName: "", teamSize: "1-5", ...defaultValues },
     });
 
+  function handleLocalSubmit(ws: WorkspaceStep) {
+    onSubmit(ws);
+  }
+
   return (
-    <form
-      onSubmit={handleSubmit(onValidNext)}
-      className="w-full max-w-[520px] px-6 py-8 section-pad space-y-6"
-      noValidate
-    >
-      <div>
-        <h1 className="heading-xl">Setup Your Workspace</h1>
-        <p className="subheading">fill out your workspace info</p>
+    <div className="w-full max-w-[580px] flex flex-col items-center gap-6 sm:gap-8">
+      {/* Title outside the card */}
+      <div className="w-full max-w-[400px] self-center flex flex-col items-center gap-2">
+        <h1 className="text-center font-bold tracking-[-0.01em] text-2xl">Setup Your Workspace</h1>
+        <p className="text-center text-sm sm:text-base opacity-95">Name your workspace and team size</p>
       </div>
 
-      <div>
-        <label className="label">Team Name*</label>
-        <input
-          {...register("workspaceName")}
-          className={`input-base ${errors.workspaceName ? "input-error" : "input-normal"}`}
-          placeholder="e.g., Nexspace Core"
-        />
-        {errors.workspaceName && <p className="error-text">{errors.workspaceName.message}</p>}
-      </div>
+      {/* Form content (no dark card background) */}
+      <form id="workspace-setup-form" onSubmit={handleSubmit(handleLocalSubmit)} className="w-full max-w-[500px] flex flex-col gap-7 sm:gap-[28px]">
+        <div className="w-full h-[220px] sm:h-[300px] rounded-2xl bg-gradient-to-br from-[#B7F2D4] to-[#48FFA4]" aria-hidden="true" />
 
-      <div>
-        <label className="label">Team Size*</label>
-        <select
-          defaultValue=""
-          {...register("teamSize")}
-          className={`select-base ${errors.teamSize ? "select-error" : "select-normal"}`}
-        >
-          <option value="" disabled>Select</option>
-          <option value="1-5">1–5</option>
-          <option value="6-10">6–10</option>
-          <option value="11-25">11–25</option>
-          <option value="26-50">26–50</option>
-          <option value="51-100">51–100</option>
-          <option value="100+">100+</option>
-        </select>
-        {errors.teamSize && <p className="error-text">{errors.teamSize.message}</p>}
-      </div>
+        <div className="flex flex-col gap-2">
+          <label className="text-sm">Workspace Name*</label>
+          <input
+            {...register("workspaceName")}
+            className={`h-14 rounded-2xl px-4 bg-[rgba(128,136,155,0.10)] border ${errors.workspaceName ? "border-[#FF6060]" : "border-[#26272B]"}`}
+            placeholder="e.g., Nexspace Core"
+          />
+          {errors.workspaceName && <p className="text-[#FF6060] text-xs">{String(errors.workspaceName.message)}</p>}
+        </div>
+      </form>
 
-      <button type="submit" disabled={isSubmitting} className="btn-primary">
-        Continue
-      </button>
-    </form>
+      {/* Break line between card and CTA */}
+      <hr className="w-full border-[#26272B]" />
+
+      {/* CTA row outside the card */}
+      <div className="flex items-center justify-between w-full">
+        <button type="button" onClick={onBack} className="h-10 px-4 rounded-xl bg-[rgba(128,136,155,0.25)]">Back</button>
+        <button form="workspace-setup-form" type="submit" disabled={isSubmitting || isFormSubmitting} className="h-10 px-6 rounded-xl bg-[#4285F4] text-white disabled:opacity-60">Create Workspace</button>
+      </div>
+    </div>
   );
 }

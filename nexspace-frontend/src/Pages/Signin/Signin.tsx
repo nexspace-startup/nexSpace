@@ -1,29 +1,44 @@
-import React, { useState } from 'react';
-import { useForm } from 'react-hook-form';
-import { z } from 'zod';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { useNavigate } from 'react-router-dom';
-import { useUserStore } from '../../stores/userStore';
-import { googleGetCode } from '../../lib/oauthClients';
+import { useEffect, useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useUserStore } from "../../stores/userStore";
+import { googleGetCode } from "../../lib/oauthClients";
+import { AuthService, getMe, type MeResponse } from "../../services/authService";
 
-type Provider = 'google' | 'microsoft';
+type Provider = "google" | "microsoft";
 
-const emailSchema = z.object({
-    email: z
-        .string()
-        .min(1, 'Email is required')
-        .email('Enter a valid email address'),
-    password: z.string().optional(), // dynamically required later
-});
+type FormData = {
+    email: string;
+    // Keep key present for resolver typing; may be undefined when not required
+    password: string | undefined;
+};
 
-type FormData = z.infer<typeof emailSchema>;
-
-export default function AuthenticationPage() {
-    const setUser = useUserStore((state) => state.setUser);
+export default function Signin() {
+    const setUser = useUserStore((s) => s.setUser);
     const navigate = useNavigate();
+    const location = useLocation();
 
-    const [emailVerified, setEmailVerified] = useState(false);
-    const [backendError, setBackendError] = useState('');
+    const [isChecking, setIsChecking] = useState(false);
+    const [emailChecked, setEmailChecked] = useState(false);
+    const [emailExists, setEmailExists] = useState<boolean | null>(null);
+    const [showPassword, setShowPassword] = useState(false);
+    const [requirePassword, setRequirePassword] = useState(false);
+    const [authError, setAuthError] = useState<string>("");
+
+    const dynamicSchema = useMemo(
+        () =>
+            z.object({
+                email: z
+                    .email("Enter a valid email address")
+                    .min(1, "Email is required"),
+                password: requirePassword
+                    ? z.string().min(1, "Password is required")
+                    : z.string().optional(),
+            }),
+        [requirePassword]
+    );
 
     const {
         register,
@@ -32,215 +47,276 @@ export default function AuthenticationPage() {
         setError,
         clearErrors,
         watch,
-    } = useForm<FormData>({
-        resolver: zodResolver(emailSchema),
-    });
+        setValue,
+    } = useForm<FormData>({ resolver: zodResolver(dynamicSchema), shouldUnregister: true });
 
-    const email = watch('email');
-    const password = watch('password');
+    const email = watch("email");
 
-    // MOCK backend email check
-    const checkEmailBackend = async (email: string) => {
-        // === replace true with false to test failure ===
-        return true; // ✅ always true for now
-    };
+    // Password step controlled by state via showPassword
 
-    // MOCK backend password check
-    const checkPasswordBackend = async (email: string, password: string) => {
-        // === replace true with false to test failure ===
-        return true; // ✅ always true for now
-    };
+    async function checkEmailExists(_email: string): Promise<boolean> {
+        return AuthService.checkEmail(_email);
+    }
+
+    async function loginWithEmailPassword(
+        _email: string,
+        _password: string
+    ): Promise<{ ok: boolean; user?: any; workspaces?: any[] }> {
+        const res = await AuthService.signin(_email, _password);
+        // keep same shape as before
+        if (res.ok) return { ok: true, user: { email: _email }, workspaces: [] };
+        return { ok: false } as any;
+    }
+
+    function computeRedirectTarget(): string | null {
+        // Priority: ?redirect=/path → location.state.from → null
+        const searchParams = new URLSearchParams(location.search || "");
+        const q = searchParams.get("redirect");
+        if (q && typeof q === "string") return q;
+        const from: any = (location as any).state?.from;
+        if (!from) return null;
+        if (typeof from === "string") return from;
+        if (typeof from === "object" && from.pathname) {
+            return `${from.pathname}${from.search || ""}${from.hash || ""}`;
+        }
+        return null;
+    }
+
+    async function redirectPostLogin(): Promise<void> {
+        const me: MeResponse | null = await getMe();
+        const target = computeRedirectTarget();
+        // update store with basic identity
+        if (me?.user) {
+            const first = me.user.first_name || "";
+            const last = me.user.last_name || "";
+            const name = [first, last].filter(Boolean).join(" ") || undefined;
+            setUser({ id: me.user.id, name, email: me.user.email });
+        }
+        if (target && target !== "/signin") {
+            navigate(target, { replace: true });
+        } else if (me?.workspaces && me.workspaces.length > 0) {
+            navigate("/dashboard", { replace: true });
+        } else {
+            navigate("/setup", { replace: true });
+        }
+    }
+
+    // Reset flow when email changes
+    useEffect(() => {
+        setEmailChecked(false);
+        setEmailExists(null);
+        setShowPassword(false);
+        setRequirePassword(false);
+        setAuthError("");
+        clearErrors(["email", "password"]);
+        setValue("password", "");
+    }, [email, clearErrors, setValue]);
 
     const onSubmit = async (data: FormData) => {
-        if (!emailVerified) {
-            // Step 1: verify email
+        setAuthError("");
+        if (!emailChecked) {
             if (!data.email) {
-                setError('email', { message: 'Enter an email' });
+                setError("email", { message: "Enter an email" });
                 return;
             }
-            const valid = await checkEmailBackend(data.email);
-            if (!valid) {
-                setBackendError('Enter your correct email.');
-                setEmailVerified(false);
-                return;
+            setIsChecking(true);
+            try {
+                const exists = await checkEmailExists(data.email);
+                setEmailExists(exists);
+                setEmailChecked(true);
+                clearErrors("email");
+                if (exists) {
+                    setShowPassword(true);
+                    setRequirePassword(true);
+                    setAuthError("");
+                } else {
+                    setShowPassword(false);
+                    setRequirePassword(false);
+                    setValue("password", "");
+                    setAuthError("No account found");
+                }
+            } catch (e: any) {
+                setAuthError(e?.message || "Could not verify email");
+            } finally {
+                setIsChecking(false);
             }
-            clearErrors('email');
-            setBackendError('');
-            setEmailVerified(true);
-        } else {
-            // Step 2: verify password
-            if (!data.password) {
-                setError('password', { message: 'Enter password' });
-                return;
-            }
-            const valid = await checkPasswordBackend(data.email, data.password);
-            if (!valid) {
-                setBackendError('Enter your correct password.');
-                return;
-            }
-            // ✅ Success → Navigate
-            setBackendError('');
-            setUser({ email: data.email }); // mock user
-            navigate('/setup'); // or dashboard, adjust as needed
+            return;
         }
-    };
 
-    const handleGoogleLogin = () => {
-        handleOAuth('google');
-    };
-    const handleMicrosoftLogin = () => {
-        handleOAuth('microsoft');
-    };
-
-    async function handleOAuth(provider: 'google' | 'microsoft') {
-        try {
-            let result: any;
-            if (provider === 'google') {
-                const code = await googleGetCode();
-                if (!code) throw new Error('Google sign-in was cancelled.');
-                // result = await completeAuthentication('google', { code, redirectUri: 'postmessage' });
-            }
-            // leaving Microsoft commented
-            result = { isAuthenticated: true, user: { email: 'mock@nex.com' }, workspaces: [] };
-
-            if (!result?.isAuthenticated || !result.user) {
-                alert('Authentication failed. Please try again.');
+        if (emailExists && showPassword) {
+            if (!data.password) {
+                setError("password", { message: "Enter password" });
                 return;
             }
-            setUser(result.user);
-            const ws = result.workspaces ?? [];
-            if (ws.length === 0) {
-                navigate('/setup');
-            } else {
-                navigate('/dashboard');
+            setIsChecking(true);
+            try {
+                const res = await loginWithEmailPassword(data.email, data.password);
+                if (!res.ok || !res.user) {
+                    setAuthError("Enter your correct password.");
+                    return;
+                }
+                await redirectPostLogin();
+            } catch (e: any) {
+                setAuthError(e?.message || "Authentication error");
+            } finally {
+                setIsChecking(false);
             }
+            return;
+        }
+
+        // Email was checked and does not exist
+        setValue("password", "");
+        setAuthError("No account found");
+    };
+
+    const handleGoogleLogin = () => handleOAuth("google");
+    const handleMicrosoftLogin = () => handleOAuth("microsoft");
+
+    async function handleOAuth(provider: Provider) {
+        try {
+            if (provider === "google") {
+                const code = await googleGetCode();
+                if (!code) throw new Error("Google sign-in was cancelled.");
+                const ok = await AuthService.googleCallback(code, "postmessage");
+                if (!ok) throw new Error("Google authentication failed");
+                await redirectPostLogin();
+                return;
+            }
+            // Preserve existing Microsoft mock behavior
+
         } catch (e: any) {
             console.error(e);
-            alert(e?.message || 'Authentication error');
+            alert(e?.message || "Authentication error");
         }
     }
 
     return (
-        <div className="fixed inset-0 w-screen h-screen bg-[#202024] flex flex-col items-center justify-center overflow-hidden px-4 ">
-            {/* Logo */}
-            <div className=" rigin-top-left scale-[0.9] w-20 h-20 mb-8">
-                <div className="w-full h-full rounded-full bg-gradient-to-b from-[#B7F2D4] to-[#48FFA4] flex items-center justify-center">
-                    <span className="text-black text-2xl font-bold">N</span>
+        <main className="min-h-screen w-full bg-[#202024] text-white font-manrope flex flex-col">
+            <div className="flex-1 flex items-center justify-center px-5 py-10">
+                <div className="w-full max-w-[580px] flex flex-col items-center gap-10">
+                    <div className="flex flex-col items-center gap-4">
+                        <div className="w-20 h-20 rounded-full bg-gradient-to-b from-[#B7F2D4] to-[#48FFA4]" aria-hidden="true" />
+                        <div className="w-full max-w-[400px] flex flex-col items-center gap-2">
+                            <h1 className="text-center font-semibold tracking-[-0.01em] leading-[1.5] text-xl sm:text-2xl">Welcome to NexSpace</h1>
+                            <p className="text-center leading-[1.5]  opacity-95 text-sm sm:text-base">
+                                Virtual coworking & accountability for connected, productive teams.
+                            </p>
+                        </div>
+                    </div>
+
+                    <form
+                        onSubmit={handleSubmit(onSubmit)}
+                        className="w-full max-w-[480px] bg-[#18181B] rounded-2xl p-6 sm:p-10 flex flex-col gap-8"
+                    >
+                        <div className="flex flex-col gap-4">
+                            <div className="flex flex-col gap-3">
+                                <label htmlFor="email" className="text-xs sm:text-sm font-medium font-clashGrotesk">
+                                    Email*
+                                </label>
+                                <input
+                                    id="email"
+                                    type="email"
+                                    inputMode="email"
+                                    autoComplete="email"
+                                    placeholder="you@company.com"
+                                    {...register("email")}
+                                    className={`h-10 w-full rounded-2xl px-4 text-[14px] bg-[rgba(128,136,155,0.10)] placeholder-[#A3A3A3] focus:outline-none border ${errors.email ? "border-[#FF6060]" : "border-transparent focus:border-[#4285F4]"
+                                        }`}
+                                />
+                                {errors.email && (
+                                    <p className="text-[#FF6060] text-xs">{errors.email.message}</p>
+                                )}
+                            </div>
+
+                            {showPassword && (
+                                <div className="flex flex-col gap-3">
+                                    <label htmlFor="password" className="text-xs sm:text-sm font-medium">
+                                        Password*
+                                    </label>
+                                    <input
+                                        id="password"
+                                        type="password"
+                                        autoComplete="current-password"
+                                        placeholder="Enter your password"
+                                        {...register("password")}
+                                        className={`h-10 w-full rounded-2xl px-4 text-[14px] bg-[rgba(128,136,155,0.10)] placeholder-[#A3A3A3] focus:outline-none border ${errors.password ? "border-[#FF6060]" : "border-transparent focus:border-[#4285F4]"
+                                            }`}
+                                    />
+                                    {errors.password && (
+                                        <p className="text-[#FF6060] text-xs">{errors.password.message}</p>
+                                    )}
+                                </div>
+                            )}
+
+                            {authError && (
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <span className="inline-block w-[14px] h-[14px] rounded-full bg-[#FF6060]" aria-hidden="true" />
+                                        <span className="text-xs text-[#FF6060]">{authError}</span>
+                                    </div>
+                                    {emailChecked && emailExists === false && (
+                                        <button
+                                            type="button"
+                                            onClick={() => navigate("/setup", { state: { email } })}
+                                            className="text-[14px] font-semibold underline text-[#4285F4]"
+                                        >
+                                            Create Account?
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Primary action button moved here to reduce gap */}
+                            <button
+                                type="submit"
+                                disabled={isChecking}
+                                className="w-full h-10 rounded-xl bg-[#4285F4] text-white text-[13px] sm:text-[14px] font-semibold shadow-[0px_4px_30px_rgba(142,166,246,0.2)] hover:bg-[#4b90ff] disabled:opacity-70 disabled:cursor-not-allowed"
+                            >
+                                {showPassword ? "Continue" : isChecking ? "Checking..." : "Continue with Email"}
+                            </button>
+                        </div>
+
+                        <div className="flex items-center gap-2 text-sm text-[#828282]">
+                            <div className="h-px bg-[#26272B] flex-1" />
+                            <span>or</span>
+                            <div className="h-px bg-[#26272B] flex-1" />
+                        </div>
+
+                        <div className="flex flex-col gap-6">
+                            <button
+                                type="button"
+                                onClick={handleGoogleLogin}
+                                className="w-full h-10 rounded-xl bg-[rgba(128,136,155,0.25)] text-white inline-flex items-center justify-center gap-3 hover:bg-[rgba(128,136,155,0.35)]"
+                            >
+                                <img
+                                    src="https://www.svgrepo.com/show/475656/google-color.svg"
+                                    alt="Google"
+                                    className="w-5 h-5"
+                                />
+                                <span className="text-[13px] sm:text-[14px] font-semibold">Continue with Google</span>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={handleMicrosoftLogin}
+                                className="w-full h-10 rounded-xl bg-[rgba(128,136,155,0.25)] text-white inline-flex items-center justify-center gap-3 hover:bg-[rgba(128,136,155,0.35)]"
+                            >
+                                <img
+                                    src="https://www.svgrepo.com/show/452213/microsoft.svg"
+                                    alt="Microsoft"
+                                    className="w-5 h-5"
+                                />
+                                <span className="text-[13px] sm:text-[14px] font-semibold">Continue with Microsoft</span>
+                            </button>
+                        </div>
+                    </form>
                 </div>
             </div>
-
-            {/* Heading */}
-            <h1 className="rigin-top-left scale-[0.9] text-white font-semibold text-center text-[24px] w-[254px] h-[36px]">
-                Welcome to NexSpace
-            </h1>
-            <p className="rigin-top-left scale-[0.9] text-white text-base mt-2 text-center max-w-md w-[400px] h-[48px] text-[16px]">
-                Virtual coworking & accountability for connected, productive teams.
-            </p>
-
-            {/* Auth Card */}
-            <form
-                onSubmit={handleSubmit(onSubmit)}
-                className="rigin-top-left scale-[0.9] mt-10 w-full max-w-md bg-[#1a1a1c] rounded-2xl p-6 flex flex-col gap-5"
-            >
-                {/* Email Input */}
-                <div className="flex flex-col gap-2">
-                    <label htmlFor="email" className="text-white text-sm font-medium">
-                        Email *
-                    </label>
-                    <input
-                        id="email"
-                        type="email"
-                        placeholder="Enter your email"
-                        {...register('email')}
-                        className={`bg-[#2b2b2e] text-white placeholder-gray-400 rounded-2xl h-[40px] px-4 py-3 focus:outline-none focus:ring-2 ${errors.email ? 'ring-red-500' : 'ring-[#4285F4]'
-                            }`}
-                    />
-                    {errors.email && (
-                        <p className="text-red-500 text-sm mt-1">{errors.email.message}</p>
-                    )}
-                </div>
-
-                {/* Conditionally show password */}
-                {emailVerified && (
-                    <div className="flex flex-col gap-2">
-                        <label
-                            htmlFor="password"
-                            className="text-white text-sm font-medium"
-                        >
-                            Password *
-                        </label>
-                        <input
-                            id="password"
-                            type="password"
-                            placeholder="Enter your password"
-                            {...register('password')}
-                            className={`bg-[#2b2b2e] text-white placeholder-gray-400 rounded-2xl h-[40px] px-4 py-3 focus:outline-none focus:ring-2 ${errors.password ? 'ring-red-500' : 'ring-[#4285F4]'
-                                }`}
-                        />
-                        {errors.password && (
-                            <p className="text-red-500 text-sm mt-1">
-                                {errors.password.message}
-                            </p>
-                        )}
-                    </div>
-                )}
-
-                {/* Backend error */}
-                {backendError && (
-                    <p className="text-red-500 text-sm mt-1">{backendError}</p>
-                )}
-
-                {/* Continue Button */}
-                <button
-                    type="submit"
-                    className="w-[400px] h-[40px] bg-[#4285F4] rounded=xl text-white text-base font-medium rounded-lg shadow-[0_4px_30px_rgba(142,166,246,0.2)] self-center hover:scale-105 transition"
-                >
-                    {emailVerified ? 'Continue' : 'Continue with Email'}
-                </button>
-
-                {/* Divider */}
-                <div className="flex items-center gap-4">
-                    <hr className="flex-grow border-t border-gray-600" />
-                    <span className="text-gray-400 text-sm">or</span>
-                    <hr className="flex-grow border-t border-gray-600" />
-                </div>
-
-                {/* Google Auth */}
-                <button
-                    type="button"
-                    onClick={handleGoogleLogin}
-                    className="flex items-center justify-center gap-3 w-full bg-[#2b2b2e] text-white rounded-xl py-[9px] px-[86px] hover:bg-[#3a3a3e] transition"
-                >
-                    <img
-                        src="https://www.svgrepo.com/show/475656/google-color.svg"
-                        alt="Google"
-                        className="w-5 h-5"
-                    />
-                    <span className="text-sm font-medium">Continue with Google</span>
-                </button>
-
-                {/* Microsoft Auth */}
-                <button
-                    type="button"
-                    onClick={handleMicrosoftLogin}
-                    className="flex items-center justify-center gap-3 w-full bg-[#2b2b2e] text-white py-[9px] px-[86px] rounded-xl hover:bg-[#3a3a3e] transition"
-                >
-                    <img
-                        src="https://www.svgrepo.com/show/452213/microsoft.svg"
-                        alt="Microsoft"
-                        className="w-5 h-5"
-                    />
-                    <span className="text-sm font-medium">Continue with Microsoft</span>
-                </button>
-            </form>
-
-            {/* Footer */}
-            <p className="rigin-top-left scale-[0.9] mt-8 text-sm text-gray-400 text-center max-w-xs">
-                By signing up, you agree to our{' '}
-                <span className="underline cursor-pointer">Terms of Service</span> and{' '}
-                <span className="underline cursor-pointer">Privacy Policy</span>.
-            </p>
-
-        </div >
+            <footer className="px-6 pb-4">
+                <p className="text-center text-xs sm:text-sm text-[#80889B] mx-auto max-w-xs">
+                    By signing up, you agree to our <span className="underline">Terms of Service</span> and <span className="underline">Privacy Policy</span>.
+                </p>
+            </footer>
+        </main>
     );
 }

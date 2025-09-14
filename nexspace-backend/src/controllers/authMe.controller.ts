@@ -42,7 +42,7 @@ export async function getMe(req: Request, res: Response) {
     }
   }
 
-  const dto = toMeDTO(user, sessEmail);
+  const dto = toMeDTO(user, sessEmail, sessProvider);
   return res.success<MeResponse>(dto);
 }
 

@@ -123,7 +123,7 @@ export async function createSession(
         if (user.sub) pipe.sRem(k.subIdx(user.sub), s);
       }
     }
-  } catch {/* ignore */}
+  } catch {/* ignore */ }
   pipe.set(k.sess(sid), JSON.stringify(data), { EX: ttlSeconds });
 
   // If we already know DB userId (e.g., local sign-in), index it now.
@@ -159,13 +159,10 @@ export async function getSession(
   slidingTtlSeconds?: number
 ): Promise<SessionData | null> {
   const ready = await ensureRedisReady();
-  console.log(ready, "ready");
   if (!ready) return null;
   const client = getRedisClientOrThrow();
-  console.log(client, "client");
 
   const raw = await client.get(k.sess(sid));
-  console.log(raw, "raw");
   if (!raw) return null;
 
   const data = JSON.parse(raw) as SessionData;
