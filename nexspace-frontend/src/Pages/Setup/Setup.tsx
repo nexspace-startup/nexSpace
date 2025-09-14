@@ -59,7 +59,7 @@ export default function Setup() {
       {/* Header brand */}
       <div className="absolute left-9 top-9 flex items-center gap-3">
         <div className="w-10 h-10 rounded-full bg-gradient-to-b from-[#B7F2D4] to-[#48FFA4]" aria-hidden="true" />
-        <div className="text-[20px] font-semibold tracking-[-0.01em]">NexSpace</div>
+        <div className="hidden sm:block text-[20px] font-semibold tracking-[-0.01em]">NexSpace</div>
       </div>
 
       <div className="flex-1 flex items-center justify-center px-5 py-10">
