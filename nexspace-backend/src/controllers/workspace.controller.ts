@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
-import { MeetingJoinParams } from "../validators/workspace.validators.js";
+import { MeetingJoinParams, CreateWorkspaceBody } from "../validators/workspace.validators.js";
 import { buildMeetingJoinToken, listWorkspacesForUser } from "../services/meeting.service.js";
+import { createWorkspaceForUser } from "../services/workspace.service.js";
 
 export async function joinMeeting(req: Request, res: Response) {
   const userId = req.auth!.userId! as string;
@@ -29,4 +30,25 @@ export async function listMyWorkspaces(req: Request, res: Response) {
 
   const rows = await listWorkspacesForUser(userId);
   return res.success?.(rows, 200) ?? res.status(200).json({ success: true, data: rows, errors: [] });
+}
+
+export async function createWorkspace(req: Request, res: Response) {
+  const userId = req.auth!.userId! as string;
+
+  const parsed = CreateWorkspaceBody.safeParse(req.body);
+  if (!parsed.success) {
+    const details = parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message }));
+    return res.fail?.([{ message: "Validation failed", code: "VALIDATION_ERROR", details }], 400);
+  }
+
+  try {
+    const payload = await createWorkspaceForUser(userId, parsed.data.name);
+    return res.success?.(payload, 201) ?? res.status(201).json({ success: true, data: payload, errors: [] });
+  } catch (e: any) {
+    const code = e?.message;
+    if (code === "WORKSPACE_CONFLICT") {
+      return res.fail?.([{ message: "WORKSPACE_ALREADY_EXISTS", code: "WORKSPACE_CONFLICT" }], 409);
+    }
+    return res.fail?.([{ message: "Unable to create workspace", code: "INTERNAL_SERVER_ERROR" }], 500);
+  }
 }
