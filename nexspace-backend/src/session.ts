@@ -1,5 +1,5 @@
 // src/session.ts
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHmac, timingSafeEqual } from "node:crypto";
 import type { Response as ExpressResponse } from "express";
 import { ensureRedisReady, getRedisClientOrThrow } from "./middleware/redis.js";
 
@@ -35,6 +35,76 @@ const k = {
 
 function newSid(bytes = 32) {
   return randomBytes(bytes).toString("base64url");
+}
+
+// Stateless session fallback (signed token) when Redis is unavailable.
+// Token format: base64url(json).base64url(hmacSha256(json)) using SESSION_SECRET
+function getSecret(): string {
+  const s = process.env.SESSION_SECRET || "dev-secret";
+  return String(s);
+}
+
+function b64urlEncode(buf: Buffer) {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function b64urlDecode(str: string) {
+  const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+  const b64 = str.replace(/-/g, '+').replace(/_/g, '/') + pad;
+  return Buffer.from(b64, 'base64');
+}
+
+function signPayload(payload: object): string {
+  const body = Buffer.from(JSON.stringify(payload));
+  const mac = createHmac('sha256', getSecret()).update(body).digest();
+  return `${b64urlEncode(body)}.${b64urlEncode(mac)}`;
+}
+
+function verifyToken(token: string): any | null {
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  try {
+    const body = b64urlDecode(parts[0]);
+    const sig = b64urlDecode(parts[1]);
+    const calc = createHmac('sha256', getSecret()).update(body).digest();
+    if (sig.length !== calc.length || !timingSafeEqual(sig, calc)) return null;
+    const payload = JSON.parse(body.toString('utf8')) as any;
+    if (typeof payload !== 'object' || !payload) return null;
+    const now = Math.floor(Date.now() / 1000);
+    if (typeof payload.exp === 'number' && payload.exp < now) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function toSessionDataFromPayload(p: any): SessionData {
+  const nowIso = new Date().toISOString();
+  return {
+    sid: signPayload(p),
+    sub: p.sub,
+    userId: p.userId,
+    email: p.email,
+    firstName: p.firstName,
+    lastName: p.lastName,
+    provider: p.provider,
+    createdAt: new Date((p.iat || Math.floor(Date.now()/1000)) * 1000).toISOString(),
+    lastSeenAt: nowIso,
+  };
+}
+
+function buildPayloadFromUser(user: any, ttlSeconds: number) {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    sub: user.sub,
+    userId: user.userId,
+    email: user.email,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    provider: user.provider,
+    iat: now,
+    exp: now + Math.max(1, ttlSeconds),
+  };
 }
 
 function cookieOpts(
@@ -84,7 +154,11 @@ export async function createSession(
   ttlSeconds = DEFAULT_TTL
 ): Promise<SessionData> {
   const ready = await ensureRedisReady();
-  if (!ready) throw new Error("Redis not available");
+  if (!ready) {
+    // fallback: stateless signed cookie
+    const payload = buildPayloadFromUser(user, ttlSeconds);
+    return toSessionDataFromPayload(payload);
+  }
   const client = getRedisClientOrThrow();
 
   if (!user.userId && !user.sub) {
@@ -147,7 +221,10 @@ export async function createSession(
 export async function isSessionValid(sid: string | undefined): Promise<boolean> {
   if (!sid) return false;
   const ready = await ensureRedisReady();
-  if (!ready) return false;
+  if (!ready) {
+    const p = verifyToken(sid);
+    return !!p;
+  }
   const client = getRedisClientOrThrow();
   const exists = await client.exists(k.sess(sid));
   return exists === 1;
@@ -162,23 +239,27 @@ export async function getSession(
   slidingTtlSeconds?: number
 ): Promise<SessionData | null> {
   const ready = await ensureRedisReady();
-  if (!ready) return null;
-  const client = getRedisClientOrThrow();
-
-  const raw = await client.get(k.sess(sid));
-  if (!raw) return null;
-
-  const data = JSON.parse(raw) as SessionData;
-
-  if (slidingTtlSeconds && slidingTtlSeconds > 0) {
-    data.lastSeenAt = new Date().toISOString();
-    const pipe = client.multi();
-    pipe.set(k.sess(sid), JSON.stringify(data), { EX: slidingTtlSeconds });
-    if (data.userId) pipe.expire(k.userIdx(data.userId), slidingTtlSeconds);
-    await pipe.exec();
+  if (ready) {
+    const client = getRedisClientOrThrow();
+    const raw = await client.get(k.sess(sid));
+    if (raw) {
+      const data = JSON.parse(raw) as SessionData;
+      if (slidingTtlSeconds && slidingTtlSeconds > 0) {
+        data.lastSeenAt = new Date().toISOString();
+        const pipe = client.multi();
+        pipe.set(k.sess(sid), JSON.stringify(data), { EX: slidingTtlSeconds });
+        if (data.userId) pipe.expire(k.userIdx(data.userId), slidingTtlSeconds);
+        await pipe.exec();
+      }
+      return data;
+    }
+    // Not found in Redis; try fallback token (e.g., issued while Redis was down)
+    const p = verifyToken(sid);
+    return p ? toSessionDataFromPayload(p) : null;
   }
-
-  return data;
+  // Redis not ready: verify fallback token
+  const p = verifyToken(sid);
+  return p ? toSessionDataFromPayload(p) : null;
 }
 
 /**
@@ -242,48 +323,41 @@ export async function rotateSession(
   ttlSeconds = DEFAULT_TTL
 ): Promise<SessionData | null> {
   const ready = await ensureRedisReady();
-  if (!ready) return null;
-  const client = getRedisClientOrThrow();
-
-  const raw = await client.get(k.sess(oldSid));
-  if (!raw) return null;
-
-  const prev = JSON.parse(raw) as SessionData;
-  const sid = newSid();
-  const nowIso = new Date().toISOString();
-
-  const next: SessionData = {
-    ...prev,
-    sid,
-    lastSeenAt: nowIso,
-  };
-
-  const pipe = client.multi();
-  // 1) write new session (with new TTL)
-  pipe.set(k.sess(sid), JSON.stringify(next), { EX: ttlSeconds });
-  // 2) delete old session
-  pipe.del(k.sess(oldSid));
-  // 3) update user index (if we know DB userId)
-  if (prev.userId) {
-    pipe.sRem(k.userIdx(prev.userId), oldSid);
-    pipe.sAdd(k.userIdx(prev.userId), sid);
-    pipe.expire(k.userIdx(prev.userId), ttlSeconds);
+  if (ready) {
+    const client = getRedisClientOrThrow();
+    const raw = await client.get(k.sess(oldSid));
+    if (!raw) return null;
+    const prev = JSON.parse(raw) as SessionData;
+    const sid = newSid();
+    const nowIso = new Date().toISOString();
+    const next: SessionData = { ...prev, sid, lastSeenAt: nowIso };
+    const pipe = client.multi();
+    pipe.set(k.sess(sid), JSON.stringify(next), { EX: ttlSeconds });
+    pipe.del(k.sess(oldSid));
+    if (prev.userId) {
+      pipe.sRem(k.userIdx(prev.userId), oldSid);
+      pipe.sAdd(k.userIdx(prev.userId), sid);
+      pipe.expire(k.userIdx(prev.userId), ttlSeconds);
+    }
+    if (prev.sub) {
+      pipe.sRem(k.subIdx(prev.sub), oldSid);
+      pipe.sAdd(k.subIdx(prev.sub), sid);
+      pipe.expire(k.subIdx(prev.sub), ttlSeconds);
+    }
+    await pipe.exec();
+    return next;
   }
-  // 4) update sub index (if OAuth sub present)
-  if (prev.sub) {
-    pipe.sRem(k.subIdx(prev.sub), oldSid);
-    pipe.sAdd(k.subIdx(prev.sub), sid);
-    pipe.expire(k.subIdx(prev.sub), ttlSeconds);
-  }
-  await pipe.exec();
-
-  return next;
+  // Stateless fallback: reissue signed token with new exp
+  const p = verifyToken(oldSid);
+  if (!p) return null;
+  const payload = buildPayloadFromUser(p, ttlSeconds);
+  return toSessionDataFromPayload(payload);
 }
 
 /** Revoke a single session by sid (idempotent). */
 export async function revokeSession(sid: string): Promise<void> {
   const ready = await ensureRedisReady();
-  if (!ready) return;
+  if (!ready) return; // stateless fallback cannot revoke server-side; client should clear cookie
   const client = getRedisClientOrThrow();
 
   const raw = await client.get(k.sess(sid));

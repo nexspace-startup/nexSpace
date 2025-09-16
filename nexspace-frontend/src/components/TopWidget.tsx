@@ -47,7 +47,7 @@ const TopWidget: React.FC = () => {
           <div className="relative">
             <button
               type="button"
-              className="status-chip min-w-[120px] max-w-[180px]"
+              className="status-chip min-w-[120px] max-w-[130px]"
               onClick={() => setStatusOpen((v) => !v)}
               aria-haspopup="menu"
               aria-expanded={statusOpen}
@@ -80,10 +80,10 @@ const TopWidget: React.FC = () => {
                           opt === "Do not disturb"
                             ? "#ED5C5B"
                             : opt === "Available"
-                            ? "#48FFA4"
-                            : opt === "Away"
-                            ? "#F59E0B"
-                            : "#80889B",
+                              ? "#48FFA4"
+                              : opt === "Away"
+                                ? "#F59E0B"
+                                : "#80889B",
                       }}
                     />
                     {opt}

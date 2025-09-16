@@ -1,5 +1,5 @@
 // src/components/workspace/WorkspacePanel.tsx
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useUIStore } from "../stores/uiStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import WorkspaceTile from "./WorkspaceTile";
@@ -12,6 +12,7 @@ function initialsFrom(name: string): string {
 }
 
 const PANEL_WIDTH = 230;
+const PANEL_EXTRA_MAX = 50; // users can expand up to +50px
 
 const WorkspacePanel: React.FC = () => {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
@@ -20,6 +21,37 @@ const WorkspacePanel: React.FC = () => {
 
   const isOpen = useUIStore((s) => s.isWorkspacePanelOpen);
   const toggle = useUIStore((s) => s.toggleWorkspacePanel);
+
+  // Resizable width state (extra width up to 50px)
+  const [extraWidth, setExtraWidth] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const dragStartX = useRef(0);
+  const dragStartExtra = useRef(0);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e: MouseEvent) => {
+      const dx = e.clientX - dragStartX.current;
+      const next = Math.min(PANEL_EXTRA_MAX, Math.max(0, dragStartExtra.current + dx));
+      setExtraWidth(next);
+    };
+    const onUp = () => setDragging(false);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp, { once: true });
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [dragging]);
+
+  // Show global left-right resize cursor while dragging
+  useEffect(() => {
+    if (dragging) {
+      const prev = document.body.style.cursor;
+      document.body.style.cursor = 'ew-resize';
+      return () => { document.body.style.cursor = prev; };
+    }
+  }, [dragging]);
 
   return (
     <>
@@ -58,13 +90,32 @@ const WorkspacePanel: React.FC = () => {
           transition-[opacity] duration-500
         "
         style={{
-          width: isOpen ? PANEL_WIDTH : 0,
+          width: isOpen ? PANEL_WIDTH + extraWidth : 0,
           opacity: isOpen ? 1 : 0,
           pointerEvents: isOpen ? "auto" : "none",
         }}
         //style={{ width: PANEL_WIDTH, opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none" }}
         aria-expanded={isOpen}
       >
+        {/* Resize handle */}
+        {isOpen && (
+          <button
+            type="button"
+            aria-label="Resize workspace panel"
+            title="Drag to resize"
+            onMouseDown={(e) => {
+              setDragging(true);
+              dragStartX.current = e.clientX;
+              dragStartExtra.current = extraWidth;
+            }}
+            className="absolute top-0 right-0 h-full w-1 sm:w-1 cursor-ew-resize group"
+            style={{
+              // a subtle visual when hover/dragging
+              background: dragging ? "#3D93F8" : "transparent",
+            }}
+          >
+          </button>
+        )}
         {/* Header row stays fixed at top; content below vertically collapses */}
         <div className="px-3 pt-5">
           <div className="h-8 flex items-center justify-between">

@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export const ChatMessageCreateSchema = z.object({
   text: z.string().trim().min(1, "Message required").max(2000, "Message too long"),
+  // allow client-supplied id so server can echo same id over LiveKit for optimistic delivery
+  id: z.string().min(3).max(100).optional(),
 });
 
 export const ChatListQuerySchema = z.object({

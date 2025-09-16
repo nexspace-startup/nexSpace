@@ -31,6 +31,7 @@ const MeetingPanel: React.FC = () => {
     whisperActive,
     whisperTargetSid,
     participants,
+    chatOpen,
   } = useMeetingStore(
     useShallow((s) => ({
       url: s.url,
@@ -43,6 +44,7 @@ const MeetingPanel: React.FC = () => {
       whisperActive: s.whisperActive,
       whisperTargetSid: s.whisperTargetSid,
       participants: s.participants,
+      chatOpen: s.chatOpen,
     }))
   );
 
@@ -61,7 +63,7 @@ const MeetingPanel: React.FC = () => {
         <>
           <TopWidget />
           {/* Leave button aligned with TopWidget (same height, top row, right aligned) */}
-          <div className="absolute right-12 top-8 z-20">
+          <div className={`absolute top-8 z-20 ${chatOpen ? 'right-[408px]' : 'right-12'}`}>
             <button
               onClick={onLeave}
               className="h-[40px] w-[148px] rounded-[20px] bg-[#ED5C5B] text-white text-[14px] font-semibold flex items-center justify-center px-4 shadow-[1px_1px_15px_rgba(0,0,0,0.2)]"

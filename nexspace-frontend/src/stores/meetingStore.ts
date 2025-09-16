@@ -49,6 +49,7 @@ export type MeetingState = {          // 👈 export the type so consumers can a
   // chat controls
   toggleChat: () => void;
   sendMessage: (text: string) => Promise<void>;
+  retryMessage: (id: string) => Promise<void>;
   loadChatHistory: (limit?: number) => Promise<void>;
   // screen share control
   toggleScreenShare: () => Promise<void>;
@@ -61,6 +62,8 @@ export type ChatMessage = {
   senderSid: string;
   senderName: string;
   isLocal: boolean;
+  // delivery status for UI: pending until server persists and echoes via LiveKit, success on echo, failed on API error
+  status?: 'pending' | 'success' | 'failed';
 };
 
 /**
@@ -97,9 +100,13 @@ export const useMeetingStore = create<MeetingState>()(
       });
     };
 
-    let detachEvents: (() => void) | null = null;
-    // track if we temporarily enabled mic for whisper
-    let revertMicOnWhisperStop = false;
+  let detachEvents: (() => void) | null = null;
+  // track if we temporarily enabled mic for whisper
+  let revertMicOnWhisperStop = false;
+
+    // helper to update statuses
+    const markStatusesByIds = (ids: string[], status: 'pending' | 'success' | 'failed') =>
+      set((s) => ({ messages: s.messages.map((m) => (ids.includes(m.id) ? { ...m, status } : m)) }));
 
     const attachRoomListeners = (room: Room | null) => {
       detachEvents?.();
@@ -194,7 +201,7 @@ export const useMeetingStore = create<MeetingState>()(
             return;
           }
 
-          // Handle chat messages
+          // Handle chat messages (authoritative echo from server)
           if ((topic === undefined || topic === 'chat') && msg.type === 'chat') {
             const senderSid: string = msg.senderSid ?? _participant?.identity ?? 'unknown';
             const senderName: string = msg.senderName ?? msg.senderSid ?? 'unknown';
@@ -202,11 +209,37 @@ export const useMeetingStore = create<MeetingState>()(
             const text: string = String(msg.text ?? '');
             if (!text) return;
             const isLocal = senderSid === localSid;
-            if (isLocal) return; // already appended locally on send
-            set((s) => ({
-              messages: [...s.messages, { id, text, ts: Date.now(), senderSid, senderName, isLocal }],
-              unreadCount: s.chatOpen || isLocal ? s.unreadCount : s.unreadCount + 1,
-            }));
+
+            set((s) => {
+              const idx = s.messages.findIndex((m) => m.id === id);
+              const now = Date.now();
+              if (idx >= 0) {
+                // update existing (likely pending local), mark delivered
+                const prev = s.messages[idx];
+                const updated: ChatMessage = {
+                  ...prev,
+                  text,
+                  senderSid,
+                  senderName,
+                  ts: now,
+                  status: 'success',
+                };
+                const arr = s.messages.slice();
+                arr[idx] = updated;
+                return {
+                  messages: arr,
+                  unreadCount: s.chatOpen || prev.isLocal ? s.unreadCount : s.unreadCount + 1,
+                };
+              }
+              // not found locally: append as new
+              return {
+                messages: [
+                  ...s.messages,
+                  { id, text, ts: now, senderSid, senderName, isLocal: isLocal, status: 'success' },
+                ],
+                unreadCount: s.chatOpen || isLocal ? s.unreadCount : s.unreadCount + 1,
+              };
+            });
             return;
           }
         } catch { /* ignore */ }
@@ -435,31 +468,47 @@ export const useMeetingStore = create<MeetingState>()(
         if (!room) return;
         const clean = text.trim();
         if (!clean) return;
+        const lp: any = room.localParticipant as any;
+        const senderSid = (lp?.sid ?? lp?.identity) as string;
+        const senderName = (lp?.name ?? lp?.identity) as string;
+
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const now = Date.now();
+        // optimistic local append (pending)
+        set((s) => ({
+          messages: [
+            ...s.messages,
+            { id, text: clean, ts: now, senderSid, senderName, isLocal: true, status: 'pending' },
+          ],
+        }));
+
+        // Single message POST to server which persists and broadcasts to LiveKit
         try {
-          const lp: any = room.localParticipant as any;
-          const senderSid = (lp?.sid ?? lp?.identity) as string;
-          const senderName = (lp?.name ?? lp?.identity) as string;
-          const msg = {
-            type: 'chat',
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            text: clean,
-            senderSid,
-            senderName,
-          };
-          const bytes = new TextEncoder().encode(JSON.stringify(msg));
-          await room.localParticipant.publishData(bytes, { reliable: true, topic: 'chat' } as any);
-          // Also append locally immediately
-          set((s) => ({
-            messages: [...s.messages, { id: msg.id, text: clean, ts: Date.now(), senderSid, senderName, isLocal: true }],
-          }));
-          // Persist to server (best-effort)
-          try {
-            const { activeWorkspaceId } = useWorkspaceStore.getState();
-            if (activeWorkspaceId) {
-              await api.post(`/workspace/${activeWorkspaceId}/chat/messages`, { text: clean }, { withCredentials: true });
-            }
-          } catch {/* ignore persistence errors */}
-        } catch {/* ignore */}
+          const { activeWorkspaceId } = useWorkspaceStore.getState();
+          if (!activeWorkspaceId) {
+            markStatusesByIds([id], 'failed');
+            return;
+          }
+          await api.post(`/workspace/${activeWorkspaceId}/chat/messages`, { text: clean, id }, { withCredentials: true });
+          // Mark success on API success; LiveKit echo will also upsert/confirm
+          markStatusesByIds([id], 'success');
+        } catch {
+          markStatusesByIds([id], 'failed');
+        }
+      },
+
+      retryMessage: async (id: string) => {
+        const msg = get().messages.find((m) => m.id === id);
+        if (!msg) return;
+        markStatusesByIds([id], 'pending');
+        try {
+          const { activeWorkspaceId } = useWorkspaceStore.getState();
+          if (!activeWorkspaceId) { markStatusesByIds([id], 'failed'); return; }
+          await api.post(`/workspace/${activeWorkspaceId}/chat/messages`, { text: msg.text, id }, { withCredentials: true });
+          markStatusesByIds([id], 'success');
+        } catch {
+          markStatusesByIds([id], 'failed');
+        }
       },
 
       loadChatHistory: async (limit = 100) => {
@@ -472,6 +521,12 @@ export const useMeetingStore = create<MeetingState>()(
           });
           if ((data as any)?.success && Array.isArray((data as any).data)) {
             const items: Array<{ id: string; text: string; ts: string; sender: { id: string; name: string } }> = (data as any).data;
+            // Determine current user id from LiveKit identity (not SID)
+            let currentId: string | undefined;
+            try {
+              const room = get().room as any;
+              currentId = room?.localParticipant?.identity as string | undefined;
+            } catch {}
             set((s) => ({
               messages: items.map((m) => ({
                 id: m.id,
@@ -479,7 +534,8 @@ export const useMeetingStore = create<MeetingState>()(
                 ts: new Date(m.ts).getTime(),
                 senderSid: m.sender.id,
                 senderName: m.sender.name,
-                isLocal: false,
+                isLocal: currentId ? String(m.sender.id) === String(currentId) : false,
+                status: 'success',
               })),
               unreadCount: s.chatOpen ? 0 : s.unreadCount,
             }));

@@ -33,7 +33,7 @@ export default function WorkspaceTile({
       </div>
 
       {/* Name */}
-      <span className="text-sm font-small text-white font-manrope truncate">
+      <span className="text-sm font-small text-white font-manrope truncate" aria-label={name} title={name}>
         {name}
       </span>
 

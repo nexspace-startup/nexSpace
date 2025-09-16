@@ -11,6 +11,30 @@ let initPromise: Promise<RedisClientType | null> | null = null;
 // Optional key prefix for namespacing (useful per-env: dev/stage/prod)
 const PREFIX = process.env.REDIS_PREFIX ?? "";
 
+// Simple circuit breaker to avoid hammering Redis when it's down
+const BREAKER_THRESHOLD = Number(process.env.REDIS_BREAKER_THRESHOLD || 3); // consecutive failures
+const BREAKER_COOLDOWN_MS = Number(process.env.REDIS_BREAKER_COOLDOWN_MS || 30_000); // 30s
+let consecutiveFailures = 0;
+let breakerOpenUntil = 0; // epoch ms when we can try again
+
+function isBreakerOpen() {
+  return Date.now() < breakerOpenUntil;
+}
+
+function recordFailure() {
+  consecutiveFailures += 1;
+  if (consecutiveFailures >= BREAKER_THRESHOLD) {
+    breakerOpenUntil = Date.now() + BREAKER_COOLDOWN_MS;
+    consecutiveFailures = 0; // reset counter while open
+    console.warn(`[redis] circuit breaker OPEN for ${BREAKER_COOLDOWN_MS}ms`);
+  }
+}
+
+function recordSuccess() {
+  consecutiveFailures = 0;
+  breakerOpenUntil = 0;
+}
+
 /** Internal: build a single client instance with safe reconnect strategy. */
 function buildClient(url: string): RedisClientType {
   const c = createClient({
@@ -52,14 +76,27 @@ export async function initializeRedisClient(): Promise<RedisClientType | null> {
     return null;
   }
 
+  if (isBreakerOpen()) {
+    // quick fail during cooldown window
+    return null;
+  }
+
   initPromise = (async () => {
     const c = buildClient(url);
-    await c.connect();
+    try {
+      await c.connect();
+    } catch (e) {
+      console.error("[redis] connect failed:", e);
+      recordFailure();
+      initPromise = null;
+      return null;
+    }
 
     // Fast health check + fail early if URL/ACL is wrong.
     try {
       await c.ping();
       client = c;
+      recordSuccess();
       return client;
     } catch (e) {
       console.error("[redis] ping failed during init:", e);
@@ -67,6 +104,7 @@ export async function initializeRedisClient(): Promise<RedisClientType | null> {
         await c.quit();
       } catch {}
       client = null;
+      recordFailure();
       return null;
     } finally {
       initPromise = null;
@@ -161,6 +199,7 @@ export async function closeRedis(): Promise<void> {
 
 /** Utility to ensure client is ready before routes use it (idempotent). */
 export async function ensureRedisReady(): Promise<boolean> {
+  if (isBreakerOpen()) return false;
   const c = await initializeRedisClient();
   return Boolean(c && c.isOpen);
 }

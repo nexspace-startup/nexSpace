@@ -28,6 +28,12 @@ export async function onboarding(req: Request, res: Response) {
       }
       return res.success?.(payload, 201);
     } catch (e: any) {
+      if (e?.message === 'Redis not available') {
+        return res.fail?.(
+          [{ message: 'Authentication temporarily unavailable', code: 'AUTH_TEMPORARILY_UNAVAILABLE' }],
+          503
+        );
+      }
       if (e?.message === "EMAIL_TAKEN") return res.fail?.([{ message: "Email already in use", code: "EMAIL_TAKEN" }], 409);
       if (e?.message === "WORKSPACE_CONFLICT") return res.fail?.([{ message: "WORKSPACE_ALREADY_EXISTS", code: "WORKSPACE_CONFLICT" }], 409);
       return res.fail?.([{ message: "Internal server error", code: "INTERNAL_SERVER_ERROR" }], 500);

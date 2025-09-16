@@ -41,7 +41,8 @@ app.use('/auth', signin);
 app.use('/', setupRouter);
 app.use('/workspace', workspaceRouter);
 // health check
-app.get('/health', (_req, res) => res.success({ message: 'ok' }));
+import { isRedisWorking } from './middleware/redis.js';
+app.get('/health', (_req, res) => res.success({ message: 'ok', redis: isRedisWorking() }));
 // 404 + error handler (must be last)
 app.use(notFound);
 app.use(errorHandler);

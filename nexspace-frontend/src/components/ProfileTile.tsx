@@ -165,20 +165,20 @@ const ProfileTileComponent: React.FC<Props> = ({ participant }) => {
         </div>
 
         {/* Whisper toggle (top-right) */}
-        <button
+        {!isSelf && <button
           type="button"
           className={[
             "absolute -top-6 -right-6 w-9 h-9 rounded-full grid place-items-center z-20",
             "bg-[#202024] border border-[#26272B]",
             isSelf ? "opacity-40 cursor-not-allowed" : whisperOn ? "ring-1 ring-[#FE741F]" : "hover:bg-white/5",
           ].join(" ")}
-          aria-label={isSelf ? "Cannot whisper to yourself" : whisperOn ? `Stop whisper to ${name}` : `Whisper to ${name}`}
-          title={isSelf ? "Cannot whisper to yourself" : whisperOn ? "Stop whisper" : "Whisper"}
-          onClick={() => { if (!isSelf) { whisperOn ? stopWhisper() : startWhisper(sid); } }}
+          aria-label={whisperOn ? `Stop whisper to ${name}` : `Whisper to ${name}`}
+          title={whisperOn ? "Stop whisper" : "Whisper"}
+          onClick={() => { whisperOn ? stopWhisper() : startWhisper(sid); }}
           disabled={isSelf}
         >
           <img src={whisperIcon} alt="Whisper" className="w-4 h-4 opacity-80" />
-        </button>
+        </button>}
       </div>
 
       {/* name chip */}

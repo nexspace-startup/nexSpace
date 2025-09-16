@@ -11,11 +11,13 @@ export async function createMessage(req: Request, res: Response) {
     return res.fail?.([{ message: "Validation failed", code: "VALIDATION_ERROR", details }], 400);
   }
   const text = parsed.data.text.trim();
+  const clientId = parsed.data.id;
   const uid = params.workspaceUid;
   const userId = req.auth!.userId!;
-  const dto = await postMessage(uid, userId, text);
+  const dto = await postMessage(uid, userId, text, clientId);
   return res.success?.(dto, 201);
 }
+
 
 export async function getMessages(req: Request, res: Response) {
   const params = (req.params || {}) as { workspaceUid: string };

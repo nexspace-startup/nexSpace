@@ -24,6 +24,12 @@ export async function googleCallback(req: Request, res: Response) {
     setSessionCookie(res as any, sess.sid);
     return res.success?.({ isAuthenticated: true }, 200);
   } catch (e: any) {
+    if (e?.message === "Redis not available") {
+      return res.fail?.(
+        [{ message: "Authentication temporarily unavailable", code: "AUTH_TEMPORARILY_UNAVAILABLE" }],
+        503
+      );
+    }
     const msg = e?.message || "GOOGLE_CALLBACK_ERROR";
     if (msg === "NO_ID_TOKEN") throw new AppError("ID token missing from Google response", 401, "NO_ID_TOKEN");
     if (msg === "MISSING_SUB") throw new AppError("Invalid Google ID token", 401, "INVALID_ID_TOKEN");
@@ -32,30 +38,40 @@ export async function googleCallback(req: Request, res: Response) {
 }
 
 export async function signin(req: Request, res: Response) {
-  const parsed = SigninSchema.safeParse(req.body);
-  if (!parsed.success) {
-    const details = parsed.error.issues.map((i: z.ZodIssue) => ({ path: i.path.join("."), message: i.message }));
-    return res.fail?.([{ message: "Validation failed", code: "VALIDATION_ERROR", details }], 400);
+  try {
+    const parsed = SigninSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const details = parsed.error.issues.map((i: z.ZodIssue) => ({ path: i.path.join("."), message: i.message }));
+      return res.fail?.([{ message: "Validation failed", code: "VALIDATION_ERROR", details }], 400);
+    }
+
+    const { email, password, remember } = parsed.data;
+    const result = await signInWithEmailPassword(email, password);
+
+    if (!result.ok) {
+      return res.fail?.([{ message: "Invalid email or password", code: "INVALID_CREDENTIALS" }], 401);
+    }
+
+    const sid = req.auth?.sid as string | undefined;
+    const ttl = remember ? 60 * 60 * 24 * 30 : DEFAULT_TTL;
+
+    let session = null as any;
+    if (sid) {
+      session = await rotateSession(sid, ttl);
+    }
+    if (!session) session = await createSession({ userId: String(result.user.id), email: result.user.email }, ttl);
+
+    setSessionCookie(res as any, session.sid);
+    return res.success?.({ isAuthenticated: true }, 200);
+  } catch (e: any) {
+    if (e?.message === "Redis not available") {
+      return res.fail?.(
+        [{ message: "Authentication temporarily unavailable", code: "AUTH_TEMPORARILY_UNAVAILABLE" }],
+        503
+      );
+    }
+    throw e;
   }
-
-  const { email, password, remember } = parsed.data;
-  const result = await signInWithEmailPassword(email, password);
-
-  if (!result.ok) {
-    return res.fail?.([{ message: "Invalid email or password", code: "INVALID_CREDENTIALS" }], 401);
-  }
-
-  const sid = req.auth?.sid as string | undefined;
-  const ttl = remember ? 60 * 60 * 24 * 30 : DEFAULT_TTL;
-
-  let session = null as any;
-  if (sid) {
-    session = await rotateSession(sid, ttl);
-  }
-  if (!session) session = await createSession({ userId: String(result.user.id), email: result.user.email }, ttl);
-
-  setSessionCookie(res as any, session.sid);
-  return res.success?.({ isAuthenticated: true }, 200);
 }
 
 export async function checkEmail(req: Request, res: Response) {

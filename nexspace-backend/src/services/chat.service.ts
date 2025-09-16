@@ -2,6 +2,7 @@ import { findWorkspaceByUid, isWorkspaceMember } from "../repositories/workspace
 import { createChatMessage, listChatMessages as repoList, softDeleteAllByUserInWorkspace, softDeleteMessage, purgeOlderThan } from "../repositories/chat.repository.js";
 import { config } from "../config/env.js";
 import { maybeDecrypt, maybeEncrypt } from "../utils/chatCrypto.js";
+import { sendDataToRoom } from "./livekit.service.js";
 
 export type ChatDTO = {
   id: string;
@@ -14,7 +15,7 @@ function toName(u: { first_name: string; last_name: string; displayName: string 
   return (u.displayName && u.displayName.trim()) || [u.first_name, u.last_name].filter(Boolean).join(" ") || u.email;
 }
 
-export async function postMessage(workspaceUid: string, userId: string, text: string): Promise<ChatDTO> {
+export async function postMessage(workspaceUid: string, userId: string, text: string, clientId?: string): Promise<ChatDTO> {
   const ws = await findWorkspaceByUid(workspaceUid);
   if (!ws) throw new Error("WORKSPACE_NOT_FOUND");
   const membership = await isWorkspaceMember(ws.uid, BigInt(userId));
@@ -29,6 +30,15 @@ export async function postMessage(workspaceUid: string, userId: string, text: st
   }
 
   const stored = await createChatMessage(ws.uid, BigInt(userId), ws.uid, maybeEncrypt(text));
+
+  // Broadcast to LiveKit; include client-provided id if available so clients can reconcile optimistic messages
+  try {
+    await sendDataToRoom(ws.uid, { type: 'chat', id: clientId || String(stored.id), text, senderSid: String(userId), senderName: '' }, 'chat', true);
+  } catch (e) {
+    // Do not fail persistence if publish fails; log and continue
+    console.error('[chat] LiveKit publish failed:', (e as any)?.message || e);
+  }
+
   return {
     id: String(stored.id),
     text,
@@ -36,6 +46,8 @@ export async function postMessage(workspaceUid: string, userId: string, text: st
     sender: { id: String(userId), name: "" }, // name filled by client or list endpoint
   };
 }
+
+// Bulk posting removed; single-message posting only
 
 export async function listChatMessages(workspaceUid: string, userId: string, limit = 50, before?: Date): Promise<ChatDTO[]> {
   const ws = await findWorkspaceByUid(workspaceUid);
