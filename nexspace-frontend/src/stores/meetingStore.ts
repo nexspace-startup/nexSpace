@@ -37,6 +37,8 @@ export type MeetingState = {          // 👈 export the type so consumers can a
 
   // screen share state
   screenShareEnabled: boolean;
+  // speaker playback toggle (mute all remote audio locally)
+  speakerEnabled: boolean;
 
   toggleMic: () => Promise<void>;
   toggleCam: () => Promise<void>;
@@ -54,6 +56,8 @@ export type MeetingState = {          // 👈 export the type so consumers can a
   loadChatHistory: (limit?: number) => Promise<void>;
   // screen share control
   toggleScreenShare: () => Promise<void>;
+  // speaker playback control
+  toggleSpeaker: () => Promise<void>;
 };
 
 export type ChatMessage = {
@@ -316,6 +320,7 @@ export const useMeetingStore = create<MeetingState>()(
       whisperActive: false,
       whisperTargetSid: null,
       screenShareEnabled: false,
+      speakerEnabled: true,
       chatOpen: false,
       unreadCount: 0,
       messages: [],
@@ -373,6 +378,7 @@ export const useMeetingStore = create<MeetingState>()(
           unreadCount: 0,
           messages: [],
           screenShareEnabled: false,
+          speakerEnabled: true,
         });
       },
 
@@ -565,6 +571,27 @@ export const useMeetingStore = create<MeetingState>()(
             set({ screenShareEnabled: !!hasShare });
           } catch { /* ignore */ }
         } catch {/* ignore */}
+      },
+
+      toggleSpeaker: async () => {
+        const room = get().room;
+        if (!room) return;
+        try {
+          const next = !get().speakerEnabled;
+          const remotes = Array.from(room.remoteParticipants?.values?.() ?? []);
+          for (const rp of remotes) {
+            try {
+              const pubs: any[] = (rp as any).getTrackPublications?.() ?? Array.from((rp as any).trackPublications?.values?.() ?? []);
+              for (const pub of pubs) {
+                const isAudio = pub?.kind === 'audio' || pub?.source === Track.Source.Microphone;
+                if (isAudio) {
+                  try { await pub.setSubscribed?.(next); } catch { /* ignore */ }
+                }
+              }
+            } catch { /* ignore */ }
+          }
+          set({ speakerEnabled: next });
+        } catch { /* ignore */ }
       },
     };
   })

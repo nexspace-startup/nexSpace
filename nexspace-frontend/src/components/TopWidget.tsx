@@ -17,11 +17,13 @@ const TopWidget: React.FC = () => {
 
   const avatars = useMemo(() => participants.slice(0, 2), [participants]);
   const extraCount = Math.max(0, participants.length - avatars.length);
+  const chatOpen = useMeetingStore((s) => s.chatOpen);
+  const shift = chatOpen ? "translateX(calc(-50% - 204px))" : "translateX(-50%)";
 
   return (
     <div
-      className="widget-top left-1/2 -translate-x-1/2 w-[calc(100%-24px)] max-w-[385px]"
-      style={{ top: 24, height: 60 }}
+      className="widget-top left-1/2 w-[calc(100%-24px)] max-w-[385px]"
+      style={{ top: 24, height: 60, transform: shift }}
     >
       <div className="widget-top-inner w-full h-full">
         <div className="flex items-center w-full h-8 gap-3 sm:gap-8">

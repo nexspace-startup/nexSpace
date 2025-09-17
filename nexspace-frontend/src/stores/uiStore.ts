@@ -5,6 +5,12 @@ import { devtools } from "zustand/middleware";
 type UIState = {
   isWorkspacePanelOpen: boolean;
   toggleWorkspacePanel: (open?: boolean) => void;
+
+  isNavbarOpen: boolean;
+  toggleNavbar: (open?: boolean) => void;
+
+  activeNavId: string;
+  setActiveNav: (id: string) => void;
 };
 
 export const useUIStore = create<UIState>()(
@@ -12,5 +18,11 @@ export const useUIStore = create<UIState>()(
     isWorkspacePanelOpen: true,
     toggleWorkspacePanel: (open) =>
       set({ isWorkspacePanelOpen: typeof open === "boolean" ? open : !get().isWorkspacePanelOpen }),
+
+    isNavbarOpen: false,
+    toggleNavbar: (open) => set({ isNavbarOpen: typeof open === 'boolean' ? open : !get().isNavbarOpen }),
+
+    activeNavId: 'workspace',
+    setActiveNav: (id) => set({ activeNavId: id }),
   }))
 );

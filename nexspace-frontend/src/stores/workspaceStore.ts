@@ -21,6 +21,7 @@ type WorkspaceState = {
   setActiveWorkspace: (id: string | null) => void;
   upsertWorkspace: (w: Workspace) => void; // handy for “Create workspace” flow
   deleteWorkspace: (uid: string) => Promise<void>;
+  createWorkspace: (name: string) => Promise<Workspace | null>;
 };
 
 export const useWorkspaceStore = create<WorkspaceState>()(
@@ -93,6 +94,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (status === 403) toast.error("Only owners can delete a workspace");
         else if (status === 404) toast.warning("Workspace not found");
         else toast.error(e?.message ?? "Failed to delete workspace");
+      }
+    },
+
+    createWorkspace: async (name: string) => {
+      const clean = String(name || '').trim();
+      if (!clean) { toast.warning('Enter a workspace name'); return null; }
+      try {
+        const res = await api.post('/workspace', { name: clean }, { withCredentials: true });
+        if ((res.data as any)?.success && (res.data as any)?.data) {
+          const w: Workspace = (res.data as any).data;
+          const existing = get().workspaces;
+          const idx = existing.findIndex(x => x.id === w.id);
+          const next = [...existing];
+          if (idx >= 0) next[idx] = w; else next.unshift(w);
+          set({ workspaces: next, activeWorkspaceId: w.id });
+          toast.success('Workspace created');
+          return w;
+        }
+        const msg = (res.data as any)?.errors?.[0]?.message ?? 'Failed to create workspace';
+        toast.error(msg);
+        return null;
+      } catch (e: any) {
+        const code = e?.response?.status;
+        if (code === 409) toast.error('Workspace already exists'); else toast.error(e?.message ?? 'Failed to create workspace');
+        return null;
       }
     },
   }))

@@ -39,14 +39,17 @@ export default function WorkspaceTile({
 
       {/* Right side status only when expanded */}
       <div className="ml-auto flex items-center gap-2">
-        <div className="flex items-center justify-center w-5 h-5">
-          <div
-            className="w-3 h-3 rounded-full flex items-center justify-center"
-            style={{ backgroundColor: "#4D5358" }}
-          >
-            <div className="w-1.5 h-0.5 bg-white rounded-full" />
-          </div>
-        </div>
+        <button
+          type="button"
+          aria-label="Workspace options"
+          className="hidden md:grid w-7 h-7 rounded-full place-items-center text-white/70 hover:text-white"
+        >
+          <svg viewBox="0 0 24 24" className="w-5 h-5" aria-hidden>
+            <circle cx="6" cy="12" r="1.6" fill="currentColor"/>
+            <circle cx="12" cy="12" r="1.6" fill="currentColor"/>
+            <circle cx="18" cy="12" r="1.6" fill="currentColor"/>
+          </svg>
+        </button>
       </div>
 
     </div>

@@ -46,14 +46,17 @@ function chunk<T>(arr: T[], size: number): T[][] {
 type Props = {
   pageSize?: number;
   bottomSafeAreaPx?: number; // space reserved for controls
+  topSafeAreaPx?: number; // space reserved at top (TopWidget etc.)
 };
 
 const MeetingGrid: React.FC<Props> = ({
   pageSize = 24,
   bottomSafeAreaPx = 120,
+  topSafeAreaPx = 96,
 }) => {
   const room = useRoomContext();
   const avatars = useMeetingStore(useShallow((s) => s.participants));
+  const chatOpen = useMeetingStore((s) => s.chatOpen);
 
   // Resolve LiveKit Participant objects in the same order as the store list
   const all = useMemo(() => collectParticipants(room, avatars), [room, avatars]);
@@ -91,10 +94,7 @@ const MeetingGrid: React.FC<Props> = ({
   const GridMany = useMemo(() =>
     function GridManyInner() {
       return (
-        <div
-          className="grid gap-x-2 gap-y-2 w-full"
-          style={{ gridTemplateColumns: "repeat(6, minmax(0, 1fr))", justifyItems: "center" }}
-        >
+        <div className="grid w-full gap-x-2 gap-y-2 justify-items-center grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           {current.map((p) => (
             <ProfileTile key={(p as any)?.sid ?? p.identity} participant={p} />
           ))}
@@ -108,7 +108,7 @@ const MeetingGrid: React.FC<Props> = ({
     () =>
       function GridOneInner() {
         return (
-          <div className="grid place-items-center w-[424px] h-[463px]">
+          <div className="grid place-items-center w-full max-w-[424px] h-[463px]">
             {current[0] && <ProfileTile participant={current[0]} />}
           </div>
         );
@@ -122,7 +122,7 @@ const MeetingGrid: React.FC<Props> = ({
         const [pTop, pLeft, pCenter, pRight, pBottom] = current;
         return (
           <div
-            className="grid gap-6 justify-items-center w-[424px] h-[463px]"
+            className="grid gap-6 justify-items-center w-full max-w-[424px] h-[463px]"
             style={{
               gridTemplateAreas: `
                 ".    top     ."
@@ -146,11 +146,11 @@ const MeetingGrid: React.FC<Props> = ({
   return (
     <div className="relative h-full w-full bg-[#202024]">
       {/* Centered stage with your max width */}
-      <div className="relative mx-auto h-full w-full max-w-[1000px] px-3 sm:px-0">
+      <div className="relative mx-auto h-full w-full max-w-[1000px] px-3 sm:px-0" style={{ paddingRight: chatOpen ? 408 : undefined }}>
         {/* Keep space for the top pill and bottom controls */}
         <div
           className="h-full w-full flex items-center justify-center"
-          style={{ paddingTop: 96, paddingBottom: bottomSafeAreaPx }}
+          style={{ paddingTop: topSafeAreaPx, paddingBottom: bottomSafeAreaPx }}
         >
           {activeScreen ? (
             <div className="relative w-full h-full max-h-[70vh] rounded-xl overflow-hidden bg-black">

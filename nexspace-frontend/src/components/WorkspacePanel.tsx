@@ -18,6 +18,7 @@ const WorkspacePanel: React.FC = () => {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const activeId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const setActive = useWorkspaceStore((s) => s.setActiveWorkspace);
+  const createWorkspace = useWorkspaceStore((s) => s.createWorkspace);
 
   const isOpen = useUIStore((s) => s.isWorkspacePanelOpen);
   const toggle = useUIStore((s) => s.toggleWorkspacePanel);
@@ -84,7 +85,7 @@ const WorkspacePanel: React.FC = () => {
       {/* Expanded panel wrapper */}
       <aside
         className="
-          relative shrink-0
+          relative shrink-0 h-screen
           border-r border-[#26272B]
           bg-[#18181B]
           transition-[opacity] duration-500
@@ -158,8 +159,9 @@ const WorkspacePanel: React.FC = () => {
           {/* New Workspace */}
           <div className="mt-6 pb-5">
             <button
-              onClick={() => {
-                // TODO: open create workspace; on success call upsertWorkspace(newWs)
+              onClick={async () => {
+                const name = window.prompt('Workspace name');
+                if (name) await createWorkspace(name);
               }}
               className="
                 w-full h-10 rounded-2xl
