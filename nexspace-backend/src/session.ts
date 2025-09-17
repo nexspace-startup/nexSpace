@@ -109,9 +109,10 @@ function buildPayloadFromUser(user: any, ttlSeconds: number) {
 
 function cookieOpts(
   ttlSeconds = DEFAULT_TTL,
-  isProd = process.env.NODE_ENV === "production" || process.env.NODE_ENV === "development"
+  // Only treat true production as "prod" for cookie attributes. In development we
+  // must allow non-HTTPS + SameSite=Lax so iOS/Safari and mobile devices accept cookies.
+  isProd = process.env.NODE_ENV === "production"
 ) {
-  console.log(process.env.NODE_ENV, "process.env.NODE_ENV");
   return {
     httpOnly: true,
     secure: isProd,
@@ -132,8 +133,7 @@ export function setSessionCookie(
 
 /** Clear the session cookie. */
 export function clearSessionCookie(res: ExpressResponse) {
-  const isProd = process.env.NODE_ENV === "production" || process.env.NODE_ENV === "development"
-
+  const isProd = process.env.NODE_ENV === "production";
   // Must match cookie attributes used when setting it (path/sameSite/secure)
   res.clearCookie(SID_COOKIE, { path: "/", sameSite: isProd ? "none" as const : "lax" as const, httpOnly: true, secure: isProd });
 }
