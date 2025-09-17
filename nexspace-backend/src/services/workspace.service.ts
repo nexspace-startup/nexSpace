@@ -23,3 +23,21 @@ export async function createWorkspaceForUser(userId: string, name: string) {
   return result;
 }
 
+export async function deleteWorkspaceForUser(userId: string, workspaceUid: string) {
+  const uid = BigInt(userId);
+  return prisma.$transaction(async (tx) => {
+    // verify membership and role
+    const membership = await tx.workspaceMember.findFirst({
+      where: { userId: uid, workspaceUid },
+      select: { role: true },
+    });
+    if (!membership) throw new Error("FORBIDDEN");
+    if (membership.role !== WorkspaceRole.OWNER) throw new Error("FORBIDDEN");
+
+    const exists = await tx.workspace.findUnique({ where: { uid: workspaceUid }, select: { uid: true } });
+    if (!exists) throw new Error("NOT_FOUND");
+
+    await tx.workspace.delete({ where: { uid: workspaceUid } });
+    return { id: workspaceUid } as const;
+  });
+}

@@ -183,7 +183,7 @@ const ProfileTileComponent: React.FC<Props> = ({ participant }) => {
 
       {/* name chip */}
       <div className="h-[26px] min-w-[88px] px-2 rounded-xl bg-[rgba(128,136,155,0.05)] opacity-80 grid place-items-center z-10">
-        <div className="flex items-center justify-center gap-2 max-w-[80px]">
+        <div className="flex items-center justify-center gap-2 max-w-[80px]" title={name} aria-label={name}>
           <span className="text-[12px] leading-4 text-white truncate">{name}</span>
           {/* Moon status icon */}
           <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden className="shrink-0">

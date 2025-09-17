@@ -55,7 +55,7 @@ const ChatPanel: React.FC = () => {
     >
       <header className="flex items-center justify-between px-3 h-16 border-b border-[#2A2B31] text-[#C2C8D1]">
         <div className="font-medium">Chat</div>
-        <button onClick={toggleChat} className="text-[#80889B] hover:text-[#C2C8D1]" aria-label="Close chat">✕</button>
+        <button onClick={toggleChat} className="text-[#80889B] hover:text-[#C2C8D1] px-3" aria-label="Close chat">✕</button>
       </header>
       <div ref={listRef} className="flex-1 overflow-y-auto px-3 py-4 space-y-2">
         {messages.map((m) => {

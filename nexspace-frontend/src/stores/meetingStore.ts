@@ -552,7 +552,13 @@ export const useMeetingStore = create<MeetingState>()(
           if (typeof fn === 'function') {
             await fn.call(room.localParticipant, next);
           }
-          set({ screenShareEnabled: next });
+          // Re-sync from actual publications to reflect success/failure accurately
+          try {
+            const lp: any = room.localParticipant as any;
+            const pubs: any[] = lp?.getTrackPublications?.() ?? Array.from(lp?.trackPublications?.values?.() ?? []);
+            const hasShare = pubs?.some((pub: any) => (pub?.source === Track.Source.ScreenShare) && pub?.track);
+            set({ screenShareEnabled: !!hasShare });
+          } catch { /* ignore */ }
         } catch {/* ignore */}
       },
     };

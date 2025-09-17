@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useRoomContext, useTracks, VideoTrack, isTrackReference } from "@livekit/components-react";
 import type { Participant, Room } from "livekit-client";
+import { Track } from "livekit-client";
 import ProfileTile from "./ProfileTile";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useShallow } from "zustand/react/shallow";
@@ -58,7 +59,8 @@ const MeetingGrid: React.FC<Props> = ({
   const all = useMemo(() => collectParticipants(room, avatars), [room, avatars]);
 
   // Find active screen share (first one)
-  const screenRefs = useTracks([{ source: 4 as any, withPlaceholder: false } as any], { onlySubscribed: true }); // Track.Source.ScreenShare === 4 in LK
+  // Include local screen shares too (not just subscribed remotes).
+  const screenRefs = useTracks([{ source: Track.Source.ScreenShare, withPlaceholder: false }], { onlySubscribed: false });
   const activeScreen = useMemo(() => {
     const ref = screenRefs.find((tr) => isTrackReference(tr));
     return isTrackReference(ref) ? ref : undefined;

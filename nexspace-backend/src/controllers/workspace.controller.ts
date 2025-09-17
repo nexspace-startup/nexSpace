@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { MeetingJoinParams, CreateWorkspaceBody } from "../validators/workspace.validators.js";
 import { buildMeetingJoinToken, listWorkspacesForUser } from "../services/meeting.service.js";
-import { createWorkspaceForUser } from "../services/workspace.service.js";
+import { createWorkspaceForUser, deleteWorkspaceForUser } from "../services/workspace.service.js";
 
 export async function joinMeeting(req: Request, res: Response) {
   const userId = req.auth!.userId! as string;
@@ -50,5 +50,27 @@ export async function createWorkspace(req: Request, res: Response) {
       return res.fail?.([{ message: "WORKSPACE_ALREADY_EXISTS", code: "WORKSPACE_CONFLICT" }], 409);
     }
     return res.fail?.([{ message: "Unable to create workspace", code: "INTERNAL_SERVER_ERROR" }], 500);
+  }
+}
+
+export async function deleteWorkspace(req: Request, res: Response) {
+  const userId = req.auth!.userId! as string;
+
+  const parsed = MeetingJoinParams.safeParse(req.params);
+  if (!parsed.success) {
+    return res.fail?.([{ message: "workspaceUid required", code: "VALIDATION_ERROR" }], 400);
+  }
+
+  try {
+    const { workspaceUid } = parsed.data as any;
+    await deleteWorkspaceForUser(userId, workspaceUid);
+    return res.success?.({ id: workspaceUid }, 200) ?? res.status(200).json({ success: true, data: { id: workspaceUid }, errors: [] });
+  } catch (e: any) {
+    const code = e?.message;
+    if (code === "NOT_FOUND")
+      return res.fail?.([{ message: "Workspace not found", code: "NOT_FOUND" }], 404);
+    if (code === "FORBIDDEN")
+      return res.fail?.([{ message: "Forbidden", code: "FORBIDDEN" }], 403);
+    return res.fail?.([{ message: "Unable to delete workspace", code: "INTERNAL_SERVER_ERROR" }], 500);
   }
 }

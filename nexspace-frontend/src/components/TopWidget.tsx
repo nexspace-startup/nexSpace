@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { RoomEvent, type Participant } from "livekit-client";
+import React, { useMemo, useState } from "react";
 import { useMeetingStore } from "../stores/meetingStore";
 import { initialsFrom } from "../utils/util";
 
@@ -8,7 +7,6 @@ const TopWidget: React.FC = () => {
   const connected = useMeetingStore((s) => s.connected);
   const joining = useMeetingStore((s) => s.joining);
   const participants = useMeetingStore((s) => s.participants);
-  const room = useMeetingStore((s) => s.room);
 
   const [statusOpen, setStatusOpen] = useState(false);
   const [status, setStatus] = useState<string>("In a meeting");
@@ -16,22 +14,6 @@ const TopWidget: React.FC = () => {
     () => (connected ? status : joining ? "Joining…" : "Not in meeting"),
     [connected, joining, status]
   );
-
-  const [speakers, setSpeakers] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    if (!room) {
-      setSpeakers(new Set());
-      return;
-    }
-    const handler = (list: Participant[]) => {
-      const ids = new Set<string>();
-      for (const p of list) ids.add(((p as any).sid as string) || p.identity);
-      setSpeakers(ids);
-    };
-    handler((room as any).activeSpeakers ?? []);
-    room.on(RoomEvent.ActiveSpeakersChanged, handler as any);
-    return () => { room.off(RoomEvent.ActiveSpeakersChanged, handler as any); };
-  }, [room]);
 
   const avatars = useMemo(() => participants.slice(0, 2), [participants]);
   const extraCount = Math.max(0, participants.length - avatars.length);
@@ -112,20 +94,20 @@ const TopWidget: React.FC = () => {
             <div className="avatar-stack-24" aria-label="Participants">
               {avatars[0] && (
                 <div
-                  className={["avatar-24 absolute left-0 top-0 grid place-items-center bg-white/10", speakers.has(avatars[0].id) ? "avatar-speaking" : ""].join(" ")}
+                  className={"avatar-24 absolute left-0 top-0 grid place-items-center bg-white/10"}
                 >
                   <span className="text-[10px] font-semibold text-white">{initialsFrom(avatars[0].name)}</span>
                 </div>
               )}
               {avatars[1] && (
                 <div
-                  className={["avatar-24 absolute top-0 grid place-items-center bg-white/10", speakers.has(avatars[1].id) ? "avatar-speaking" : ""].join(" ")}
+                  className={"avatar-24 absolute top-0 grid place-items-center bg-white/10"}
                   style={{ left: 16 }}
                 >
                   <span className="text-[10px] font-semibold text-white">{initialsFrom(avatars[1].name)}</span>
                 </div>
               )}
-              <div className="avatar-counter-24" style={{ left: 32, top: 0 }}>{extraCount > 0 ? `+${extraCount}` : "+0"}</div>
+              {extraCount > 0 && <div className="avatar-counter-24" style={{ left: 32, top: 0 }}>{extraCount > 0 ? `+${extraCount}` : "+0"}</div>}
             </div>
             <button className="chev-btn hidden sm:grid" aria-label="More participants" style={{ width: 20, height: 20 }}>
               <svg viewBox="0 0 24 24" className="w-5 h-5">
