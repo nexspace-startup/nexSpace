@@ -15,7 +15,7 @@ interface AcceptInvitationResponse {
 export async function inviteUser(request: any): Promise<InvitationResponse | null> {
     try {
         const { data } = await api.post(ENDPOINTS.INVITEUSER, request);
-        return data?.data ?? null; // assumes { success, data, errors }
+        return data?.data ?? null;
     } catch {
         return null;
     }
@@ -24,7 +24,7 @@ export async function inviteUser(request: any): Promise<InvitationResponse | nul
 export async function acceptInvitation(token: string): Promise<AcceptInvitationResponse | null> {
     try {
         const { data } = await api.post(ENDPOINTS.ACCEPTINVITATION(token));
-        return data?.data ?? null; // assumes { success, data, errors }
+        return data?.data ?? null;
     } catch {
         return null;
     }

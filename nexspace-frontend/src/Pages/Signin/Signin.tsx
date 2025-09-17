@@ -5,6 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useUserStore } from "../../stores/userStore";
 import { googleGetCode } from "../../lib/oauthClients";
+import { toast } from "../../stores/toastStore";
 import { AuthService, getMe, type MeResponse } from "../../services/authService";
 
 type Provider = "google" | "microsoft";
@@ -187,7 +188,7 @@ export default function Signin() {
             // Preserve existing Microsoft mock behavior
         } catch (e: any) {
             console.error(e);
-            alert(e?.message || "Authentication error");
+            toast.error(e?.message || "Authentication error");
         } finally {
             setIsGoogleLoading(false);
         }

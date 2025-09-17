@@ -74,6 +74,7 @@ const MeetingPanel: React.FC = () => {
           </div>
         </>
       )}
+
       {/* Whisper indicator */}
       {canConnect && whisperActive && (
         <div className="absolute left-1/2 -translate-x-1/2 top-4 z-20 px-3 py-1.5 rounded-full bg-[rgba(254,116,31,0.15)] border border-[#FE741F]/40 text-[#FFD7BF] text-sm">

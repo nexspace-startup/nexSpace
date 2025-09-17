@@ -6,6 +6,7 @@ import { api } from "../../services/httpService";
 import { ENDPOINTS } from "../../constants/endpoints";
 import { useUserStore } from "../../stores/userStore";
 import { getMe, type MeResponse } from "../../services/authService";
+import { toast } from "../../stores/toastStore";
 
 export default function Setup() {
   const navigate = useNavigate();
@@ -35,6 +36,7 @@ export default function Setup() {
       const res = await api.post(ENDPOINTS.ONBOARDING, payload as any);
       if (res?.data?.success) {
         // refresh session/user and navigate
+        toast.success("Workspace created successfully");
         const me: MeResponse | null = await getMe();
         if (me?.user) {
           const first = me.user.first_name || "";
@@ -45,10 +47,10 @@ export default function Setup() {
         }
         navigate("/dashboard", { replace: true });
       } else {
-        alert(res?.data?.errors?.[0]?.message || "Failed to create workspace");
+        toast.error(res?.data?.errors?.[0]?.message || "Failed to create workspace");
       }
     } catch (e: any) {
-      alert(e?.response?.data?.errors?.[0]?.message || "Something went wrong");
+      toast.error(e?.response?.data?.errors?.[0]?.message || "Something went wrong");
     } finally {
       setIsSubmitting(false);
     }

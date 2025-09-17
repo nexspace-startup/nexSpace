@@ -4,6 +4,7 @@ import type { Room, Participant } from "livekit-client";
 import { RoomEvent, Track } from "livekit-client";
 import { useWorkspaceStore } from "./workspaceStore";
 import { api } from "../services/httpService";
+import { toast } from "./toastStore";
 
 type JoinResponse =
   | { success: true; data: { url: string; token: string } }
@@ -426,6 +427,7 @@ export const useMeetingStore = create<MeetingState>()(
         const { activeWorkspaceId } = useWorkspaceStore.getState();
         if (!activeWorkspaceId) {
           set({ error: "Select a workspace first." });
+          toast.warning("Select a workspace first");
           return;
         }
         if (get().joining) return;
@@ -449,6 +451,7 @@ export const useMeetingStore = create<MeetingState>()(
               connected: false,
               error: (data as any)?.errors?.[0]?.message ?? "Unable to join meeting",
             });
+            toast.error((data as any)?.errors?.[0]?.message ?? "Unable to join meeting");
           }
         } catch (e: any) {
           set({
@@ -456,6 +459,7 @@ export const useMeetingStore = create<MeetingState>()(
             connected: false,
             error: e?.message ?? "Network error while joining",
           });
+          toast.error(e?.message ?? "Network error while joining");
         }
       },
 
@@ -494,6 +498,7 @@ export const useMeetingStore = create<MeetingState>()(
           markStatusesByIds([id], 'success');
         } catch {
           markStatusesByIds([id], 'failed');
+          toast.error('Failed to send message');
         }
       },
 

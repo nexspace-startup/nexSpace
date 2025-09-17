@@ -102,6 +102,13 @@
   /* Dropdown menu */
   .menu { @apply absolute mt-2 left-0 w-44 rounded-lg bg-[#202024] shadow-lg border border-[#26272B] py-1; }
   .menu-item { @apply px-3 py-2 text-sm text-white/90 hover:bg-white/5 flex items-center gap-2; }
+
+  /* Toasts */
+  .toast-stack { @apply fixed z-[1000] right-6 top-6 flex flex-col gap-3 w-[min(560px,calc(100vw-24px))]; }
+  .toast-base  { @apply flex items-center gap-3 px-4 py-3 rounded-2xl shadow-sm border border-[#26272B]; }
+  .toast-success { @apply bg-[#234936] text-[#48FFA4]; }
+  .toast-error   { @apply bg-[#4E2B2B] text-[#ED5C5B]; }
+  .toast-warning { @apply bg-[#4B3A29] text-[#F59E0B]; }
 }
 
 /* Speaking pulse halo for profile tiles */

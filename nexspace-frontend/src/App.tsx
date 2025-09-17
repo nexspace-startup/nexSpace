@@ -8,6 +8,7 @@ import { GuestRoute, ProtectedRoute } from "./routerGuard";
 import InvitePage from "./Pages/AcceptInvitation";
 import Signin from "./Pages/Signin/Signin";
 import Setup from "./Pages/Setup/Setup";
+import Toaster from "./components/Toaster";
 
 function App() {
   const status = useUserStore((s) => s.status);
@@ -19,6 +20,7 @@ function App() {
 
   return (
     <Router>
+      <Toaster />
       <Routes>
         <Route element={<GuestRoute />}>
           <Route path="/" element={<LandingPage />} />
