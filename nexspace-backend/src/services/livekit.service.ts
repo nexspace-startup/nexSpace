@@ -17,20 +17,8 @@ function getClient(): RoomServiceClient {
 export async function sendDataToRoom(room: string, payload: any, topic = 'chat', reliable = true) {
   const c = getClient();
   const data = Buffer.from(JSON.stringify(payload));
-  // Use reliable channel for chat acks
   const kind = reliable ? DataPacket_Kind.RELIABLE : DataPacket_Kind.LOSSY;
-  // SDK supports object params in recent versions; fallback to positional signature is also supported.
-  try {
-    // Prefer object form when available
-    const req: any = { room, data, kind, topic };
-    if (typeof (c as any).sendData === 'function') {
-      await (c as any).sendData(req as any);
-    } else {
-      // very old SDK fallback
-      await (c as any).sendData(room, data, kind, undefined, topic);
-    }
-  } catch (e) {
-    throw e;
-  }
+  // Use positional signature which is supported across server-sdk versions
+  // sendData(room, data, kind, destinationSids?, topic?)
+  await (c as any).sendData(room, data, kind, undefined, topic);
 }
-
