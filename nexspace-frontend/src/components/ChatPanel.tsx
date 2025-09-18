@@ -106,8 +106,8 @@ const ChatPanel: React.FC = () => {
   const handleSend = async () => {
     const t = text.trim();
     if (!t) return;
-    await sendMessage(t);
     setText("");
+    await sendMessage(t);
     setTimeout(() => {
       const el = listRef.current; if (el) el.scrollTop = el.scrollHeight;
     }, 0);
@@ -135,7 +135,7 @@ const ChatPanel: React.FC = () => {
           if (scrollTimer.current) window.clearTimeout(scrollTimer.current);
           scrollTimer.current = window.setTimeout(() => setScrolling(false), 800);
         }}
-        className={["flex-1 overflow-y-auto px-3 py-4 space-y-2 chat-scroll", scrolling ? "scrolling" : ""].join(" ")}
+        className={["flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 space-y-2 chat-scroll", scrolling ? "scrolling" : ""].join(" ")}
       >
         {messages.map((m) => {
           const status = (m as any).status ?? ('success' as 'pending' | 'success' | 'failed');
@@ -149,7 +149,7 @@ const ChatPanel: React.FC = () => {
           return (
             <div key={m.id} className={`flex items-end gap-2 ${isMine ? 'justify-end' : 'justify-start'}`}>
               {!isMine && (
-                <div className="w-6 h-6 rounded-full overflow-hidden grid place-items-center flex-shrink-0" style={{ backgroundColor: accent }}>
+                <div className="w-6 h-6 rounded-full overflow-hidden grid self-start place-items-center flex-shrink-0" style={{ backgroundColor: accent }}>
                   {avatarUrl ? (
                     <img src={avatarUrl} alt={m.senderName} className="w-full h-full object-cover" />
                   ) : (
@@ -162,7 +162,8 @@ const ChatPanel: React.FC = () => {
                   <div className="text-[11px] mb-0.5" style={{ color: accent }}>{m.senderName}</div>
                 )}
                 <div
-                  className={`inline-block ${bubbleBase} ${bubbleStatus} rounded-lg px-3 py-1.5 whitespace-pre-wrap break-words`}
+                  className={`inline-block max-w-full ${bubbleBase} ${bubbleStatus} rounded-lg px-3 py-1.5 whitespace-pre-wrap break-words`}
+                  style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' as any }}
                   title={status === 'pending' ? 'Sending…' : status === 'failed' ? 'Failed to send' : ''}
                 >
                   {m.text}
@@ -183,7 +184,15 @@ const ChatPanel: React.FC = () => {
                   </span>
                 )}
               </div>
-              {/* No avatar for self messages per request */}
+              {isMine && (
+                <div className="w-6 h-6 rounded-full overflow-hidden grid self-start place-items-center flex-shrink-0" style={{ backgroundColor: accent }}>
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt="avatar" className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-[10px] font-semibold" style={{ color: textOnAccent }}>{nameInitials}</span>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}

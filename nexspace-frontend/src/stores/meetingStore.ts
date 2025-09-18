@@ -105,9 +105,9 @@ export const useMeetingStore = create<MeetingState>()(
       });
     };
 
-  let detachEvents: (() => void) | null = null;
-  // track if we temporarily enabled mic for whisper
-  let revertMicOnWhisperStop = false;
+    let detachEvents: (() => void) | null = null;
+    // track if we temporarily enabled mic for whisper
+    let revertMicOnWhisperStop = false;
 
     // helper to update statuses
     const markStatusesByIds = (ids: string[], status: 'pending' | 'success' | 'failed') =>
@@ -158,28 +158,28 @@ export const useMeetingStore = create<MeetingState>()(
           pubs
             .filter((pub: any) => pub?.kind === 'audio' || pub?.source === Track.Source.Microphone)
             .forEach((pub: any) => {
-              try { pub.setSubscribed?.(!!shouldHear); } catch {}
+              try { pub.setSubscribed?.(!!shouldHear); } catch { }
             });
-        } catch {}
+        } catch { }
       };
 
-    /**
-     * Process incoming data from other clients in the room. Currently only
-     * processes 'whisper' messages, which are used to control whether the local
-     * user can hear the audio of another user in the room.
-     *
-     * The message format is a JSON object with the following fields:
-     *
-     * - `type`: should be 'whisper'
-     * - `action`: one of 'start' or 'stop'
-     * - `originSid`: the sid of the user that sent the message
-     * - `targetSid`: the sid of the user that is the target of the action
-     *
-     * If the action is 'start', the local user will be subscribed to the sender's
-     * audio if and only if the targetSid matches the local user's sid. If the
-     * action is 'stop', the local user will be unsubscribed from the sender's
-     * audio.
-     */
+      /**
+       * Process incoming data from other clients in the room. Currently only
+       * processes 'whisper' messages, which are used to control whether the local
+       * user can hear the audio of another user in the room.
+       *
+       * The message format is a JSON object with the following fields:
+       *
+       * - `type`: should be 'whisper'
+       * - `action`: one of 'start' or 'stop'
+       * - `originSid`: the sid of the user that sent the message
+       * - `targetSid`: the sid of the user that is the target of the action
+       *
+       * If the action is 'start', the local user will be subscribed to the sender's
+       * audio if and only if the targetSid matches the local user's sid. If the
+       * action is 'stop', the local user will be unsubscribed from the sender's
+       * audio.
+       */
       const onData = (
         payload: Uint8Array,
         _participant?: Participant,
@@ -209,7 +209,7 @@ export const useMeetingStore = create<MeetingState>()(
           // Handle chat messages (authoritative echo from server)
           if ((topic === undefined || topic === 'chat') && msg.type === 'chat') {
             const senderSid: string = msg.senderSid ?? _participant?.identity ?? 'unknown';
-            const senderName: string = msg.senderName ?? msg.senderSid ?? 'unknown';
+            let senderName: string | undefined = typeof msg.senderName === 'string' ? msg.senderName : undefined; if (!senderName || !String(senderName).trim()) { try { const lp: any = room.localParticipant as any; if (String(lp?.identity) === String(senderSid)) { senderName = (lp?.name ?? lp?.identity) as string; } else { const remotes: any[] = Array.from((room as any).remoteParticipants?.values?.() ?? []); const rp = remotes.find((p: any) => String(p?.identity) === String(senderSid)); senderName = (rp?.name ?? rp?.identity) as string | undefined; } } catch { } } if (!senderName || !String(senderName).trim()) senderName = String(senderSid || 'User');
             const id: string = msg.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             const text: string = String(msg.text ?? '');
             if (!text) return;
@@ -263,7 +263,7 @@ export const useMeetingStore = create<MeetingState>()(
           const bytes = new TextEncoder().encode(payload);
           const destSid = (p as any)?.sid ?? p.identity;
           room.localParticipant.publishData(bytes, { reliable: true, topic: 'whisper', destinationSids: [destSid] } as any);
-        } catch {/* ignore */}
+        } catch {/* ignore */ }
       };
 
       const onParticipantDisconnected = (p: Participant) => {
@@ -335,7 +335,7 @@ export const useMeetingStore = create<MeetingState>()(
         attachRoomListeners(room);
         // load recent chat when connected
         if (room) {
-          try { get().loadChatHistory?.(100); } catch {}
+          try { get().loadChatHistory?.(100); } catch { }
         }
       },
 
@@ -346,7 +346,7 @@ export const useMeetingStore = create<MeetingState>()(
         try {
           await room.localParticipant.setMicrophoneEnabled(next);
           set({ micEnabled: !!room.localParticipant.isMicrophoneEnabled });
-        } catch {/* noop */}
+        } catch {/* noop */ }
       },
 
       toggleCam: async () => {
@@ -356,11 +356,11 @@ export const useMeetingStore = create<MeetingState>()(
         try {
           await room.localParticipant.setCameraEnabled(next);
           set({ camEnabled: !!room.localParticipant.isCameraEnabled });
-        } catch {/* noop */}
+        } catch {/* noop */ }
       },
 
       leave: () => {
-        try { get().room?.disconnect(); } catch {}
+        try { get().room?.disconnect(); } catch { }
         detachEvents?.();
         detachEvents = null;
         set({
@@ -394,7 +394,7 @@ export const useMeetingStore = create<MeetingState>()(
             revertMicOnWhisperStop = true;
             set({ micEnabled: !!room.localParticipant.isMicrophoneEnabled });
           }
-        } catch {}
+        } catch { }
 
         // broadcast start
         try {
@@ -402,7 +402,7 @@ export const useMeetingStore = create<MeetingState>()(
           const payload = JSON.stringify({ type: 'whisper', action: 'start', originSid, targetSid });
           const bytes = new TextEncoder().encode(payload);
           await room.localParticipant.publishData(bytes, { reliable: true, topic: 'whisper' } as any);
-        } catch {}
+        } catch { }
 
         set({ whisperActive: true, whisperTargetSid: targetSid });
       },
@@ -417,13 +417,13 @@ export const useMeetingStore = create<MeetingState>()(
           const payload = JSON.stringify({ type: 'whisper', action: 'stop', originSid });
           const bytes = new TextEncoder().encode(payload);
           await room.localParticipant.publishData(bytes, { reliable: true, topic: 'whisper' } as any);
-        } catch {}
+        } catch { }
 
         if (revertMicOnWhisperStop) {
           try {
             await room.localParticipant.setMicrophoneEnabled(false);
             set({ micEnabled: !!room.localParticipant.isMicrophoneEnabled });
-          } catch {}
+          } catch { }
         }
         revertMicOnWhisperStop = false;
         set({ whisperActive: false, whisperTargetSid: null });
@@ -537,7 +537,7 @@ export const useMeetingStore = create<MeetingState>()(
             try {
               const room = get().room as any;
               currentId = room?.localParticipant?.identity as string | undefined;
-            } catch {}
+            } catch { }
             set((s) => ({
               messages: items.map((m) => ({
                 id: m.id,
@@ -551,7 +551,7 @@ export const useMeetingStore = create<MeetingState>()(
               unreadCount: s.chatOpen ? 0 : s.unreadCount,
             }));
           }
-        } catch {/* ignore */}
+        } catch {/* ignore */ }
       },
 
       toggleScreenShare: async () => {
@@ -570,7 +570,7 @@ export const useMeetingStore = create<MeetingState>()(
             const hasShare = pubs?.some((pub: any) => (pub?.source === Track.Source.ScreenShare) && pub?.track);
             set({ screenShareEnabled: !!hasShare });
           } catch { /* ignore */ }
-        } catch {/* ignore */}
+        } catch {/* ignore */ }
       },
 
       toggleSpeaker: async () => {
