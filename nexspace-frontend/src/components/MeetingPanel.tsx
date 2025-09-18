@@ -5,6 +5,7 @@ import "@livekit/components-styles";
 import { useShallow } from "zustand/react/shallow";
 import MeetingControls from "./MeetingControls";
 import MeetingGrid from "./MeetingGrid";
+import Meeting3D from "./Meeting3D";
 import TopWidget from "./TopWidget";
 import ChatPanel from "./ChatPanel";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -71,6 +72,7 @@ const MeetingPanel: React.FC = () => {
     if (!canConnect || !startedAt) return "00 : 00 : 00";
     return fmtHMS(Date.now() - startedAt);
   }, [canConnect, startedAt, tick]);
+  const viewMode = useMeetingStore((s) => s.viewMode);
 
   return (
     <section className="relative flex-1 h-dvh overflow-hidden bg-[#202024]">
@@ -152,8 +154,12 @@ const MeetingPanel: React.FC = () => {
         >
           <RoomBinder />
 
-          {/* Main grid (fills, centers, leaves space for controls) */}
-          <MeetingGrid pageSize={24} bottomSafeAreaPx={isMobile ? 96 : 120} topSafeAreaPx={showTop ? 96 : 16} />
+          {/* Stage: Grid or 3D */}
+          {viewMode === '3d' ? (
+            <Meeting3D bottomSafeAreaPx={isMobile ? 96 : 120} topSafeAreaPx={showTop ? 96 : 16} />
+          ) : (
+            <MeetingGrid pageSize={24} bottomSafeAreaPx={isMobile ? 96 : 120} topSafeAreaPx={showTop ? 96 : 16} />
+          )}
 
           {/* Audio + controls (overlay) */}
           <RoomAudioRenderer />

@@ -9,7 +9,8 @@ import call_end from "../assets/call_end.svg"
 
 const MeetingControls: React.FC = () => {
   const {
-    connected, startedAt, micEnabled, camEnabled, toggleMic, toggleCam, chatOpen, unreadCount, toggleChat, screenShareEnabled, toggleScreenShare, leave
+    connected, startedAt, micEnabled, camEnabled, toggleMic, toggleCam, chatOpen, unreadCount, toggleChat, screenShareEnabled, toggleScreenShare, leave,
+    viewMode, setViewMode
   } = useMeetingStore(
     useShallow((s) => ({
       connected: s.connected,
@@ -24,6 +25,8 @@ const MeetingControls: React.FC = () => {
       screenShareEnabled: s.screenShareEnabled,
       toggleScreenShare: s.toggleScreenShare,
       leave: s.leave,
+      viewMode: s.viewMode,
+      setViewMode: s.setViewMode,
     }))
   );
 
@@ -67,8 +70,18 @@ const MeetingControls: React.FC = () => {
         <div className="flex items-center gap-3 sm:gap-5">
           {/* View mode (hide on mobile) */}
           <div className="segmented hidden sm:flex" role="group" aria-label="View mode">
-            <button className="segmented-active">Grid</button>
-            <button className="segmented-inactive">3D</button>
+            <button
+              className={viewMode === 'grid' ? 'segmented-active' : 'segmented-inactive'}
+              onClick={() => setViewMode('grid')}
+            >
+              Grid
+            </button>
+            <button
+              className={viewMode === '3d' ? 'segmented-active' : 'segmented-inactive'}
+              onClick={() => setViewMode('3d')}
+            >
+              3D
+            </button>
           </div>
 
           {/* Mic */}

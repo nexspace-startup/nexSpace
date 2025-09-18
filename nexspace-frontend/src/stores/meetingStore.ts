@@ -40,6 +40,10 @@ export type MeetingState = {          // 👈 export the type so consumers can a
   // speaker playback toggle (mute all remote audio locally)
   speakerEnabled: boolean;
 
+  // view mode for stage
+  viewMode: 'grid' | '3d';
+  setViewMode: (mode: 'grid' | '3d') => void;
+
   toggleMic: () => Promise<void>;
   toggleCam: () => Promise<void>;
   joinActiveWorkspace: () => Promise<void>;
@@ -324,6 +328,7 @@ export const useMeetingStore = create<MeetingState>()(
       chatOpen: false,
       unreadCount: 0,
       messages: [],
+      viewMode: 'grid',
 
       setRoom: (room) => {
         set({
@@ -338,6 +343,8 @@ export const useMeetingStore = create<MeetingState>()(
           try { get().loadChatHistory?.(100); } catch { }
         }
       },
+
+      setViewMode: (mode: 'grid' | '3d') => set({ viewMode: mode }),
 
       toggleMic: async () => {
         const room = get().room;
