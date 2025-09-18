@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { checkSession, getMe } from "../services/authService";
 import { api } from "../services/httpService";
+import { ENDPOINTS } from "../constants/endpoints";
 
 export type AuthStatus = "idle" | "checking" | "authed" | "guest";
 
@@ -76,7 +77,7 @@ export const useUserStore = create<UserState>((set, get) => ({
 
   logout: async () => {
     try {
-      await api.post("/auth/logout"); // your API should revoke session + clear cookie
+      await api.post(ENDPOINTS.AUTH_LOGOUT); // revoke session + clear cookie
     } catch {
       /* ignore network hiccups */
     } finally {

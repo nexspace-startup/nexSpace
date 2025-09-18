@@ -9,7 +9,7 @@ interface InvitationResponse {
 interface AcceptInvitationResponse {
     accepted: boolean,
     alreadyMember: boolean,
-    workspaceId: string,
+    workspaceUid: string,
     workspaceName: string,
 }
 export async function inviteUser(request: any): Promise<InvitationResponse | null> {
@@ -21,12 +21,8 @@ export async function inviteUser(request: any): Promise<InvitationResponse | nul
     }
 }
 
-export async function acceptInvitation(token: string): Promise<AcceptInvitationResponse | null> {
-    try {
-        const { data } = await api.post(ENDPOINTS.ACCEPTINVITATION(token));
-        return data?.data ?? null;
-    } catch {
-        return null;
-    }
+export async function acceptInvitation(token: string): Promise<AcceptInvitationResponse> {
+    const { data } = await api.post(ENDPOINTS.ACCEPTINVITATION(token));
+    return data?.data as AcceptInvitationResponse;
 }
 

@@ -16,11 +16,11 @@ export const OnboardingSchema = z.object({
 export type OnboardingInput = z.infer<typeof OnboardingSchema>;
 
 export const InvitationSchema = z.object({
-  email: z.string().email(),
+  email: z.email(),
   workspaceUid: z.string().min(1),
 });
 export type InvitationInput = z.infer<typeof InvitationSchema>;
 
-export const AcceptParams = z.object({ token: z.string().uuid() });
+export const AcceptParams = z.object({ token: z.uuid() });
 export type AcceptParamsType = z.infer<typeof AcceptParams>;
 

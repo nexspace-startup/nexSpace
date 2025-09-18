@@ -25,11 +25,11 @@ function App() {
         <Route element={<GuestRoute />}>
           <Route path="/" element={<LandingPage />} />
           <Route path="/signin" element={<Signin />} />
-          <Route path="/invite/:token" element={<InvitePage />} />
           <Route path="/setup" element={< Setup />} />
         </Route>
 
         <Route element={<ProtectedRoute />}>
+          <Route path="/invite/:token" element={<InvitePage />} />
           <Route path="/dashboard" element={<Dashboard />} />
         </Route>
       </Routes>

@@ -84,9 +84,9 @@ export default function Signin() {
         return null;
     }
 
-    async function redirectPostLogin(): Promise<void> {
+    async function redirectPostLogin(forceTarget?: string | null): Promise<void> {
         const me: MeResponse | null = await getMe();
-        const target = computeRedirectTarget();
+        const target = (forceTarget && forceTarget !== "/signin") ? forceTarget : computeRedirectTarget();
         // update store with basic identity
         if (me?.user) {
             const first = me.user.first_name || "";
@@ -180,9 +180,10 @@ export default function Signin() {
                 setIsGoogleLoading(true);
                 const code = await googleGetCode();
                 if (!code) throw new Error("Google sign-in was cancelled.");
-                const ok = await AuthService.googleCallback(code, "postmessage");
+                const next = computeRedirectTarget();
+                const ok = await AuthService.googleCallback(code, "postmessage", next);
                 if (!ok) throw new Error("Google authentication failed");
-                await redirectPostLogin();
+                await redirectPostLogin(next);
                 return;
             }
             // Preserve existing Microsoft mock behavior

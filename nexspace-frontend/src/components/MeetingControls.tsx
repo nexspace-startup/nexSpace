@@ -78,7 +78,7 @@ const MeetingControls: React.FC = () => {
             aria-pressed={!micEnabled}
             title={micEnabled ? "Mute microphone" : "Unmute microphone"}
           >
-            {micEnabled ? <MicIcon className="w-6 h-6 sm:w-5 sm:h-5 text-[#FE741F] group-hover:brightness-110" /> : <MicDisabledIcon className="w-6 h-6 sm:w-5 sm:h-5 text-[#FE741F] group-hover:brightness-110" />}
+            {micEnabled ? <MicIcon className="w-6 h-6 sm:w-5 sm:h-5 text-[#ED5C5B] group-hover:brightness-110" /> : <MicDisabledIcon className="w-6 h-6 sm:w-5 sm:h-5 text-[#ED5C5B] group-hover:brightness-110" />}
           </button>
 
           {/* Camera */}
@@ -88,7 +88,7 @@ const MeetingControls: React.FC = () => {
             aria-pressed={!camEnabled}
             title={camEnabled ? "Turn camera off" : "Turn camera on"}
           >
-            {camEnabled ? <CameraIcon className="w-6 h-6 sm:w-5 sm:h-5 text-[#FE741F] group-hover:brightness-110" /> : <CameraDisabledIcon className="w-6 h-6 sm:w-5 sm:h-5 text-[#FE741F] group-hover:brightness-110" />}
+            {camEnabled ? <CameraIcon className="w-6 h-6 sm:w-5 sm:h-5 text-[#ED5C5B] group-hover:brightness-110" /> : <CameraDisabledIcon className="w-6 h-6 sm:w-5 sm:h-5 text-[#ED5C5B] group-hover:brightness-110" />}
           </button>
 
           {/* Screen share button on desktop; on mobile in more menu */}

@@ -8,10 +8,22 @@ export const SigninSchema = z.object({
 
 export type SigninInput = z.infer<typeof SigninSchema>;
 
-export const GoogleCallbackSchema = z.object({
-  code: z.string().min(1, 'Authorization code is required'),
-  redirectUri: z.string().optional(),
-});
+// Accept either an OAuth authorization code (GIS code flow) or an ID token (One Tap)
+export const GoogleCallbackSchema = z.union([
+  z.object({
+    code: z.string().min(1, 'Authorization code is required'),
+    redirectUri: z.string().optional(),
+    next: z.string().optional(),
+  }),
+  z.object({
+    idToken: z.string().min(10, 'ID token is required'),
+    next: z.string().optional(),
+  }),
+  z.object({
+    credential: z.string().min(10, 'ID token is required'), // GIS sometimes uses `credential`
+    next: z.string().optional(),
+  })
+]);
 
 export type GoogleCallbackInput = z.infer<typeof GoogleCallbackSchema>;
 

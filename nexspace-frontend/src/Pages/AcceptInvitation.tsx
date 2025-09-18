@@ -50,7 +50,7 @@ export default function InvitePage() {
     if (status === "guest") {
       setView("redirecting-signin");
       const next = encodeURIComponent(loc.pathname);
-      navigate(`/signin?next=${next}`, { replace: true });
+      navigate(`/signin?redirect=${next}`, { replace: true });
       return;
     }
   }, [status, init, loc.pathname, navigate, view]);
@@ -67,10 +67,14 @@ export default function InvitePage() {
 
     (async () => {
       try {
-        await acceptInvitation(token);
-        setView("accepted");
-        // small defer lets user see the success state for a beat (optional)
-        navigate("/dashboard", { replace: true });
+        const result = await acceptInvitation(token);
+        if (result?.accepted) {
+          setView("accepted");
+          navigate("/dashboard", { replace: true });
+          return;
+        }
+        // Unexpected shape → treat as generic error
+        setView("error");
       } catch (e: any) {
         const statusCode = e?.response?.status as number | undefined;
         const err0 = e?.response?.data?.errors?.[0];
@@ -89,6 +93,10 @@ export default function InvitePage() {
           setView("not-found");
           return;
         }
+        if (statusCode === 400 && (code === "VALIDATION_ERROR")) {
+          setView("invalid-token");
+          return;
+        }
         if (statusCode === 409 && (code === "EMAIL_MISMATCH" || err0?.message === "EMAIL_MISMATCH")) {
           setView("email-mismatch");
           setHint("Please sign in with the same email address that received this invitation.");
@@ -98,7 +106,7 @@ export default function InvitePage() {
           // cookie/session missing → send back to signin with return param
           setView("redirecting-signin");
           const next = encodeURIComponent(loc.pathname);
-          navigate(`/signin?next=${next}`, { replace: true });
+          navigate(`/signin?redirect=${next}`, { replace: true });
           return;
         }
         setView("error");
@@ -149,9 +157,7 @@ export default function InvitePage() {
         <p className="text-sm text-slate-600">
           {hint || "Please sign in with the email address that received this invitation."}
         </p>
-        <Link to="/signin" className="text-indigo-600 underline text-sm">
-          Switch account
-        </Link>
+
       </div>
     );
 
@@ -164,6 +170,19 @@ export default function InvitePage() {
     );
 
   // "checking" | "redirecting-signin" | "accepting" | "accepted"
-  // You prefer no loader → return null for these transient phases.
+  if (view === "checking" || view === "accepting" || view === "redirecting-signin") {
+    const label = view === "redirecting-signin" ? "Redirecting to sign in…" : view === "accepting" ? "Accepting invitation…" : "Preparing…";
+    return (
+      <div className="min-h-[40vh] grid place-items-center text-white">
+        <div className="flex items-center gap-3 text-sm opacity-80">
+          <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+          </svg>
+          <span>{label}</span>
+        </div>
+      </div>
+    );
+  }
   return null;
 }

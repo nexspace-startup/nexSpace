@@ -124,6 +124,10 @@ export async function createInvitationForWorkspace(inviterUserId: string, input:
     await sendInviteEmail({ to: invitation.invitedEmail, invitationId: invitation.id as any, workspaceName: invitation.workspace?.name ?? "", inviterName: [inviter.first_name, inviter.last_name].filter(Boolean).join(" ") || undefined });
   } catch {
     emailSent = false;
+    // Log the root cause from SendGrid if available
+    // We keep API behavior unchanged but surface errors to console for debugging
+    // eslint-disable-next-line no-console
+    console.error('[Invite] Failed to send invitation email. Check SENDGRID config and verified sender.');
   }
 
   const origin = (config as any)?.webOrigin ?? (config as any)?.appOrigin ?? "http://localhost:5173";

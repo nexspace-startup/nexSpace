@@ -2,6 +2,7 @@ export const ENDPOINTS = {
   BASE_URL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000',
   AUTH_ME: '/auth/me',
   AUTH_SESSION: '/auth/session',
+  AUTH_LOGOUT: '/auth/logout',
   OAUTH_GOOGLE_AUTHORIZATION: '/auth/google/authorization',
   OAUTH_GOOGLE_CALLBACK: '/auth/google/callback',
   OAUTH_MICROSOFT_AUTHORIZATION: '/auth/microsoft/authorization',

@@ -19,10 +19,10 @@ export const AuthService = {
     return { ok: data?.success === true }
   },
 
-  async googleCallback(code: string, redirectUri?: string): Promise<boolean> {
+  async googleCallback(code: string, redirectUri?: string, next?: string | null): Promise<boolean> {
     const { data } = await api.post<ApiEnvelope<{ isAuthenticated: boolean }>>(
       ENDPOINTS.OAUTH_GOOGLE_CALLBACK,
-      { code, redirectUri }
+      { code, redirectUri, next }
     )
     return data?.success === true
   },

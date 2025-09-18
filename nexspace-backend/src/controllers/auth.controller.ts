@@ -1,26 +1,54 @@
 import type { Request, Response } from "express";
-import { DEFAULT_TTL, createSession, rotateSession, setSessionCookie } from "../session.js";
+import { DEFAULT_TTL, createSession, rotateSession, setSessionCookie, clearSessionCookie, revokeSession } from "../session.js";
 import { AppError } from "../middleware/error.js";
 import { GoogleCallbackSchema, SigninSchema, CheckEmailSchema } from "../validators/authValidators.js";
 import type { z } from "zod";
-import { googleExchangeAndVerify, signInWithEmailPassword } from "../services/auth.service.js";
+import { googleExchangeAndVerify, googleVerifyIdToken, signInWithEmailPassword, ensureOAuthUser } from "../services/auth.service.js";
 import { findUserByEmail } from "../repositories/user.repository.js";
 
 export async function googleCallback(req: Request, res: Response) {
-  const parsed = GoogleCallbackSchema.safeParse(req.body);
+  // Coerce input to support both code and id token shapes; allow body or query
+  const body: any = req.body || {};
+  const shaped = {
+    code: body.code ?? (req.query?.code as any) ?? body.authorizationCode ?? body.authCode,
+    idToken: body.idToken ?? body.credential ?? (req.query?.id_token as any) ?? (req.query?.credential as any),
+    redirectUri: body.redirectUri ?? (req.query?.redirect_uri as any),
+    next: body.next ?? (req.query?.next as any),
+  };
+  const parsed = GoogleCallbackSchema.safeParse(shaped);
   if (!parsed.success) {
     const details = parsed.error.issues.map((i: z.ZodIssue) => ({ path: i.path.join("."), message: i.message }));
     return res.fail?.([{ message: "Validation failed", code: "VALIDATION_ERROR", details }], 400);
   }
 
-  const { code, redirectUri } = parsed.data;
+  const data = parsed.data as any;
   try {
-    const { sub, email, given_name, family_name } = await googleExchangeAndVerify(code, redirectUri);
+    let profile: { sub: string; email: string; given_name: string; family_name: string };
+    if (data.idToken || data.credential) {
+      const idTok = data.idToken ?? data.credential;
+      profile = await googleVerifyIdToken(idTok);
+    } else {
+      profile = await googleExchangeAndVerify(data.code, data.redirectUri);
+    }
+    const { sub, email, given_name, family_name } = profile;
 
-    const sess = await createSession(
-      { sub, email, firstName: given_name, lastName: family_name, provider: "google" },
-      DEFAULT_TTL
-    );
+    // If the sign-in is part of an invitation accept flow, provision the user now.
+    // Otherwise, defer user creation until onboarding.
+    const isInviteFlow = typeof data.next === 'string' && /^\s*\/invite\//.test(data.next);
+    let sess;
+    if (isInviteFlow) {
+      const userIdBn = await ensureOAuthUser({ provider: "google", sub, email, firstName: given_name, lastName: family_name });
+      sess = await createSession(
+        { userId: String(userIdBn), sub, email, firstName: given_name, lastName: family_name, provider: "google" },
+        DEFAULT_TTL
+      );
+    } else {
+      // OAuth-first session, no DB user yet
+      sess = await createSession(
+        { sub, email, firstName: given_name, lastName: family_name, provider: "google" },
+        DEFAULT_TTL
+      );
+    }
     setSessionCookie(res as any, sess.sid);
     return res.success?.({ isAuthenticated: true }, 200);
   } catch (e: any) {
@@ -84,6 +112,26 @@ export async function checkEmail(req: Request, res: Response) {
   const emailLc = parsed.data.email.toLowerCase();
   const user = await findUserByEmail(emailLc);
   return res.success?.({ exists: !!user }, 200);
+}
+
+/**
+ * POST /auth/logout
+ * Clears the httpOnly cookie and revokes the server session (when Redis is available).
+ * Always responds 200 to avoid leaking auth state via timing.
+ */
+export async function logout(req: Request, res: Response) {
+  try {
+    const sid: string | undefined = (req as any)?.auth?.sid || (req.cookies && (req.cookies as any).sid);
+    if (sid) {
+      try { await revokeSession(sid); } catch {}
+    }
+    clearSessionCookie(res as any);
+    return res.success?.({ isAuthenticated: false }, 200);
+  } catch {
+    // Best-effort: clear cookie and return 200
+    try { clearSessionCookie(res as any); } catch {}
+    return res.success?.({ isAuthenticated: false }, 200);
+  }
 }
 
 

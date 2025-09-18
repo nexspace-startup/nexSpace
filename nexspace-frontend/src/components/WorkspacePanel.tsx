@@ -26,6 +26,9 @@ const WorkspacePanel: React.FC = () => {
   // Resizable width state (extra width up to 50px)
   const [extraWidth, setExtraWidth] = useState(0);
   const [dragging, setDragging] = useState(false);
+
+
+  // Dragging refs
   const dragStartX = useRef(0);
   const dragStartExtra = useRef(0);
 
@@ -177,6 +180,7 @@ const WorkspacePanel: React.FC = () => {
               New Workspace
             </button>
           </div>
+
         </div>
       </aside>
 

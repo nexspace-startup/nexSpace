@@ -1,4 +1,7 @@
-import React from "react";
+import React, { useMemo, useRef, useState } from "react";
+import { useUserStore } from "../stores/userStore";
+import { initialsFrom } from "../utils/util";
+import ProfileFlyout from "./ProfileFlyout";
 
 export type NavItem = { id: string; label: string; icon?: React.ReactNode };
 
@@ -9,9 +12,20 @@ type NavbarPanelProps = {
 };
 
 const NavbarPanel: React.FC<NavbarPanelProps> = ({ items, activeId, onSelect }) => {
+  const user = useUserStore((s) => s.user);
+
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+
+  const name = useMemo(() => user?.name || [user?.firstName, user?.lastName].filter(Boolean).join(" "), [user]);
+  const avatarUrl = user?.avatar;
+
   return (
     <nav
+      ref={rootRef as any}
       className="
+        relative
         w-[76px] shrink-0 h-screen
         bg-[#131316] border-r border-[#26272B]
         flex flex-col items-center
@@ -55,17 +69,27 @@ const NavbarPanel: React.FC<NavbarPanelProps> = ({ items, activeId, onSelect }) 
         {/* Divider */}
         <div className="w-6 border-t border-[#26272B]" />
 
-        {/* Settings */}
-        <button className="nav-btn">
-          <svg viewBox="0 0 24 24" className="w-6 h-6 text-[#80889B]">
-            <path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Zm7.4-2.5a7.9 7.9 0 0 0 .06-1l2.04-1.58-1.93-3.34-2.4.65a8 8 0 0 0-.86-.5l-.37-2.47H8.06l-.37 2.47c-.3.15-.59.32-.86.5l-2.4-.65-1.93 3.34L4.54 12a7.9 7.9 0 0 0 .06 1l-2.04 1.58 1.93 3.34 2.4-.65c.27.18.56.35.86.5l.37 2.47h7.38l.37-2.47c.3-.15.59-.32.86-.5l2.4.65 1.93-3.34L19.46 13Z" fill="currentColor"/>
-          </svg>
-        </button>
 
-        {/* Profile */}
+        {/* Profile button */}
         <div className="w-12 h-12 grid place-items-center">
-          <div className="w-9 h-9 rounded-xl bg-white/10 border border-[#26272B]" />
+          <button
+            ref={btnRef}
+            aria-label="Open profile menu"
+            className="w-9 h-9 rounded-xl bg-white/10 border border-[#26272B] overflow-hidden grid place-items-center"
+            onClick={() => setOpen((v) => !v)}
+          >
+            {avatarUrl ? (
+              // Avatar image
+              <img src={avatarUrl} alt={name || "User avatar"} className="w-full h-full object-cover" />
+            ) : (
+              // Fallback initials circle
+              <div className="w-full h-full rounded-xl bg-[rgba(88,39,218,0.25)] grid place-items-center">
+                <span className="text-[11px] font-semibold text-white/90">{initialsFrom(name)}</span>
+              </div>
+            )}
+          </button>
         </div>
+        <ProfileFlyout open={open} onClose={() => setOpen(false)} anchorRef={btnRef as any} />
       </div>
     </nav>
   );

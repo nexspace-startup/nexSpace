@@ -18,6 +18,7 @@ interface SMTPConfig {
 interface MailConfig {
   from: string;
   smtp: SMTPConfig;
+  sendgridApiKey?: string;
 }
 
 interface liveKitConfig {
@@ -55,6 +56,7 @@ export const config: Config = {
       pass: process.env.SMTP_PASS || "",
       secure: process.env.SMTP_SECURE === "true",
     },
+    sendgridApiKey: process.env.SENDGRID_API_KEY || "",
   },
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID,
