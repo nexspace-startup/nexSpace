@@ -156,7 +156,7 @@ const MeetingPanel: React.FC = () => {
 
           {/* Stage: Grid or 3D */}
           {viewMode === '3d' ? (
-            <Meeting3D bottomSafeAreaPx={isMobile ? 96 : 120} topSafeAreaPx={showTop ? 96 : 16} />
+            <Meeting3D bottomSafeAreaPx={0} topSafeAreaPx={0} />
           ) : (
             <MeetingGrid pageSize={24} bottomSafeAreaPx={isMobile ? 96 : 120} topSafeAreaPx={showTop ? 96 : 16} />
           )}

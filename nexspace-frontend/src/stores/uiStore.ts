@@ -9,8 +9,16 @@ type UIState = {
   isNavbarOpen: boolean;
   toggleNavbar: (open?: boolean) => void;
 
+  isTopWidgetOpen: boolean;
+  toggleTopWidget: (open?: boolean) => void;
+
+  isWorkspaceControlsOpen: boolean;
+  toggleWorkspaceControls: (open?: boolean) => void;
+
   activeNavId: string;
   setActiveNav: (id: string) => void;
+
+  setMeetingControlsVisible: (v: boolean) => void;
 };
 
 export const useUIStore = create<UIState>()(
@@ -24,5 +32,19 @@ export const useUIStore = create<UIState>()(
 
     activeNavId: 'workspace',
     setActiveNav: (id) => set({ activeNavId: id }),
+
+    setMeetingControlsVisible: (v) => set({
+      isTopWidgetOpen: v,
+      isWorkspaceControlsOpen: v,
+      isWorkspacePanelOpen: v,
+    }),
+
+    isTopWidgetOpen: true,
+    toggleTopWidget: (open) =>
+      set({ isTopWidgetOpen: typeof open === "boolean" ? open : !get().isTopWidgetOpen }),
+
+    isWorkspaceControlsOpen: true,
+    toggleWorkspaceControls: (open) =>
+      set({ isWorkspaceControlsOpen: typeof open === "boolean" ? open : !get().isWorkspaceControlsOpen }),
   }))
 );

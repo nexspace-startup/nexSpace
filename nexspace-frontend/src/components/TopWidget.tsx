@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useMeetingStore } from "../stores/meetingStore";
 import { initialsFrom } from "../utils/util";
+import { useUIStore } from "../stores/uiStore";
 
 const TopWidget: React.FC = () => {
   // Subscribe to individual slices to avoid unstable selector objects
@@ -19,6 +20,8 @@ const TopWidget: React.FC = () => {
   const extraCount = Math.max(0, participants.length - avatars.length);
   const chatOpen = useMeetingStore((s) => s.chatOpen);
   const shift = chatOpen ? "translateX(calc(-50% - 204px))" : "translateX(-50%)";
+  const isTopWidgetOpen = useUIStore((s) => s.isTopWidgetOpen);
+  if (!isTopWidgetOpen) return null;
 
   return (
     <div

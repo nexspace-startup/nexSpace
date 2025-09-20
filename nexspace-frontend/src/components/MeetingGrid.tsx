@@ -1,11 +1,12 @@
 // src/components/meeting/MeetingGrid.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useRoomContext, useTracks, VideoTrack, isTrackReference } from "@livekit/components-react";
 import type { Participant, Room } from "livekit-client";
 import { Track } from "livekit-client";
 import ProfileTile from "./ProfileTile";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useShallow } from "zustand/react/shallow";
+import { useUIStore } from "../stores/uiStore";
 
 const CROSS_COUNT = 5 as const;
 
@@ -29,11 +30,20 @@ function collectParticipants(
   }
   //test data to test meeting grid layouts
   // const arr: any[] = [];
-  // for (let i = 0; i < 1; i++) {
+  // for (let i = 0; i < 29; i++) {
   //   arr.push({ sid: `mock-${i}`, identity: `mock-${i}`, name: `User ${i + 1}` });
   // }
   // out.push(...arr);
   return out;
+}
+
+function getTeamsDims(n: number) {
+  if (n <= 1) return { rows: 1, cols: 1 };   // 1
+  if (n <= 4) return { rows: 2, cols: 2 };   // 2..4  -> 2x2
+  if (n <= 9) return { rows: 3, cols: 3 };   // 5..9  -> 3x3
+  if (n <= 16) return { rows: 4, cols: 4 };  // 10..16 -> 4x4
+  if (n <= 20) return { rows: 4, cols: 5 };  // 17..20 -> 4x5
+  return { rows: 4, cols: 6 };               // 21..24 -> 4x6 (max on a page)
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -45,8 +55,8 @@ function chunk<T>(arr: T[], size: number): T[][] {
 
 type Props = {
   pageSize?: number;
-  bottomSafeAreaPx?: number; // space reserved for controls
-  topSafeAreaPx?: number; // space reserved at top (TopWidget etc.)
+  bottomSafeAreaPx?: number;
+  topSafeAreaPx?: number;
 };
 
 const MeetingGrid: React.FC<Props> = ({
@@ -58,16 +68,36 @@ const MeetingGrid: React.FC<Props> = ({
   const avatars = useMeetingStore(useShallow((s) => s.participants));
   const chatOpen = useMeetingStore((s) => s.chatOpen);
 
-  // Resolve LiveKit Participant objects in the same order as the store list
+  // Workspace panel UI store
+  const isWorkspaceOpen = useUIStore((s) => s.isWorkspacePanelOpen);
+  const toggleWorkspacePanel = useUIStore((s) => s.toggleWorkspacePanel);
+
+  // Resolve participants
   const all = useMemo(() => collectParticipants(room, avatars), [room, avatars]);
 
-  // Find active screen share (first one)
-  // Include local screen shares too (not just subscribed remotes).
-  const screenRefs = useTracks([{ source: Track.Source.ScreenShare, withPlaceholder: false }], { onlySubscribed: false });
+  // Active screen share (first one; includes local)
+  const screenRefs = useTracks(
+    [{ source: Track.Source.ScreenShare, withPlaceholder: false }],
+    { onlySubscribed: false }
+  );
   const activeScreen = useMemo(() => {
     const ref = screenRefs.find((tr) => isTrackReference(tr));
     return isTrackReference(ref) ? ref : undefined;
   }, [screenRefs]);
+
+  // Close workspace panel once when sharing starts
+  const wasSharingRef = useRef(false);
+  useEffect(() => {
+    const isSharing = !!activeScreen;
+    if (isSharing && !wasSharingRef.current && isWorkspaceOpen) {
+      toggleWorkspacePanel();
+    }
+    wasSharingRef.current = isSharing;
+  }, [activeScreen, isWorkspaceOpen, toggleWorkspacePanel]);
+
+  // Expand/minimize state for stage
+  const [expanded, setExpanded] = useState(false);
+
 
   const { mode, items } = useMemo(() => {
     const n = all.length;
@@ -82,8 +112,6 @@ const MeetingGrid: React.FC<Props> = ({
   );
 
   const [page, setPage] = useState(0);
-
-  // If total pages change (usually shrink), keep the current page in range
   useEffect(() => {
     if (page > pages.length - 1) setPage(pages.length - 1);
   }, [pages.length, page]);
@@ -91,18 +119,39 @@ const MeetingGrid: React.FC<Props> = ({
   const current = pages[Math.min(page, pages.length - 1)] ?? [];
   const totalPages = pages.length;
 
-  const GridMany = useMemo(() =>
-    function GridManyInner() {
-      return (
-        <div className="grid w-full gap-x-2 gap-y-2 justify-items-center grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {current.map((p) => (
-            <ProfileTile key={(p as any)?.sid ?? p.identity} participant={p} />
-          ))}
-        </div>
-      );
-    },
+  const GridMany = useMemo(
+    () =>
+      function GridManyInner() {
+        const n = current.length;
+        const { rows, cols } = getTeamsDims(n);
+        const totalCells = rows * cols;
+        const ghosts = totalCells - n; // invisible placeholders to keep the rectangle
+
+        return (
+          <div
+            className="
+            grid w-full max-w-screen-xl mx-auto
+            gap-2 sm:gap-3
+            place-content-center justify-items-center
+          "
+            style={{
+              gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+            }}
+          >
+            {current.map((p) => (
+              <ProfileTile key={(p as any)?.sid ?? p.identity} participant={p} />
+            ))}
+
+            {/* Ghost cells so the grid keeps NxM shape and stays centered */}
+            {Array.from({ length: ghosts }).map((_, i) => (
+              <div key={`ghost-${i}`} className="opacity-0 pointer-events-none" />
+            ))}
+          </div>
+        );
+      },
     [current]
   );
+
 
   const GridOne = useMemo(
     () =>
@@ -143,21 +192,63 @@ const MeetingGrid: React.FC<Props> = ({
     [current]
   );
 
+  // Safe-area paddings: keep margins when sharing but not expanded; remove when expanded
+  const topPad = activeScreen ? (expanded ? 0 : topSafeAreaPx) : topSafeAreaPx;
+  const bottomPad = activeScreen ? (expanded ? 0 : bottomSafeAreaPx) : bottomSafeAreaPx;
+  // Side padding for the stage container (left/right)
+  const sidePadClass = activeScreen && !expanded ? "px-4 sm:px-6" : "px-0";
+
+  // Rounded corners only when not expanded
+  const stageRoundClass = expanded ? "rounded-none" : "rounded-xl";
+
   return (
     <div className="relative h-full w-full bg-[#202024]">
-      {/* Centered stage with your max width */}
-      <div className="relative mx-auto h-full w-full px-3 sm:px-0" style={{ paddingRight: chatOpen ? 408 : undefined }}>
-        {/* Keep space for the top pill and bottom controls */}
+      {/* Full width; keep right pad for chat */}
+      <div
+        className="relative mx-auto h-full w-full px-3 sm:px-0"
+        style={{ paddingRight: chatOpen ? 408 : undefined }}
+      >
+        {/* Keep space for the top pill and bottom controls OR none if expanded */}
         <div
-          className="h-full w-full flex items-center justify-center"
-          style={{ paddingTop: activeScreen ? 0 : topSafeAreaPx, paddingBottom: activeScreen ? 0 : bottomSafeAreaPx }}
+          className={`h-full w-full flex items-center justify-center ${sidePadClass}`}
+          style={{
+            paddingTop: topPad,
+            paddingBottom: bottomPad,
+          }}
         >
           {activeScreen ? (
-            <div className="relative w-full h-full rounded-xl overflow-hidden bg-black">
-              <VideoTrack trackRef={activeScreen} className="!w-full !h-full object-contain" data-lk-object-fit="contain" />
+            <div className={`relative w-full h-full overflow-hidden bg-black ${stageRoundClass}`}>
+              <VideoTrack
+                trackRef={activeScreen}
+                className="!w-full !h-full object-contain"
+                data-lk-object-fit="contain"
+              />
               <div className="absolute left-3 top-3 px-2 py-1 rounded bg-black/50 text-white text-xs">
-                Presenting: {((activeScreen as any)?.participant?.name) || ((activeScreen as any)?.participant?.identity) || 'Screen'}
+                Presenting:{" "}
+                {((activeScreen as any)?.participant?.name) ||
+                  ((activeScreen as any)?.participant?.identity) ||
+                  "Screen"}
               </div>
+
+              {/* Expand / Minimize button */}
+              <button
+                onClick={() => setExpanded((v) => !v)}
+                className="absolute bottom-3 right-3 w-10 h-10 rounded-full bg-black/60 hover:bg-black/70 text-white grid place-items-center shadow-md"
+                aria-label={expanded ? "Minimize presentation" : "Expand presentation"}
+                title={expanded ? "Minimize" : "Expand"}
+              >
+                {expanded ? (
+                  // Minimize icon (inwards arrows)
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                    <path d="M9 3v2H5v4H3V3h6zM21 9h-2V5h-4V3h6v6zM3 15h2v4h4v2H3v-6zM15 21v-2h4v-4h2v6h-6z" fill="currentColor" />
+                  </svg>
+                ) : (
+                  // Expand icon (outwards arrows)
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                    <path d="M9 3H3v6h2V5h4V3zM21 3h-6v2h4v4h2V3zM5 17H3v4h6v-2H5v-2zM21 17h-2v2h-4v2h6v-4z" fill="currentColor" />
+                  </svg>
+                )}
+              </button>
             </div>
           ) : (
             <>

@@ -157,12 +157,12 @@ const ChatPanel: React.FC = () => {
                   )}
                 </div>
               )}
-              <div className={`max-w-[80%] ${isMine ? 'text-right' : ''}`}>
+              <div className={`max-w-[80%]`}>
                 {!isMine && (
                   <div className="text-[11px] mb-0.5" style={{ color: accent }}>{m.senderName}</div>
                 )}
                 <div
-                  className={`inline-block max-w-full ${bubbleBase} ${bubbleStatus} rounded-lg px-3 py-1.5 whitespace-pre-wrap break-words`}
+                  className={`inline-block max-w-full ${bubbleBase} ${bubbleStatus} rounded-lg px-3 py-1.5 whitespace-pre-wrap break-words text-left`}
                   style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' as any }}
                   title={status === 'pending' ? 'Sending…' : status === 'failed' ? 'Failed to send' : ''}
                 >
