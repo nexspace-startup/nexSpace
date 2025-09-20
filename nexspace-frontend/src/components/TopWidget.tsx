@@ -22,7 +22,7 @@ const TopWidget: React.FC = () => {
 
   return (
     <div
-      className="widget-top left-1/2 w-[calc(100%-24px)] max-w-[385px]"
+      className="widget-top left-1/2 w-auto"
       style={{ top: 24, height: 60, transform: shift }}
     >
       <div className="widget-top-inner w-full h-full">
