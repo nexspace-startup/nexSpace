@@ -146,14 +146,14 @@ const MeetingGrid: React.FC<Props> = ({
   return (
     <div className="relative h-full w-full bg-[#202024]">
       {/* Centered stage with your max width */}
-      <div className="relative mx-auto h-full w-full max-w-[1000px] px-3 sm:px-0" style={{ paddingRight: chatOpen ? 408 : undefined }}>
+      <div className="relative mx-auto h-full w-full px-3 sm:px-0" style={{ paddingRight: chatOpen ? 408 : undefined }}>
         {/* Keep space for the top pill and bottom controls */}
         <div
           className="h-full w-full flex items-center justify-center"
-          style={{ paddingTop: topSafeAreaPx, paddingBottom: bottomSafeAreaPx }}
+          style={{ paddingTop: activeScreen ? 0 : topSafeAreaPx, paddingBottom: activeScreen ? 0 : bottomSafeAreaPx }}
         >
           {activeScreen ? (
-            <div className="relative w-full h-full max-h-[70vh] rounded-xl overflow-hidden bg-black">
+            <div className="relative w-full h-full rounded-xl overflow-hidden bg-black">
               <VideoTrack trackRef={activeScreen} className="!w-full !h-full object-contain" data-lk-object-fit="contain" />
               <div className="absolute left-3 top-3 px-2 py-1 rounded bg-black/50 text-white text-xs">
                 Presenting: {((activeScreen as any)?.participant?.name) || ((activeScreen as any)?.participant?.identity) || 'Screen'}
