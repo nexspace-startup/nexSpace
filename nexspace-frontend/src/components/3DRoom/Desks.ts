@@ -43,8 +43,8 @@ export function createDeskModule(): DeskPrefab {
         topMat, legMat, chairMat, darkMat, subtleMat,
         deskW, deskD, deskH, monitorW, monitorH,
         dispose() {
-            [topGeo, legGeo, chairGeo, monitorGeo, kbGeo, mouseGeo, mugGeo, plantGeo].forEach(g => { try { g.dispose(); } catch { } });
-            [topMat, legMat, chairMat, darkMat, subtleMat].forEach((m: any) => { try { m.dispose?.(); } catch { } });
+            [topGeo, legGeo, chairGeo, monitorGeo, kbGeo, mouseGeo, mugGeo, plantGeo].forEach((g) => g.dispose());
+            [topMat, legMat, chairMat, darkMat, subtleMat].forEach((m: any) => m.dispose?.());
         }
     };
 }

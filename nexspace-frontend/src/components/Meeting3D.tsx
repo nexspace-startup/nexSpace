@@ -20,6 +20,12 @@ const norm = (v: any) => String(v ?? '');
 const ROOM_W = 48;
 const ROOM_D = 34;
 
+// --- Movement tuning ---
+const BASE_WALK_SPEED = 4.2;     // was ~2.5
+const SPRINT_MULT = 1.75;    // hold Shift
+const AUTO_PATH_SPEED = 4.8;     // for queued click-to-move
+const TURN_SPEED = 2.4;     // Q/E yaw (rad/s), was ~1.8
+
 // ——— Name sprite (smaller) ———
 function makeNameSpriteSmall(text: string): THREE.Sprite {
   const canvas = document.createElement('canvas');
@@ -119,6 +125,18 @@ function aStar(nodes: NavNode[], edges: NavEdge[], startId: string, goalId: stri
   return null;
 }
 
+// ——— Path visualization ———
+function createPathLine(points: THREE.Vector3[]): THREE.Line {
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const material = new THREE.LineBasicMaterial({
+    color: 0x4a90e2,
+    transparent: true,
+    opacity: 0.8,
+    linewidth: 3
+  });
+  return new THREE.Line(geometry, material);
+}
+
 const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96 }) => {
   const { participants, room } = useMeetingStore(useShallow((s) => ({ participants: s.participants, room: s.room })));
   const chatOpen = useMeetingStore((s) => s.chatOpen);
@@ -126,11 +144,12 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const containerRef = useRef<HTMLDivElement | null>(null);
   const minimapRef = useRef<HTMLCanvasElement | null>(null);
 
+  // FIXED: More robust local participant detection
   const localSid = useMemo(() => {
     try {
       const rp: any = (room as any)?.localParticipant;
-      return norm(rp?.sid ?? rp?.identity);
-    } catch { return undefined; }
+      return norm(rp?.sid ?? rp?.identity ?? '');
+    } catch { return ''; }
   }, [room]);
 
   // LiveKit
@@ -151,9 +170,15 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const cameraDistRef = useRef<number>(7.0);
   const targetDistRef = useRef<number>(7.0);
 
-  // Auto-path
+  // NEW: independent camera target & pan/follow lock
+  const camTargetRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 1.2, 0));
+  const isPanningRef = useRef<boolean>(false);
+  const followLockRef = useRef<boolean>(false); // locks view after a pan until movement/rotate or explicit reset
+
+  // Auto-path with visualization
   const pathQueueRef = useRef<THREE.Vector3[]>([]);
   const autoGhostRef = useRef<boolean>(false);
+  const pathLineRef = useRef<THREE.Line | null>(null);
 
   // Static env
   const stageScreenRef = useRef<THREE.Mesh | null>(null);
@@ -174,7 +199,8 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const zonesInfoRef = useRef<BuiltZonesInfo | null>(null);
   const navNodesRef = useRef<NavNode[]>([]);
   const navEdgesRef = useRef<Array<[string, string]>>([]);
-  const minimapHitsRef = useRef<Array<{ x: number; y: number; w: number; h: number; target?: THREE.Vector3; allowGhost?: boolean }>>([]);
+  const minimapHitsRef = useRef<Array<{ x: number; y: number; w: number; h: number; target?: THREE.Vector3; allowGhost?: boolean; roomName?: string }>>([]);
+  const roomLabelsRef = useRef<THREE.Sprite[]>([]);
 
   // Remote movement sync
   const remoteTargetsRef = useRef<Map<string, { pos: THREE.Vector3; yaw: number }>>(new Map());
@@ -185,19 +211,73 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const diceSpinRef = useRef<{ t: number; dur: number; targetEuler: THREE.Euler } | null>(null);
   const [insideGameRoom, setInsideGameRoom] = useState(false);
 
-  // —— Scene build ——
+  // —— LiveKit data send guard (NEW) ——
+  const canSendDataRef = useRef<boolean>(false);
+  const lastDataSentAtRef = useRef<number>(0);
+
+  // —— Scene build (ONLY ONCE) —— 
   useEffect(() => {
-    const container = containerRef.current; if (!container) return;
-    let scene = sceneRef.current; let renderer = rendererRef.current; let camera = cameraRef.current;
-    if (!scene) { scene = new THREE.Scene(); scene.background = new THREE.Color(0x111419); sceneRef.current = scene; }
-    if (!renderer) {
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-      renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.5));
-      renderer.setSize(container.clientWidth, container.clientHeight);
-      rendererRef.current = renderer; container.appendChild(renderer.domElement);
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Prevent duplicate initialization in StrictMode
+    if (sceneRef.current && rendererRef.current && cameraRef.current) {
+      return;
     }
+
+    let scene = sceneRef.current;
+    let renderer = rendererRef.current;
+    let camera = cameraRef.current;
+
+    if (!scene) {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x111419);
+      sceneRef.current = scene;
+    }
+
+    if (!renderer) {
+      try {
+        renderer = new THREE.WebGLRenderer({
+          antialias: true,
+          alpha: false,
+          failIfMajorPerformanceCaveat: false,
+          preserveDrawingBuffer: false
+        });
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.5));
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        rendererRef.current = renderer;
+        container.appendChild(renderer.domElement);
+      } catch (webglError) {
+        console.warn('WebGL initialization failed:', webglError);
+        // Show fallback message
+        const fallback = document.createElement('div');
+        fallback.style.cssText = `
+          width: 100%;
+          height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: #111419;
+          color: white;
+          font-family: system-ui;
+          text-align: center;
+          padding: 20px;
+        `;
+        fallback.innerHTML = `
+          <div>
+            <h3>3D View Unavailable</h3>
+            <p>WebGL is not supported or has been disabled in your browser.</p>
+            <p>Try refreshing the page or enabling hardware acceleration.</p>
+          </div>
+        `;
+        container.appendChild(fallback);
+        return;
+      }
+    }
+
     if (!camera) {
       camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 800);
       camera.position.set(0, 2.2, 7.0);
@@ -215,6 +295,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     zonesInfoRef.current = zones;
     obstaclesRef.current.push(...zones.zoneColliders);
     if (zones.stageScreen) stageScreenRef.current = zones.stageScreen;
+    if (zones.roomLabels) roomLabelsRef.current = zones.roomLabels;
     diceMeshRef.current = scene.getObjectByName?.('GAME_ROOM_DICE') as THREE.Mesh | null;
 
     const prefab = createDeskModule();
@@ -233,38 +314,166 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     deskMgrRef.current = mgr;
     obstaclesRef.current.push(...mgr.colliders);
 
-    const avatars = new THREE.Group(); avatarsGroupRef.current = avatars; scene.add(avatars);
+    const avatars = new THREE.Group();
+    avatarsGroupRef.current = avatars;
+    scene.add(avatars);
 
     navNodesRef.current = zones.navNodes.map(n => ({ id: n.id, x: n.x, z: n.z }));
     navEdgesRef.current = zones.navEdges.map(e => [e[0], e[1]]);
 
+    // Enhanced pathfinding function with visualization
+    const queuePathTo = (tx: number, tz: number, allowGhost = false, roomName?: string) => {
+      const you = avatarRef.current;
+      if (!you) return;
+
+      // Clear existing path line
+      if (pathLineRef.current) {
+        scene.remove(pathLineRef.current);
+        pathLineRef.current.geometry.dispose();
+        (pathLineRef.current.material as THREE.Material).dispose();
+        pathLineRef.current = null;
+      }
+
+      autoGhostRef.current = allowGhost;
+
+      const nodes = navNodesRef.current;
+      if (!nodes.length) {
+        pathQueueRef.current = [new THREE.Vector3(tx, 0, tz)];
+        return;
+      }
+
+      // Find best start and goal nodes
+      let startId = nodes[0].id, goalId = nodes[0].id;
+      let bestS = Infinity, bestG = Infinity;
+
+      for (const n of nodes) {
+        const ds = dist2({ x: you.position.x, z: you.position.z }, n);
+        if (ds < bestS) { bestS = ds; startId = n.id; }
+        const dg = dist2({ x: tx, z: tz }, n);
+        if (dg < bestG) { bestG = dg; goalId = n.id; }
+      }
+
+      // Calculate path using A*
+      const pathIds = aStar(nodes, navEdgesRef.current as any, startId!, goalId!);
+      const idToNode = new Map(nodes.map(n => [n.id, n]));
+      const queue: THREE.Vector3[] = [];
+      const visualPath: THREE.Vector3[] = [];
+
+      // Add current position as start of visual path
+      visualPath.push(you.position.clone());
+      visualPath[0].y = 0.1; // Slightly above ground
+
+      if (pathIds) {
+        for (const id of pathIds) {
+          const n = idToNode.get(id)!;
+          const pos = new THREE.Vector3(n.x, 0, n.z);
+          queue.push(pos.clone());
+          visualPath.push(new THREE.Vector3(n.x, 0.1, n.z));
+        }
+      }
+
+      // Add final destination
+      const finalPos = new THREE.Vector3(tx, 0, tz);
+      queue.push(finalPos.clone());
+      visualPath.push(new THREE.Vector3(tx, 0.1, tz));
+
+      pathQueueRef.current = queue;
+
+      // Create visual path line
+      if (visualPath.length > 1) {
+        pathLineRef.current = createPathLine(visualPath);
+        scene.add(pathLineRef.current);
+
+        // Remove path line after a delay or when reaching destination
+        setTimeout(() => {
+          if (pathLineRef.current && scene) {
+            scene.remove(pathLineRef.current);
+            pathLineRef.current.geometry.dispose();
+            (pathLineRef.current.material as THREE.Material).dispose();
+            pathLineRef.current = null;
+          }
+        }, 15000); // Remove after 15 seconds
+      }
+
+      if (roomName) {
+        console.log(`Navigating to ${roomName}...`);
+      }
+    };
+
     // INPUT
-    const onResize = () => { if (!container || !renderer || !camera) return; const w = container.clientWidth; const h = container.clientHeight; renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); };
+    const onResize = () => {
+      if (!container || !renderer || !camera) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    };
     window.addEventListener('resize', onResize);
 
     const onKey = (e: KeyboardEvent) => {
       const code = e.code;
       const keys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyQ', 'KeyE', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract'];
-      if (keys.includes(code)) { keyState.current[code] = e.type === 'keydown'; e.preventDefault(); }
+      if (keys.includes(code)) {
+        keyState.current[code] = e.type === 'keydown';
+        e.preventDefault();
+      }
       if (e.type === 'keydown') container.focus();
     };
     window.addEventListener('keydown', onKey, { capture: true });
     window.addEventListener('keyup', onKey, { capture: true });
 
-    // Mouse orbit/rotate
+    // Mouse orbit / rotate / pan
     let dragging = false, lastX = 0, lastY = 0, dragButton = 0;
-    const onMouseDown = (e: MouseEvent) => { dragging = true; dragButton = e.button; lastX = e.clientX; lastY = e.clientY; container.focus(); };
-    const onMouseUp = () => { dragging = false; };
+
+    const onMouseDown = (e: MouseEvent) => {
+      dragging = true;
+      dragButton = e.button;      // 0=LMB, 1=MMB, 2=RMB
+      isPanningRef.current = (dragButton === 1 || dragButton === 2);
+      if (isPanningRef.current) followLockRef.current = true; // lock view after we start panning
+      lastX = e.clientX; lastY = e.clientY;
+      container.focus();
+    };
+
+    const onMouseUp = () => {
+      dragging = false;
+      isPanningRef.current = false; // keep follow locked until movement/rotate
+    };
+
     const onMouseMove = (e: MouseEvent) => {
       if (!dragging) return;
-      const dx = e.clientX - lastX, dy = e.clientY - lastY; lastX = e.clientX; lastY = e.clientY;
+      const dx = e.clientX - lastX, dy = e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+
       if (dragButton === 0) {
+        // LMB = orbit
         yawRef.current -= dx * 0.2 * DEG2RAD;
         pitchRef.current = clamp(pitchRef.current - dy * 0.15 * DEG2RAD, -0.05, 0.8);
-      } else if (dragButton === 2) {
-        yawRef.current -= dx * 0.25 * DEG2RAD;
+      } else if (dragButton === 1 || dragButton === 2) {
+        // MMB or RMB = PAN (Miro/Figma style)
+        const cam = cameraRef.current;
+        if (!cam) return;
+
+        // Pan amount scales with distance so it feels natural
+        const dist = cameraDistRef.current;
+        const k = 0.0018 * dist;
+
+        // Camera's forward & right projected to ground plane (XZ)
+        const dir = new THREE.Vector3(); cam.getWorldDirection(dir);
+        const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
+        const fwdXZ = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), right).normalize();
+
+        // Move the camera TARGET (not the avatar)
+        camTargetRef.current.addScaledVector(right, -dx * k);
+        camTargetRef.current.addScaledVector(fwdXZ, dy * k);
+
+        // Clamp target to room bounds
+        const b = roomBoundsRef.current;
+        camTargetRef.current.x = clamp(camTargetRef.current.x, b.minX, b.maxX);
+        camTargetRef.current.z = clamp(camTargetRef.current.z, b.minZ, b.maxZ);
       }
     };
+
     const containerEl = container;
     containerEl.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
@@ -272,14 +481,82 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     containerEl.addEventListener('contextmenu', (e) => e.preventDefault());
 
     // Wheel zoom
-    const onWheel = (e: WheelEvent) => { e.preventDefault(); container.focus(); const dir = Math.sign(e.deltaY); const step = 1.0; const next = targetDistRef.current + dir * step; targetDistRef.current = clamp(next, 1.6, 32.0); };
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      container.focus();
+      const dir = Math.sign(e.deltaY);
+      const step = 1.0;
+      const next = targetDistRef.current + dir * step;
+      targetDistRef.current = clamp(next, 1.6, 32.0);
+    };
     containerEl.addEventListener('wheel', onWheel, { passive: false });
 
-    // Double-click the big presentation screen => reset to “normal” view (no zoom tricks)
+    // Single click for room navigation, double-click the big presentation screen => reset & recenter
+    const onClick = (e: MouseEvent) => {
+      // Don't navigate if we're dragging
+      if (dragging) return;
+
+      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -(((e.clientY - rect.top) / rect.height) * 2 - 1)
+      );
+
+      const ray = new THREE.Raycaster();
+      const cam = cameraRef.current!;
+      ray.setFromCamera(ndc, cam);
+
+      // Check for room label clicks
+      const roomLabels = roomLabelsRef.current;
+      if (roomLabels.length > 0) {
+        const labelHits = ray.intersectObjects(roomLabels);
+        if (labelHits.length > 0) {
+          const hitLabel = labelHits[0].object as THREE.Sprite;
+          const roomData = (hitLabel as any).userData;
+          if (roomData && roomData.roomName && roomData.centerX !== undefined && roomData.centerZ !== undefined) {
+            queuePathTo(roomData.centerX, roomData.centerZ, false, roomData.roomName);
+            e.preventDefault();
+            return;
+          }
+        }
+      }
+    };
+
+    // Mouse move for hover cursor
+    const onMouseMoveHover = (e: MouseEvent) => {
+      if (dragging) return;
+
+      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -(((e.clientY - rect.top) / rect.height) * 2 - 1)
+      );
+
+      const ray = new THREE.Raycaster();
+      const cam = cameraRef.current!;
+      ray.setFromCamera(ndc, cam);
+
+      // Check if hovering over room labels
+      const roomLabels = roomLabelsRef.current;
+      let isHoveringLabel = false;
+
+      if (roomLabels.length > 0) {
+        const labelHits = ray.intersectObjects(roomLabels);
+        if (labelHits.length > 0) {
+          isHoveringLabel = true;
+        }
+      }
+
+      // Update cursor
+      container.style.cursor = isHoveringLabel ? 'pointer' : 'default';
+    };
+
     const onDblClick = (e: MouseEvent) => {
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -(((e.clientY - rect.top) / rect.height) * 2 - 1));
-      const ray = new THREE.Raycaster(); const cam = cameraRef.current!; ray.setFromCamera(ndc, cam);
+      const ray = new THREE.Raycaster();
+      const cam = cameraRef.current!;
+      ray.setFromCamera(ndc, cam);
       const screen = stageScreenRef.current;
       if (!screen) return;
       const hits = ray.intersectObject(screen, true);
@@ -287,68 +564,91 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         e.preventDefault();
         targetDistRef.current = cameraDistRef.current = 7.0;
         pitchRef.current = 0.25;
-        // keep yaw as-is; user’s orientation shouldn’t jump
+        // keep yaw as-is
+
+        // Re-center camera target on your avatar for convenience
+        if (avatarRef.current) {
+          camTargetRef.current.copy(avatarRef.current.position);
+          camTargetRef.current.y = 1.2;
+        }
+
+        // Release follow lock when explicitly recentering
+        followLockRef.current = false;
       }
     };
+
+    containerEl.addEventListener('click', onClick);
+    containerEl.addEventListener('mousemove', onMouseMoveHover);
     containerEl.addEventListener('dblclick', onDblClick);
 
-    // Minimap click (names => ghost through walls)
+    // Minimap click (names => ghost through walls, rooms => smart pathfinding)
     const onMinimapClick = (e: MouseEvent) => {
-      const canvas = minimapRef.current; if (!canvas) return;
+      const canvas = minimapRef.current;
+      if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       for (const h of minimapHitsRef.current) {
         if (mx >= h.x && mx <= h.x + h.w && my >= h.y && my <= h.y + h.h) {
-          if (h.target) { queuePathTo(h.target.x, h.target.z, !!h.allowGhost); return; }
+          if (h.target) {
+            queuePathTo(h.target.x, h.target.z, !!h.allowGhost, h.roomName);
+            return;
+          }
         }
       }
     };
     minimapRef.current?.addEventListener('click', onMinimapClick);
 
-    const queuePathTo = (tx: number, tz: number, allowGhost = false) => {
-      const you = avatarRef.current; if (!you) return;
-      autoGhostRef.current = allowGhost;
-
-      const nodes = navNodesRef.current;
-      if (!nodes.length) { pathQueueRef.current = [new THREE.Vector3(tx, 0, tz)]; return; }
-
-      let startId = nodes[0].id, goalId = nodes[0].id;
-      let bestS = Infinity, bestG = Infinity;
-      for (const n of nodes) {
-        const ds = dist2({ x: you.position.x, z: you.position.z }, n);
-        if (ds < bestS) { bestS = ds; startId = n.id; }
-        const dg = dist2({ x: tx, z: tz }, n);
-        if (dg < bestG) { bestG = dg; goalId = n.id; }
-      }
-      const pathIds = aStar(nodes, navEdgesRef.current as any, startId!, goalId!);
-      const idToNode = new Map(nodes.map(n => [n.id, n]));
-      const queue: THREE.Vector3[] = [];
-      if (pathIds) { for (const id of pathIds) { const n = idToNode.get(id)!; queue.push(new THREE.Vector3(n.x, 0, n.z)); } queue.push(new THREE.Vector3(tx, 0, tz)); }
-      else { queue.push(new THREE.Vector3(tx, 0, tz)); }
-      pathQueueRef.current = queue;
-    };
-
     // Animation loop
     let lastT = performance.now();
     const animate = () => {
-      const now = performance.now(); const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
-      const you = avatarRef.current; const cam = cameraRef.current!;
+      // Don't run animation if WebGL failed
+      if (!renderer || !scene || !camera) {
+        return;
+      }
+
+      const now = performance.now();
+      const dt = Math.min(0.05, (now - lastT) / 1000);
+      lastT = now;
+      const you = avatarRef.current;
+      const cam = cameraRef.current!;
+
       if (you) {
-        const speed = (keyState.current['ShiftLeft'] || keyState.current['ShiftRight']) ? 3.8 : 2.5;
+        const isSprinting = keyState.current['ShiftLeft'] || keyState.current['ShiftRight'];
         const yaw = yawRef.current;
 
         let vx = 0, vz = 0;
         const fwd = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw));
         const rgt = new THREE.Vector2(-fwd.y, fwd.x);
-        const manualMove = (keyState.current['KeyW'] || keyState.current['ArrowUp'] || keyState.current['KeyS'] || keyState.current['ArrowDown'] || keyState.current['KeyA'] || keyState.current['ArrowLeft'] || keyState.current['KeyD'] || keyState.current['ArrowRight']);
+        const manualMove = (
+          keyState.current['KeyW'] || keyState.current['ArrowUp'] ||
+          keyState.current['KeyS'] || keyState.current['ArrowDown'] ||
+          keyState.current['KeyA'] || keyState.current['ArrowLeft'] ||
+          keyState.current['KeyD'] || keyState.current['ArrowRight']
+        );
+        const rotating = keyState.current['KeyQ'] || keyState.current['KeyE'];
+        const autoPathing = pathQueueRef.current.length > 0;
+        const speed =
+          (autoPathing ? AUTO_PATH_SPEED : BASE_WALK_SPEED) *
+          (isSprinting ? SPRINT_MULT : 1);
 
-        if (manualMove) { pathQueueRef.current = []; autoGhostRef.current = false; }
+        if (manualMove) {
+          pathQueueRef.current = [];
+          autoGhostRef.current = false;
+          // Clear path line when manually moving
+          if (pathLineRef.current) {
+            scene.remove(pathLineRef.current);
+            pathLineRef.current.geometry.dispose();
+            (pathLineRef.current.material as THREE.Material).dispose();
+            pathLineRef.current = null;
+          }
+        }
+
         if (keyState.current['KeyW'] || keyState.current['ArrowUp']) { vx += fwd.x; vz += fwd.y; }
         if (keyState.current['KeyS'] || keyState.current['ArrowDown']) { vx -= fwd.x; vz -= fwd.y; }
         if (keyState.current['KeyA'] || keyState.current['ArrowLeft']) { vx -= rgt.x; vz -= rgt.y; }
         if (keyState.current['KeyD'] || keyState.current['ArrowRight']) { vx += rgt.x; vz += rgt.y; }
-        if (keyState.current['KeyQ']) { yawRef.current += 1.8 * dt; }
-        if (keyState.current['KeyE']) { yawRef.current -= 1.8 * dt; }
+        if (keyState.current['KeyQ']) { yawRef.current += TURN_SPEED * dt; }
+        if (keyState.current['KeyE']) { yawRef.current -= TURN_SPEED * dt; }
         if (keyState.current['Equal'] || keyState.current['NumpadAdd']) { targetDistRef.current = clamp(targetDistRef.current - 2.5 * dt, 1.6, 18.0); }
         if (keyState.current['Minus'] || keyState.current['NumpadSubtract']) { targetDistRef.current = clamp(targetDistRef.current + 2.5 * dt, 1.6, 32.0); }
 
@@ -358,14 +658,30 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           const dx = t.x - you.position.x;
           const dz = t.z - you.position.z;
           const d = Math.hypot(dx, dz);
-          if (d < 0.15) { pathQueueRef.current.shift(); if (!pathQueueRef.current.length) autoGhostRef.current = false; }
-          else { vx = dx / d; vz = dz / d; }
+          if (d < 0.15) {
+            pathQueueRef.current.shift();
+            if (!pathQueueRef.current.length) {
+              autoGhostRef.current = false;
+              // Clear path line when destination reached
+              if (pathLineRef.current) {
+                scene.remove(pathLineRef.current);
+                pathLineRef.current.geometry.dispose();
+                (pathLineRef.current.material as THREE.Material).dispose();
+                pathLineRef.current = null;
+              }
+            }
+          } else {
+            vx = dx / d;
+            vz = dz / d;
+          }
         }
 
         // Apply movement
         const stepLen = ((vx || vz) ? speed : 0) * dt;
         if (vx !== 0 || vz !== 0) {
-          const len = Math.hypot(vx, vz); vx /= len; vz /= len;
+          const len = Math.hypot(vx, vz);
+          vx /= len;
+          vz /= len;
           const bounds = roomBoundsRef.current;
 
           if (autoGhostRef.current) {
@@ -387,13 +703,32 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
                 Math.min(bounds.maxZ, Math.max(bounds.minZ, nz))
               );
               const youBox = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(target.x, 0.85, target.z), new THREE.Vector3(0.35, 1.6, 0.35));
-              let blocked = false; for (const b of obstaclesRef.current) { if (b.intersectsBox(youBox)) { blocked = true; break; } }
-              if (!blocked) { you.position.set(target.x, you.position.y, target.z); }
-              else {
+              let blocked = false;
+              for (const b of obstaclesRef.current) {
+                if (b.intersectsBox(youBox)) {
+                  blocked = true;
+                  break;
+                }
+              }
+              if (!blocked) {
+                you.position.set(target.x, you.position.y, target.z);
+              } else {
                 const tryX = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(target.x, 0.85, you.position.z), new THREE.Vector3(0.35, 1.6, 0.35));
                 const tryZ = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(you.position.x, 0.85, target.z), new THREE.Vector3(0.35, 1.6, 0.35));
-                let okX = true; for (const b of obstaclesRef.current) { if (b.intersectsBox(tryX)) { okX = false; break; } }
-                let okZ = true; for (const b of obstaclesRef.current) { if (b.intersectsBox(tryZ)) { okZ = false; break; } }
+                let okX = true;
+                for (const b of obstaclesRef.current) {
+                  if (b.intersectsBox(tryX)) {
+                    okX = false;
+                    break;
+                  }
+                }
+                let okZ = true;
+                for (const b of obstaclesRef.current) {
+                  if (b.intersectsBox(tryZ)) {
+                    okZ = false;
+                    break;
+                  }
+                }
                 if (okX) you.position.set(target.x, you.position.y, you.position.z);
                 if (okZ) you.position.set(you.position.x, you.position.y, target.z);
               }
@@ -401,21 +736,32 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           }
         }
 
-        // Camera follow
-        const zoomSpeed = 6.0; cameraDistRef.current += (targetDistRef.current - cameraDistRef.current) * Math.min(1, zoomSpeed * dt);
+        // Camera behavior
+        const zoomSpeed = 6.0;
+        cameraDistRef.current += (targetDistRef.current - cameraDistRef.current) * Math.min(1, zoomSpeed * dt);
         const dist = cameraDistRef.current;
-        const pitch = pitchRef.current; const yaw2 = yawRef.current;
-        const off = new THREE.Vector3(Math.sin(yaw2) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw2) * Math.cos(pitch)).multiplyScalar(dist);
-        cam.position.set(you.position.x + off.x, 1.2 + off.y, you.position.z + off.z);
-        cam.lookAt(you.position.x, 1.2, you.position.z);
+        const pitch = pitchRef.current;
+        const yaw2 = yawRef.current;
 
-        // Broadcast movement
-        try {
-          if ((room as any)?.localParticipant?.publishData && (now % 200) < 16) {
-            const payload = JSON.stringify({ t: 'pos', id: norm(localSid), x: you.position.x, y: you.position.y, z: you.position.z, yaw: yawRef.current });
-            (room as any).localParticipant.publishData(new TextEncoder().encode(payload), { reliable: false });
-          }
-        } catch { }
+        // If user starts moving/rotating/auto-pathing while follow is locked (after pan),
+        // immediately snap target back to avatar and unlock follow.
+        if (followLockRef.current && (manualMove || rotating || autoPathing)) {
+          camTargetRef.current.set(you.position.x, 1.2, you.position.z);
+          followLockRef.current = false; // resume normal auto-follow
+        }
+
+        // Smoothly follow avatar when NOT actively panning and NOT locked
+        if (you && !isPanningRef.current && !followLockRef.current) {
+          const follow = new THREE.Vector3(you.position.x, 1.2, you.position.z);
+          camTargetRef.current.lerp(follow, 0.14); // slightly faster to feel snappy
+        }
+
+        const off = new THREE.Vector3(Math.sin(yaw2) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw2) * Math.cos(pitch)).multiplyScalar(dist);
+        const tgt = camTargetRef.current;
+        const targetY = 1.2;
+
+        cam.position.set(tgt.x + off.x, targetY + off.y, tgt.z + off.z);
+        cam.lookAt(tgt.x, targetY, tgt.z);
 
         // Inside Game Room?
         const zinfo = zonesInfoRef.current;
@@ -447,7 +793,8 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
       // Dice spin anim
       if (diceSpinRef.current && diceMeshRef.current) {
-        const s = diceSpinRef.current; const dt2 = dt;
+        const s = diceSpinRef.current;
+        const dt2 = dt;
         s.t += dt2;
         const k = Math.min(1, s.t / s.dur);
         diceMeshRef.current.rotation.x += 10 * dt2 * (1 - k);
@@ -475,6 +822,55 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     };
     animate();
 
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('keydown', onKey, { capture: true } as any);
+      window.removeEventListener('keyup', onKey, { capture: true } as any);
+      containerEl.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('mousemove', onMouseMove);
+      containerEl.removeEventListener('mousemove', onMouseMoveHover);
+      containerEl.removeEventListener('wheel', onWheel);
+      containerEl.removeEventListener('click', onClick);
+      containerEl.removeEventListener('dblclick', onDblClick);
+      minimapRef.current?.removeEventListener('click', onMinimapClick);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+
+      // Clean up path line
+      if (pathLineRef.current && scene) {
+        scene.remove(pathLineRef.current);
+        pathLineRef.current.geometry.dispose();
+        (pathLineRef.current.material as THREE.Material).dispose();
+      }
+
+      try { deskMgrRef.current?.dispose(); } catch { }
+      try { zones.disposeZones?.(); } catch { }
+      try { disposeEnv?.(); } catch { }
+
+      try {
+        renderer?.dispose();
+        if (renderer?.domElement?.parentElement === containerEl)
+          containerEl.removeChild(renderer.domElement);
+      } catch { }
+
+      sceneRef.current = null;
+      rendererRef.current = null;
+      cameraRef.current = null;
+      avatarsGroupRef.current = null;
+      stageScreenRef.current = null;
+      obstaclesRef.current = [];
+      avatarRef.current = null;
+      avatarBySidRef.current.clear();
+      navNodesRef.current = [];
+      navEdgesRef.current = [];
+      canSendDataRef.current = false;
+    };
+  }, []); // NO DEPENDENCIES - scene built only once
+
+  // —— LiveKit event handling (separate effect) ——
+  useEffect(() => {
+    if (!room) return;
+
     // LiveKit events
     const onData = (payload: Uint8Array) => {
       try {
@@ -486,86 +882,156 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         }
       } catch { }
     };
+
     const onSpeakers = (speakers: any[]) => {
       const s = new Set<string>();
       speakers.forEach((sp) => { if (sp?.sid) s.add(norm(sp.sid)); });
       speakingRef.current = s;
     };
+
+    // —— Connection state -> allow/deny data sends ——
+    const onConn = (state: any) => {
+      canSendDataRef.current = String(state) === 'connected';
+      if (!canSendDataRef.current) {
+        // ensure we don't immediately try to send again
+        lastDataSentAtRef.current = performance.now();
+      }
+    };
+
+    // initialize once
+    canSendDataRef.current = String((room as any)?.state) === 'connected';
+
     (room as any)?.on?.(RoomEvent.DataReceived, onData);
     (room as any)?.on?.(RoomEvent.ActiveSpeakersChanged, onSpeakers);
+    (room as any)?.on?.(RoomEvent.ConnectionStateChanged, onConn);
 
     return () => {
       (room as any)?.off?.(RoomEvent.DataReceived, onData);
       (room as any)?.off?.(RoomEvent.ActiveSpeakersChanged, onSpeakers);
-      window.removeEventListener('resize', onResize);
-      window.removeEventListener('keydown', onKey, { capture: true } as any);
-      window.removeEventListener('keyup', onKey, { capture: true } as any);
-      containerEl.removeEventListener('mousedown', onMouseDown);
-      window.removeEventListener('mouseup', onMouseUp);
-      window.removeEventListener('mousemove', onMouseMove);
-      containerEl.removeEventListener('wheel', onWheel);
-      containerEl.removeEventListener('dblclick', onDblClick);
-      minimapRef.current?.removeEventListener('click', onMinimapClick);
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-
-      try { deskMgrRef.current?.dispose(); } catch { }
-      try { zones.disposeZones?.(); } catch { }
-      try { disposeEnv?.(); } catch { }
-
-      try { renderer?.dispose(); if (renderer?.domElement?.parentElement === containerEl) containerEl.removeChild(renderer.domElement); } catch { }
-      sceneRef.current = null; rendererRef.current = null; cameraRef.current = null; avatarsGroupRef.current = null; stageScreenRef.current = null; obstaclesRef.current = [];
-      avatarRef.current = null; avatarBySidRef.current.clear();
-      navNodesRef.current = []; navEdgesRef.current = [];
+      (room as any)?.off?.(RoomEvent.ConnectionStateChanged, onConn);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room]);
+  }, [room, localSid]);
 
-  // —— Robust de-dupe so you don’t get “You” + You ——
-  // —— Robust de-dupe so we never get “You” + your name + another you —— //
+  // —— Movement broadcasting (separate effect) ——
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+
+    const broadcastMovement = () => {
+      const you = avatarRef.current;
+      if (!you || !canSendDataRef.current) return;
+
+      try {
+        const lkRoom: any = room as any;
+        if (lkRoom?.localParticipant?.publishData) {
+          const payload = JSON.stringify({
+            t: 'pos',
+            id: norm(localSid),
+            x: you.position.x,
+            y: you.position.y,
+            z: you.position.z,
+            yaw: yawRef.current
+          });
+
+          // IMPORTANT: handle async rejection to avoid "Uncaught (in promise)"
+          void lkRoom.localParticipant
+            .publishData(new TextEncoder().encode(payload), { reliable: false })
+            .catch(() => { /* swallow when disconnected/reconnecting */ });
+        }
+      } catch { /* no-op */ }
+    };
+
+    // Broadcast at ~6fps instead of in animation loop
+    intervalId = setInterval(broadcastMovement, 160);
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [room, localSid]);
+
+  // —— FIXED: Robust de-dupe so you don't get "You" + duplicate participants —— 
   function getUniqueParticipants() {
     const arr = (participants || []) as any[];
 
+    // Get local participant info more reliably
+    const localParticipant = (room as any)?.localParticipant;
     const localSidNorm = norm(localSid);
-    const localIdentity = norm((room as any)?.localParticipant?.identity);
-    const localKey = localSidNorm || localIdentity || '__local__';
+    const localIdentityNorm = norm(localParticipant?.identity);
+    const localNameNorm = norm(localParticipant?.name).toLowerCase();
 
-    type Row = { id: string; name?: string; sid?: string; identity?: string; isLocal: boolean; score: number; };
+    type Row = {
+      id: string;
+      name?: string;
+      sid?: string;
+      identity?: string;
+      isLocal: boolean;
+      score: number;
+    };
 
-    const rows: Row[] = arr.map((p) => {
+    const rows: Row[] = [];
+    const seenKeys = new Set<string>();
+
+    // Process each participant
+    for (const p of arr) {
       const sid = norm(p?.sid ?? p?.id);
       const identity = norm(p?.identity);
-      const name = (p?.name || '').trim();
-      const isLocal =
-        sid === localSidNorm ||
-        identity === localIdentity ||
-        name.toLowerCase() === 'you';
+      const name = norm(p?.name);
+      const nameLower = name.toLowerCase();
 
-      const key = isLocal ? localKey : (identity || sid || name || Math.random().toString(36).slice(2));
-      const score = (isLocal ? 1000 : 0) + (identity ? 20 : 0) + (sid ? 10 : 0) + (name && name.toLowerCase() !== 'you' ? 1 : 0);
+      // Determine if this is the local participant
+      const isLocal = Boolean(
+        (sid && sid === localSidNorm) ||
+        (identity && identity === localIdentityNorm) ||
+        (name && (nameLower === localNameNorm || nameLower === 'you'))
+      );
 
-      return { id: key, name: isLocal ? (name || 'You') : name, sid, identity, isLocal, score };
+      // Create unique key - prioritize identity over sid for stability
+      const key = isLocal
+        ? '__LOCAL__'
+        : (identity || sid || name || `unknown_${Math.random()}`);
+
+      // Skip if we've already processed this participant
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+
+      // Calculate score for deduplication priority
+      const score =
+        (isLocal ? 1000 : 0) +
+        (identity ? 100 : 0) +
+        (sid ? 50 : 0) +
+        (name && nameLower !== 'you' ? 10 : 0);
+
+      rows.push({
+        id: key,
+        name: isLocal ? 'You' : (name || 'User'),
+        sid,
+        identity,
+        isLocal,
+        score
+      });
+    }
+
+    // Ensure we always have a local participant
+    const hasLocal = rows.some(r => r.isLocal);
+    if (!hasLocal) {
+      rows.unshift({
+        id: '__LOCAL__',
+        name: 'You',
+        sid: localSidNorm,
+        identity: localIdentityNorm,
+        isLocal: true,
+        score: 9999
+      });
+    }
+
+    // Sort: local first, then by score (highest first)
+    rows.sort((a, b) => {
+      if (a.isLocal && !b.isLocal) return -1;
+      if (!a.isLocal && b.isLocal) return 1;
+      return b.score - a.score;
     });
 
-    // If LiveKit hasn't populated the participant list yet, fake the local row.
-    if (!rows.length) rows.push({ id: localKey, name: 'You', sid: localSidNorm, identity: localIdentity, isLocal: true, score: 9999 });
-
-    // Collapse duplicates by id, keep the best score.
-    const byId = new Map<string, Row>();
-    for (const r of rows) { const prev = byId.get(r.id); if (!prev || r.score > prev.score) byId.set(r.id, r); }
-
-    // Make sure there is exactly one local row under localKey.
-    const localRow = Array.from(byId.values()).find(r => r.isLocal) || { id: localKey, name: 'You', sid: localSidNorm, identity: localIdentity, isLocal: true, score: 9999 };
-    // Re-key anything that still smells local to localKey
-    for (const [k, r] of Array.from(byId.entries())) if (r.isLocal && k !== localKey) byId.delete(k);
-    byId.set(localKey, localRow);
-
-    // Final array (local first)
-    const out: { id: string; name?: string }[] = [{ id: localKey, name: localRow.name || 'You' }];
-    for (const r of byId.values()) if (!r.isLocal) out.push({ id: r.id, name: r.name });
-    return out;
+    return rows.map(r => ({ id: r.id, name: r.name }));
   }
-
-
 
   function getSeatDotsForMinimap() {
     const uniq = getUniqueParticipants();
@@ -579,8 +1045,10 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
   // Participants → desks/avatars/video (includes LOCAL only once)
   useEffect(() => {
-    const scene = sceneRef.current; const avatars = avatarsGroupRef.current;
-    const mgr = deskMgrRef.current; const prefab = deskPrefabRef.current;
+    const scene = sceneRef.current;
+    const avatars = avatarsGroupRef.current;
+    const mgr = deskMgrRef.current;
+    const prefab = deskPrefabRef.current;
     if (!scene || !avatars || !mgr || !prefab) return;
 
     const uniq = getUniqueParticipants();
@@ -588,39 +1056,76 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     const targetDeskCount = Math.max(12, uniq.length + 8);
     seatTransformsRef.current = mgr.ensureDeskCount(targetDeskCount);
 
+    // Update seat assignments
     participantSeatMapRef.current = assignParticipantsToDesks(
       uniq,
       participantSeatMapRef.current,
       seatTransformsRef.current.length
     );
 
-    // Clear previous avatars
-    avatarBySidRef.current.forEach(g => {
-      g.traverse((o: any) => {
-        o.geometry?.dispose?.();
-        if (o.material) { const m = o.material; Array.isArray(m) ? m.forEach((mm: any) => mm.dispose?.()) : m.dispose?.(); }
-      });
-      avatars.remove(g);
-    });
-    avatarBySidRef.current.clear();
+    // Track existing avatars to avoid recreating them
+    const existingAvatars = new Set(avatarBySidRef.current.keys());
+    const currentParticipants = new Set(uniq.map(p => p.id));
+
+    // Remove avatars for participants who left
+    for (const sid of existingAvatars) {
+      if (!currentParticipants.has(sid)) {
+        const avatar = avatarBySidRef.current.get(sid);
+        if (avatar) {
+          avatar.traverse((o: any) => {
+            o.geometry?.dispose?.();
+            if (o.material) {
+              const m = o.material;
+              Array.isArray(m) ? m.forEach((mm: any) => mm.dispose?.()) : m.dispose?.();
+            }
+          });
+          avatars.remove(avatar);
+          avatarBySidRef.current.delete(sid);
+        }
+      }
+    }
 
     let localAvatarSet = false;
 
+    // Only create/update avatars for new or changed participants
     for (const p of uniq) {
       const sid = p.id;
       const seatIdx = participantSeatMapRef.current.get(sid);
       if (seatIdx == null) continue;
-      const seat = seatTransformsRef.current[seatIdx];
 
+      const seat = seatTransformsRef.current[seatIdx];
+      const existingAvatar = avatarBySidRef.current.get(sid);
+
+      const isLocal = sid === '__LOCAL__';
+
+      // If avatar exists, handle updates
+      if (existingAvatar) {
+        // FOR LOCAL AVATAR: Never reset position - user has moved it manually
+        if (isLocal && !localAvatarSet) {
+          avatarRef.current = existingAvatar;
+          localAvatarSet = true;
+          // Keep current position, don't reset to seat
+          continue;
+        }
+
+        // For remote avatars, only update position if seat changed significantly
+        if (!isLocal) {
+          const currentPos = existingAvatar.position;
+          const targetPos = seat.position;
+          if (currentPos.distanceTo(targetPos) > 0.1) {
+            existingAvatar.position.copy(targetPos);
+            existingAvatar.rotation.y = seat.yaw;
+          }
+        }
+
+        continue;
+      }
+
+      // Create new avatar only if it doesn't exist
       const g = new THREE.Group();
       g.position.copy(seat.position);
       g.rotation.y = seat.yaw;
 
-      // was: const isLocal = sid === norm(localSid);
-      const isLocal =
-        sid === norm(localSid) ||
-        sid === norm((room as any)?.localParticipant?.identity) ||
-        (p.name || '').trim().toLowerCase() === 'you';
       const bodyColor = isLocal ? 0x3D93F8 : 0x8a8af0;
       const skinColor = isLocal ? 0xe6edf7 : 0xf2f2f2;
 
@@ -629,30 +1134,50 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.15, roughness: 0.6, emissive: 0x0b111f, emissiveIntensity: 0.15 })
       );
       torso.name = 'TORSO';
-      torso.position.set(0, 1.0, 0); torso.castShadow = true; g.add(torso);
+      torso.position.set(0, 1.0, 0);
+      torso.castShadow = true;
+      g.add(torso);
 
       const head = new THREE.Mesh(
         new THREE.SphereGeometry(0.18, 18, 12),
         new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.35 })
       );
-      head.position.set(0, 1.55, 0); head.castShadow = true; head.name = 'HEAD'; g.add(head);
+      head.position.set(0, 1.55, 0);
+      head.castShadow = true;
+      head.name = 'HEAD';
+      g.add(head);
 
       const armMat = new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.12, roughness: 0.55 });
       const armGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.5, 8);
-      const armL = new THREE.Mesh(armGeo, armMat); armL.position.set(-0.26, 1.1, 0); armL.rotation.z = 0.15; g.add(armL);
-      const armR = new THREE.Mesh(armGeo, armMat); armR.position.set(0.26, 1.1, 0); armR.rotation.z = -0.15; g.add(armR);
+      const armL = new THREE.Mesh(armGeo, armMat);
+      armL.position.set(-0.26, 1.1, 0);
+      armL.rotation.z = 0.15;
+      g.add(armL);
+      const armR = new THREE.Mesh(armGeo, armMat);
+      armR.position.set(0.26, 1.1, 0);
+      armR.rotation.z = -0.15;
+      g.add(armR);
 
       const legMat = new THREE.MeshStandardMaterial({ color: 0x35353c, metalness: 0.08, roughness: 0.7 });
       const legGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.55, 8);
-      const legL = new THREE.Mesh(legGeo, legMat); legL.position.set(-0.11, 0.55, 0.04); g.add(legL);
-      const legR = new THREE.Mesh(legGeo, legMat); legR.position.set(0.11, 0.55, 0.04); g.add(legR);
+      const legL = new THREE.Mesh(legGeo, legMat);
+      legL.position.set(-0.11, 0.55, 0.04);
+      g.add(legL);
+      const legR = new THREE.Mesh(legGeo, legMat);
+      legR.position.set(0.11, 0.55, 0.04);
+      g.add(legR);
 
-      const label = makeNameSpriteSmall(p.name || 'User'); label.position.set(0, 1.92, 0); g.add(label);
+      const label = makeNameSpriteSmall(p.name || 'User');
+      label.position.set(0, 1.92, 0);
+      g.add(label);
 
       // per-seat monitor plane
       let mon = monitorPlanesRef.current.get(seatIdx);
       if (!mon) {
-        mon = new THREE.Mesh(new THREE.PlaneGeometry(prefab.monitorW, prefab.monitorH), new THREE.MeshBasicMaterial({ color: 0x111111, toneMapped: false }));
+        mon = new THREE.Mesh(
+          new THREE.PlaneGeometry(prefab.monitorW, prefab.monitorH),
+          new THREE.MeshBasicMaterial({ color: 0x111111, toneMapped: false })
+        );
         monitorPlanesRef.current.set(seatIdx, mon);
       }
       mon.position.set(0, 0.85, -0.36);
@@ -663,11 +1188,15 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
       if (isLocal && !localAvatarSet) {
         avatarRef.current = g;
+        // Only set camera target on initial avatar creation, not on updates
+        if (camTargetRef.current.equals(new THREE.Vector3(0, 1.2, 0))) {
+          camTargetRef.current.copy(g.position);
+          camTargetRef.current.y = 1.2;
+        }
         localAvatarSet = true;
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [participants, localSid]);
+  }, [participants, localSid, room]);
 
   // Video textures: stage + local desk + seat monitors + head badges
   useEffect(() => {
@@ -675,9 +1204,21 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     if (screenMesh) {
       (screenMesh.material as any) = new THREE.MeshBasicMaterial({ color: 0x111111 });
       for (const ref of screenRefs) {
-        if (!isTrackReference(ref)) continue; const track: any = ref?.publication?.track; if (!track) continue;
-        const el = document.createElement('video'); el.muted = true; el.playsInline = true; el.autoplay = true; try { track.attach(el); el.play?.().catch(() => { }); } catch { }
-        const tex = new THREE.VideoTexture(el); tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; (tex as any).colorSpace = (THREE as any).SRGBColorSpace ?? undefined;
+        if (!isTrackReference(ref)) continue;
+        const track: any = ref?.publication?.track;
+        if (!track) continue;
+        const el = document.createElement('video');
+        el.muted = true;
+        el.playsInline = true;
+        el.autoplay = true;
+        try {
+          track.attach(el);
+          el.play?.().catch(() => { });
+        } catch { }
+        const tex = new THREE.VideoTexture(el);
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        (tex as any).colorSpace = (THREE as any).SRGBColorSpace ?? undefined;
         (screenMesh.material as any) = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });
         break;
       }
@@ -691,26 +1232,50 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         if (!isTrackReference(ref)) continue;
         const sid: string = norm(((ref as any)?.participant?.sid ?? (ref as any)?.participant?.identity));
         if (!sid || sid !== norm(localSid)) continue;
-        const track: any = ref?.publication?.track; if (!track) continue;
-        const el = document.createElement('video'); el.muted = true; el.playsInline = true; el.autoplay = true; try { track.attach(el); el.play?.().catch(() => { }); } catch { }
-        const tex = new THREE.VideoTexture(el); tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; (tex as any).colorSpace = (THREE as any).SRGBColorSpace ?? undefined;
-        (localMon.material as any) = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }); appliedLocal = true; break;
+        const track: any = ref?.publication?.track;
+        if (!track) continue;
+        const el = document.createElement('video');
+        el.muted = true;
+        el.playsInline = true;
+        el.autoplay = true;
+        try {
+          track.attach(el);
+          el.play?.().catch(() => { });
+        } catch { }
+        const tex = new THREE.VideoTexture(el);
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        (tex as any).colorSpace = (THREE as any).SRGBColorSpace ?? undefined;
+        (localMon.material as any) = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });
+        appliedLocal = true;
+        break;
       }
-      if (!appliedLocal) { (localMon.material as any) = new THREE.MeshBasicMaterial({ map: makeCardTexture('You'), toneMapped: false }); }
+      if (!appliedLocal) {
+        (localMon.material as any) = new THREE.MeshBasicMaterial({ map: makeCardTexture('You'), toneMapped: false });
+      }
     }
 
     const camTexBySid = new Map<string, THREE.VideoTexture>();
     for (const ref of cameraRefs) {
       if (!isTrackReference(ref)) continue;
-      const track: any = ref?.publication?.track; if (!track) continue;
+      const track: any = ref?.publication?.track;
+      if (!track) continue;
 
       const sid = norm((ref as any)?.participant?.sid);
       const identity = norm((ref as any)?.participant?.identity);
 
-      const el = document.createElement('video'); el.muted = true; el.playsInline = true; el.autoplay = true;
-      try { track.attach(el); el.play?.().catch(() => { }); } catch { }
+      const el = document.createElement('video');
+      el.muted = true;
+      el.playsInline = true;
+      el.autoplay = true;
+      try {
+        track.attach(el);
+        el.play?.().catch(() => { });
+      } catch { }
       const tex = new THREE.VideoTexture(el);
-      tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; (tex as any).colorSpace = (THREE as any).SRGBColorSpace ?? undefined;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      (tex as any).colorSpace = (THREE as any).SRGBColorSpace ?? undefined;
 
       if (sid) camTexBySid.set(sid, tex);
       if (identity) camTexBySid.set(identity, tex); // <- lets our de-duped IDs resolve either way
@@ -727,16 +1292,27 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         const plane = monitors.get(idx);
         if (plane) {
           const mat = plane.material as THREE.MeshBasicMaterial;
-          if (mat.map) { mat.map.dispose?.(); mat.map = undefined as any; }
-          const t = camTexBySid.get(sid);
-          if (t) { mat.map = t; mat.toneMapped = false; mat.needsUpdate = true; }
-          else { mat.map = makeCardTexture(p0.name || 'User'); mat.toneMapped = false; mat.needsUpdate = true; }
+          if (mat.map) {
+            mat.map.dispose?.();
+            mat.map = undefined as any;
+          }
+          const t = camTexBySid.get(sid === '__LOCAL__' ? norm(localSid) : sid);
+          if (t) {
+            mat.map = t;
+            mat.toneMapped = false;
+            mat.needsUpdate = true;
+          } else {
+            mat.map = makeCardTexture(p0.name || 'User');
+            mat.toneMapped = false;
+            mat.needsUpdate = true;
+          }
         }
       }
       const g = avatarBySidRef.current.get(sid);
       if (!g) continue;
-      const prev = g.getObjectByName('VID_BADGE'); if (prev) g.remove(prev);
-      const t2 = camTexBySid.get(sid);
+      const prev = g.getObjectByName('VID_BADGE');
+      if (prev) g.remove(prev);
+      const t2 = camTexBySid.get(sid === '__LOCAL__' ? norm(localSid) : sid);
       if (t2) {
         const badge = makeVideoBadge(t2);
         const head = g.getObjectByName('HEAD') as THREE.Mesh | undefined;
@@ -746,13 +1322,19 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
     }
 
-    return () => { for (const tex of camTexBySid.values()) { try { tex.dispose(); } catch { } } };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      for (const tex of camTexBySid.values()) {
+        try {
+          tex.dispose();
+        } catch { }
+      }
+    };
   }, [cameraRefs, screenRefs, participants, localSid]);
 
   // Dice button action
   const rollDice = () => {
-    const dice = diceMeshRef.current; if (!dice) return;
+    const dice = diceMeshRef.current;
+    if (!dice) return;
     const face = 1 + Math.floor(Math.random() * 6);
     const targets: Record<number, THREE.Euler> = {
       1: new THREE.Euler(0, 0, 0),
@@ -767,28 +1349,48 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
   // Layout resize
   useEffect(() => {
-    const container = containerRef.current; const renderer = rendererRef.current; const camera = cameraRef.current;
+    const container = containerRef.current;
+    const renderer = rendererRef.current;
+    const camera = cameraRef.current;
     if (!container || !renderer || !camera) return;
-    const w = container.clientWidth; const h = container.clientHeight; renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
   }, [chatOpen, bottomSafeAreaPx, topSafeAreaPx]);
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full" >
       <div
         ref={containerRef}
         className="relative mx-auto h-full w-full"
-        style={{ paddingTop: topSafeAreaPx, paddingBottom: bottomSafeAreaPx, paddingRight: chatOpen ? 408 : undefined }}
+        style={{
+          paddingTop: topSafeAreaPx,
+          paddingBottom: bottomSafeAreaPx,
+          paddingRight: chatOpen ? 408 : undefined
+        }}
       />
-      <canvas ref={minimapRef} width={300} height={300} className="absolute right-4 bottom-4 rounded-lg border border-[#26272B] bg-[#18181B]/80" style={{ zIndex: 5 }} />
+      <canvas
+        ref={minimapRef}
+        width={300}
+        height={300}
+        className="absolute right-4 bottom-4 rounded-lg border border-[#26272B] bg-[#18181B]/80"
+        style={{ zIndex: 5 }}
+      />
       <div className="absolute left-4 bottom-[94px] text-white/70 text-xs bg-[#00000066] px-2 py-1 rounded">
-        LMB: orbit • RMB: rotate • WASD move • Q/E rotate • +/− zoom • dbl-click screen = reset view • click names on minimap (ghost)
+        LMB: orbit • MMB / RMB: pan • Wheel: zoom • WASD move • Q / E rotate • +/− zoom • Click room names: navigate • Dbl-click screen: recenter
       </div>
 
       {insideGameRoom && (
         <button
           onClick={rollDice}
           className="absolute left-4 bottom-4 text-sm rounded-lg px-3 py-2"
-          style={{ background: '#2b2f3b', color: '#d9f99d', border: '1px solid #3b3f4b' }}
+          style={{
+            background: '#2b2f3b',
+            color: '#d9f99d',
+            border: '1px solid #3b3f4b'
+          }}
         >
           🎲 Roll Dice
         </button>
@@ -797,84 +1399,287 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   );
 };
 
-// ——— Minimap ———
+// ——— Enhanced Minimap with Clickable Room Names ———
 function drawMinimap(
   canvas: HTMLCanvasElement | null,
   youPos: THREE.Vector3,
   remotes: Array<{ x: number; z: number; name?: string; sid: string }>,
   mgr: DeskGridManager | null,
   zones: BuiltZonesInfo | null,
-  hits: Array<{ x: number; y: number; w: number; h: number; target?: THREE.Vector3; allowGhost?: boolean }>
+  hits: Array<{ x: number; y: number; w: number; h: number; target?: THREE.Vector3; allowGhost?: boolean; roomName?: string }>
 ) {
-  if (!canvas) return; const ctx = canvas.getContext('2d'); if (!ctx) return;
-  const W = canvas.width, H = canvas.height; ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#14171e'; ctx.fillRect(0, 0, W, H);
-  const pad = 16; const rw = W - pad * 2, rh = H - pad * 2;
-  const toMap = (x: number, z: number) => ({ X: pad + ((x + ROOM_W / 2) / ROOM_W) * rw, Y: pad + ((z + ROOM_D / 2) / ROOM_D) * rh });
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#14171e';
+  ctx.fillRect(0, 0, W, H);
+  const pad = 16;
+  const rw = W - pad * 2, rh = H - pad * 2;
+  const toMap = (x: number, z: number) => ({
+    X: pad + ((x + ROOM_W / 2) / ROOM_W) * rw,
+    Y: pad + ((z + ROOM_D / 2) / ROOM_D) * rh
+  });
 
-  ctx.strokeStyle = '#2f2f36'; ctx.lineWidth = 2; ctx.strokeRect(pad, pad, rw, rh);
+  ctx.strokeStyle = '#2f2f36';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(pad, pad, rw, rh);
 
   if (zones) {
     ctx.lineWidth = 1;
+    // Enhanced room rendering with hover-friendly styling
     for (const r of zones.roomRects) {
       const a = toMap(r.rect.minX, r.rect.minZ), b = toMap(r.rect.maxX, r.rect.maxZ);
-      ctx.strokeStyle = '#3a4050';
+
+      // Room background with subtle gradient
+      const roomGrad = ctx.createLinearGradient(a.X, a.Y, b.X, b.Y);
+      roomGrad.addColorStop(0, 'rgba(74, 144, 226, 0.08)');
+      roomGrad.addColorStop(1, 'rgba(74, 144, 226, 0.04)');
+      ctx.fillStyle = roomGrad;
+      ctx.fillRect(a.X, a.Y, (b.X - a.X), (b.Y - a.Y));
+
+      // Room border
+      ctx.strokeStyle = '#4a90e2';
+      ctx.lineWidth = 1.5;
       ctx.strokeRect(a.X, a.Y, (b.X - a.X), (b.Y - a.Y));
-      ctx.fillStyle = '#9fb3ff';
-      ctx.font = '10px system-ui';
-      ctx.fillText(r.name, a.X + 3, a.Y + 2);
+
+      // Enhanced room name with better visibility
+      ctx.fillStyle = '#87ceeb';
+      ctx.font = 'bold 11px system-ui, -apple-system';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+
+      // Add text shadow for better readability
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+      ctx.shadowBlur = 3;
+      ctx.shadowOffsetX = 1;
+      ctx.shadowOffsetY = 1;
+
+      const roomName = r.name;
+      const textX = a.X + 4;
+      const textY = a.Y + 4;
+      ctx.fillText(roomName, textX, textY);
+
+      // Reset shadow
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+
+      // Calculate room center for pathfinding target
+      const centerX = (r.rect.minX + r.rect.maxX) / 2;
+      const centerZ = (r.rect.minZ + r.rect.maxZ) / 2;
+
+      // Make room name clickable with larger hit area
+      const metrics = ctx.measureText(roomName);
+      hits.push({
+        x: textX - 2,
+        y: textY - 2,
+        w: metrics.width + 8,
+        h: 16,
+        target: new THREE.Vector3(centerX, 0, centerZ),
+        allowGhost: false, // Use proper pathfinding for rooms
+        roomName: roomName
+      });
     }
-    ctx.fillStyle = '#86ffe7';
-    for (const d of zones.doorways) { const p = toMap(d.x, d.z); ctx.beginPath(); ctx.arc(p.X, p.Y, 2, 0, Math.PI * 2); ctx.fill(); }
+
+    // Enhanced doorways
+    ctx.fillStyle = '#00ffcc';
+    for (const d of zones.doorways) {
+      const p = toMap(d.x, d.z);
+      ctx.beginPath();
+      ctx.arc(p.X, p.Y, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Add subtle glow effect
+      ctx.beginPath();
+      ctx.arc(p.X, p.Y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0, 255, 204, 0.3)';
+      ctx.fill();
+      ctx.fillStyle = '#00ffcc';
+    }
+
+    // Enhanced landmarks
     ctx.fillStyle = '#7fffd4';
     ctx.font = '10px system-ui';
     for (const lm of zones.landmarks) {
-      const p = toMap(lm.x, lm.z); ctx.beginPath(); ctx.arc(p.X, p.Y, 3, 0, Math.PI * 2); ctx.fill();
-      const label = `• ${lm.name}`;
-      ctx.fillStyle = '#c8ffe6'; ctx.fillText(label, p.X + 6, p.Y - 2);
-      const met = ctx.measureText(label);
-      hits.push({ x: p.X + 6, y: p.Y - 10, w: met.width + 4, h: 14, target: new THREE.Vector3(lm.x, 0, lm.z), allowGhost: false });
+      const p = toMap(lm.x, lm.z);
+
+      // Landmark dot with glow
+      ctx.beginPath();
+      ctx.arc(p.X, p.Y, 4, 0, Math.PI * 2);
       ctx.fillStyle = '#7fffd4';
+      ctx.fill();
+
+      // Glow effect
+      ctx.beginPath();
+      ctx.arc(p.X, p.Y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(127, 255, 212, 0.4)';
+      ctx.fill();
+
+      // Landmark label
+      const label = `• ${lm.name}`;
+      ctx.fillStyle = '#c8ffe6';
+      ctx.font = 'bold 10px system-ui';
+      ctx.textAlign = 'left';
+      ctx.fillText(label, p.X + 8, p.Y - 4);
+
+      const met = ctx.measureText(label);
+      hits.push({
+        x: p.X + 8,
+        y: p.Y - 12,
+        w: met.width + 4,
+        h: 16,
+        target: new THREE.Vector3(lm.x, 0, lm.z),
+        allowGhost: false,
+        roomName: lm.name
+      });
     }
   }
 
+  // Desk areas
   if (mgr) {
-    ctx.fillStyle = '#242a34';
-    for (const r of mgr.bayRects) { const a = toMap(r.minX, r.minZ), b = toMap(r.maxX, r.maxZ); ctx.fillRect(a.X, a.Y, (b.X - a.X), (b.Y - a.Y)); }
-    ctx.strokeStyle = '#3a4050'; ctx.setLineDash([6, 4]);
-    for (const a of mgr.aisleLines) { const p1 = toMap(a.x1, a.z1), p2 = toMap(a.x2, a.z2); ctx.beginPath(); ctx.moveTo(p1.X, p1.Y); ctx.lineTo(p2.X, p2.Y); ctx.stroke(); }
+    ctx.fillStyle = 'rgba(36, 42, 52, 0.6)';
+    for (const r of mgr.bayRects) {
+      const a = toMap(r.minX, r.minZ), b = toMap(r.maxX, r.maxZ);
+      ctx.fillRect(a.X, a.Y, (b.X - a.X), (b.Y - a.Y));
+    }
+    ctx.strokeStyle = '#3a4050';
+    ctx.setLineDash([4, 2]);
+    ctx.lineWidth = 1;
+    for (const a of mgr.aisleLines) {
+      const p1 = toMap(a.x1, a.z1), p2 = toMap(a.x2, a.z2);
+      ctx.beginPath();
+      ctx.moveTo(p1.X, p1.Y);
+      ctx.lineTo(p2.X, p2.Y);
+      ctx.stroke();
+    }
     ctx.setLineDash([]);
   }
 
-  // Stage strip
-  const st = toMap(0, -ROOM_D / 2 + 3.2); ctx.fillStyle = '#2c2f39'; ctx.fillRect(st.X - 60, st.Y - 18, 120, 36);
+  // Stage area
+  const st = toMap(0, -ROOM_D / 2 + 3.2);
+  const stageGrad = ctx.createLinearGradient(st.X - 60, st.Y - 18, st.X + 60, st.Y + 18);
+  stageGrad.addColorStop(0, '#1a1d24');
+  stageGrad.addColorStop(1, '#2c2f39');
+  ctx.fillStyle = stageGrad;
+  ctx.fillRect(st.X - 60, st.Y - 18, 120, 36);
+  ctx.strokeStyle = '#4a90e2';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(st.X - 60, st.Y - 18, 120, 36);
 
-  // Others + name hitboxes (ghost mode)
-  ctx.font = '10px system-ui'; ctx.textBaseline = 'top';
+  // Other participants with enhanced styling
+  ctx.font = '10px system-ui';
+  ctx.textBaseline = 'top';
   for (const r of remotes) {
     const p = toMap(r.x, r.z);
-    ctx.fillStyle = '#8a8af0'; ctx.beginPath(); ctx.arc(p.X, p.Y, 3, 0, Math.PI * 2); ctx.fill();
+
+    // Participant dot with glow
+    ctx.fillStyle = '#8a8af0';
+    ctx.beginPath();
+    ctx.arc(p.X, p.Y, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Glow effect
+    ctx.beginPath();
+    ctx.arc(p.X, p.Y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(138, 138, 240, 0.4)';
+    ctx.fill();
+
     if (r.name) {
       const text = r.name.slice(0, 18);
-      ctx.fillStyle = '#cfd6ff'; ctx.fillText(text, p.X + 5, p.Y + 4);
+      ctx.fillStyle = '#cfd6ff';
+      ctx.font = 'bold 10px system-ui';
+
+      // Add text shadow
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+      ctx.shadowBlur = 2;
+      ctx.shadowOffsetX = 1;
+      ctx.shadowOffsetY = 1;
+
+      ctx.fillText(text, p.X + 7, p.Y + 6);
+
+      // Reset shadow
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+
       const metrics = ctx.measureText(text);
-      hits.push({ x: p.X + 5, y: p.Y + 4, w: metrics.width + 4, h: 12, target: new THREE.Vector3(r.x, 0, r.z), allowGhost: true });
+      hits.push({
+        x: p.X + 7,
+        y: p.Y + 6,
+        w: metrics.width + 4,
+        h: 12,
+        target: new THREE.Vector3(r.x, 0, r.z),
+        allowGhost: true // Allow ghost mode for participant names
+      });
     }
   }
 
-  // You
-  const yp = toMap(youPos.x, youPos.z); ctx.fillStyle = '#3D93F8'; ctx.beginPath(); ctx.arc(yp.X, yp.Y, 4, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#cfe6ff'; ctx.fillText('You', yp.X + 6, yp.Y + 5);
+  // Local participant (You) with enhanced styling
+  const yp = toMap(youPos.x, youPos.z);
+
+  // Your position with pulsing glow
+  const time = Date.now() * 0.003;
+  const glowIntensity = 0.6 + 0.4 * Math.sin(time);
+
+  ctx.fillStyle = '#3D93F8';
+  ctx.beginPath();
+  ctx.arc(yp.X, yp.Y, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Pulsing glow
+  ctx.beginPath();
+  ctx.arc(yp.X, yp.Y, 8 + 2 * Math.sin(time), 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(61, 147, 248, ${glowIntensity * 0.3})`;
+  ctx.fill();
+
+  // "You" label with better styling
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 11px system-ui';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+  ctx.shadowBlur = 3;
+  ctx.shadowOffsetX = 1;
+  ctx.shadowOffsetY = 1;
+  ctx.fillText('You', yp.X + 8, yp.Y + 7);
+
+  // Reset shadow
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
 }
 
 function makeCarpetTexture(): THREE.Texture {
-  const size = 256; const c = document.createElement('canvas'); c.width = size; c.height = size;
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
   const ctx = c.getContext('2d')!;
-  ctx.fillStyle = '#23252b'; ctx.fillRect(0, 0, size, size);
-  ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 2; const step = 64;
-  for (let x = 0; x <= size; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, size); ctx.stroke(); }
-  for (let y = 0; y <= size; y += step) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(size, y); ctx.stroke(); }
-  const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(10, 10); tex.anisotropy = 4; tex.minFilter = THREE.LinearMipmapLinearFilter;
+  ctx.fillStyle = '#23252b';
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 2;
+  const step = 64;
+  for (let x = 0; x <= size; x += step) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, size);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= size; y += step) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(size, y);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(10, 10);
+  tex.anisotropy = 4;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
   return tex;
 }
 
