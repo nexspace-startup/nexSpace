@@ -52,7 +52,7 @@ export class DeskGridManager {
         this.aisleLines = [];
 
         const deskW = this.prefab.deskW, deskD = this.prefab.deskD;
-        const { bayCols, bayRows, deskGapX, deskGapZ, bayAisleX, bayAisleZ, startX, startZ, maxWidth, maxDepth, faceYaw } = this.cfg;
+        const { bayCols, bayRows, deskGapX, deskGapZ, bayAisleX, bayAisleZ, startX, startZ, maxWidth, faceYaw } = this.cfg;
 
         const perBay = bayCols * bayRows;
         const totalBaysNeeded = Math.ceil(n / perBay);
