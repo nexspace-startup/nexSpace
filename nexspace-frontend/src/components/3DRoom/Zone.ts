@@ -476,7 +476,7 @@ export function buildZones(
     const plantPositions = [
         { x: -5, z: 5 }, { x: 8, z: 3 }, { x: 2, z: 8 }, { x: -8, z: 6 }
     ];
-    plantPositions.forEach((pos, i) => {
+    plantPositions.forEach((pos) => {
         const pot = new THREE.Mesh(
             new THREE.CylinderGeometry(0.4, 0.35, 0.6, 12),
             new THREE.MeshStandardMaterial({ color: 0x8b4513, roughness: 0.8 })
