@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { DeskPrefab } from './desks';
+import type { DeskPrefab } from './Desks';
 
 export type SeatTransform = { position: THREE.Vector3; yaw: number };
 

@@ -4,11 +4,11 @@ import { useTracks, isTrackReference } from '@livekit/components-react';
 import { RoomEvent, Track } from 'livekit-client';
 import { useMeetingStore } from '../stores/meetingStore';
 import { useShallow } from 'zustand/react/shallow';
-import { createDeskModule, type DeskPrefab } from './3DRoom/desks';
 import { DeskGridManager, type SeatTransform } from './3DRoom/DeskGridManager';
-import { buildEnvironment } from './3DRoom/environment';
 import { assignParticipantsToDesks } from './3DRoom/Participants';
-import { buildZones, type BuiltZonesInfo } from './3DRoom/zone';
+import { type DeskPrefab, createDeskModule } from './3DRoom/Desks';
+import { buildEnvironment } from './3DRoom/Environment';
+import { type BuiltZonesInfo, buildZones } from './3DRoom/Zone';
 
 type Props = { bottomSafeAreaPx?: number; topSafeAreaPx?: number; };
 
