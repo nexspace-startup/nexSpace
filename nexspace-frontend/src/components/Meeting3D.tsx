@@ -272,7 +272,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     containerEl.addEventListener('contextmenu', (e) => e.preventDefault());
 
     // Wheel zoom
-    const onWheel = (e: WheelEvent) => { e.preventDefault(); container.focus(); const dir = Math.sign(e.deltaY); const step = 1.0; const next = targetDistRef.current + dir * step; targetDistRef.current = clamp(next, 1.6, 18.0); };
+    const onWheel = (e: WheelEvent) => { e.preventDefault(); container.focus(); const dir = Math.sign(e.deltaY); const step = 1.0; const next = targetDistRef.current + dir * step; targetDistRef.current = clamp(next, 1.6, 32.0); };
     containerEl.addEventListener('wheel', onWheel, { passive: false });
 
     // Double-click the big presentation screen => reset to “normal” view (no zoom tricks)
@@ -350,7 +350,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         if (keyState.current['KeyQ']) { yawRef.current += 1.8 * dt; }
         if (keyState.current['KeyE']) { yawRef.current -= 1.8 * dt; }
         if (keyState.current['Equal'] || keyState.current['NumpadAdd']) { targetDistRef.current = clamp(targetDistRef.current - 2.5 * dt, 1.6, 18.0); }
-        if (keyState.current['Minus'] || keyState.current['NumpadSubtract']) { targetDistRef.current = clamp(targetDistRef.current + 2.5 * dt, 1.6, 18.0); }
+        if (keyState.current['Minus'] || keyState.current['NumpadSubtract']) { targetDistRef.current = clamp(targetDistRef.current + 2.5 * dt, 1.6, 32.0); }
 
         // Follow queued path if not manually moving
         if (!manualMove && pathQueueRef.current.length) {
