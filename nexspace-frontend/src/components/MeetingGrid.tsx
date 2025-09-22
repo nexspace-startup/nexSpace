@@ -71,6 +71,7 @@ const MeetingGrid: React.FC<Props> = ({
   // Workspace panel UI store
   const isWorkspaceOpen = useUIStore((s) => s.isWorkspacePanelOpen);
   const toggleWorkspacePanel = useUIStore((s) => s.toggleWorkspacePanel);
+  const setMeetingControlsVisible = useUIStore((s) => s.setMeetingControlsVisible);
 
   // Resolve participants
   const all = useMemo(() => collectParticipants(room, avatars), [room, avatars]);
@@ -97,6 +98,14 @@ const MeetingGrid: React.FC<Props> = ({
 
   // Expand/minimize state for stage
   const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    const isExpanded = !!activeScreen && expanded;
+    if (isExpanded) {
+      setMeetingControlsVisible(false);
+    } else {
+      setMeetingControlsVisible(true);
+    }
+  }, [activeScreen, expanded]);
 
 
   const { mode, items } = useMemo(() => {
@@ -220,7 +229,7 @@ const MeetingGrid: React.FC<Props> = ({
             <div className={`relative w-full h-full overflow-hidden bg-black ${stageRoundClass}`}>
               <VideoTrack
                 trackRef={activeScreen}
-                className="!w-full !h-full object-contain"
+                className="!w-full !h-full"
                 data-lk-object-fit="contain"
               />
               <div className="absolute left-3 top-3 px-2 py-1 rounded bg-black/50 text-white text-xs">
@@ -289,3 +298,4 @@ const MeetingGrid: React.FC<Props> = ({
 };
 
 export default MeetingGrid;
+

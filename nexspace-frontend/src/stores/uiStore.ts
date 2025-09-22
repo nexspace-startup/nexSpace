@@ -33,11 +33,13 @@ export const useUIStore = create<UIState>()(
     activeNavId: 'workspace',
     setActiveNav: (id) => set({ activeNavId: id }),
 
-    setMeetingControlsVisible: (v) => set({
-      isTopWidgetOpen: v,
-      isWorkspaceControlsOpen: v,
-      isWorkspacePanelOpen: v,
-    }),
+    setMeetingControlsVisible: (v) => {
+      set({
+        isTopWidgetOpen: v,
+        isWorkspaceControlsOpen: v,
+        isWorkspacePanelOpen: v,
+      })
+    },
 
     isTopWidgetOpen: true,
     toggleTopWidget: (open) =>

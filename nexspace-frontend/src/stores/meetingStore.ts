@@ -537,6 +537,7 @@ export const useMeetingStore = create<MeetingState>()(
             params: { limit },
             withCredentials: true,
           });
+          console.log('history ->', data);
           if ((data as any)?.success && Array.isArray((data as any).data)) {
             const items: Array<{ id: string; text: string; ts: string; sender: { id: string; name: string } }> = (data as any).data;
             // Determine current user id from LiveKit identity (not SID)
