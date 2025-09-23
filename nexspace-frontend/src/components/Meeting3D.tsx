@@ -26,6 +26,7 @@ const SPRINT_MULT = 1.75;    // hold Shift
 const AUTO_PATH_SPEED = 4.8;     // for queued click-to-move
 const TURN_SPEED = 2.4;     // Q/E yaw (rad/s), was ~1.8
 
+
 // ——— Name sprite (smaller) ———
 function makeNameSpriteSmall(text: string): THREE.Sprite {
   const canvas = document.createElement('canvas');
@@ -214,6 +215,28 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   // —— LiveKit data send guard (NEW) ——
   const canSendDataRef = useRef<boolean>(false);
   const lastDataSentAtRef = useRef<number>(0);
+
+  // ---- Default camera view (initial "planner" angle) ----
+  const DEFAULT_VIEW = {
+    // yaw: turn around Y (left/right), pitch: tilt up/down
+    yaw: -1 * Math.PI,      
+    pitch: 0.46,                 // ~26° downward tilt
+    dist: 28.0,                  // zoomed out to see the full floor
+    // Aim around the center of your layout (tweak if your room layout shifts):
+    target: new THREE.Vector3(2.0, 1.2, 2.0),
+  } as const;
+
+  function applyDefaultView() {
+    yawRef.current = DEFAULT_VIEW.yaw;
+    pitchRef.current = DEFAULT_VIEW.pitch;
+    targetDistRef.current = DEFAULT_VIEW.dist;
+    cameraDistRef.current = DEFAULT_VIEW.dist;
+    camTargetRef.current.copy(DEFAULT_VIEW.target);
+
+    // IMPORTANT: keep the camera parked on this view until the user
+    // pans/zooms/moves, instead of snapping to the avatar
+    followLockRef.current = true;
+  }
 
   // —— Scene build (ONLY ONCE) —— 
   useEffect(() => {
@@ -597,7 +620,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
     };
     minimapRef.current?.addEventListener('click', onMinimapClick);
-
+    applyDefaultView();
     // Animation loop
     let lastT = performance.now();
     const animate = () => {
