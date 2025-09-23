@@ -286,7 +286,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     container.setAttribute('tabindex', '0');
 
-    const { obstacles, stageScreen, localMonitor, disposeEnv } = buildEnvironment(scene, { ROOM_W, ROOM_D, carpet: makeCarpetTexture });
+    const { obstacles, stageScreen, localMonitor, disposeEnv } = buildEnvironment(scene, { ROOM_W, ROOM_D });
     obstaclesRef.current = obstacles;
     stageScreenRef.current = stageScreen;
     localDeskMonitorRef.current = localMonitor;
@@ -303,10 +303,10 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     const mgr = new DeskGridManager(scene, prefab, {
       bayCols: 5, bayRows: 2,
-      deskGapX: 0.5, deskGapZ: 0.7,
+      deskGapX: 1.5, deskGapZ: 1.7,
       bayAisleX: 2.2, bayAisleZ: 2.4,
-      startX: zones.openOfficeArea.minX + 2.0,
-      startZ: zones.openOfficeArea.minZ + 1.8,
+      startX: zones.openOfficeArea.minX - 2.0,
+      startZ: zones.openOfficeArea.minZ - 5.0,
       maxWidth: (zones.openOfficeArea.maxX - zones.openOfficeArea.minX) - 2.0,
       maxDepth: (zones.openOfficeArea.maxZ - zones.openOfficeArea.minZ) - 1.8,
       faceYaw: Math.PI,
@@ -1053,7 +1053,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     const uniq = getUniqueParticipants();
 
-    const targetDeskCount = Math.max(12, uniq.length + 8);
+    const targetDeskCount = Math.max(10, uniq.length + 8);
     seatTransformsRef.current = mgr.ensureDeskCount(targetDeskCount);
 
     // Update seat assignments
@@ -1650,37 +1650,6 @@ function drawMinimap(
   ctx.shadowBlur = 0;
   ctx.shadowOffsetX = 0;
   ctx.shadowOffsetY = 0;
-}
-
-function makeCarpetTexture(): THREE.Texture {
-  const size = 256;
-  const c = document.createElement('canvas');
-  c.width = size;
-  c.height = size;
-  const ctx = c.getContext('2d')!;
-  ctx.fillStyle = '#23252b';
-  ctx.fillRect(0, 0, size, size);
-  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-  ctx.lineWidth = 2;
-  const step = 64;
-  for (let x = 0; x <= size; x += step) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, size);
-    ctx.stroke();
-  }
-  for (let y = 0; y <= size; y += step) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(size, y);
-    ctx.stroke();
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(10, 10);
-  tex.anisotropy = 4;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  return tex;
 }
 
 export default Meeting3D;

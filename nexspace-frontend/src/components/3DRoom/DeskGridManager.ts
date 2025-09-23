@@ -70,7 +70,11 @@ export class DeskGridManager {
         const kbs = new THREE.InstancedMesh(this.prefab.kbGeo, this.prefab.subtleMat, Math.ceil(n * 0.8));
         const mice = new THREE.InstancedMesh(this.prefab.mouseGeo, this.prefab.subtleMat, Math.ceil(n * 0.7));
         const mugs = new THREE.InstancedMesh(this.prefab.mugGeo, this.prefab.subtleMat, Math.ceil(n * 0.6));
-        const plants = new THREE.InstancedMesh(this.prefab.plantGeo, new THREE.MeshStandardMaterial({ color: 0x2e8b57, roughness: 0.6, metalness: 0.15 }), Math.ceil(n * 0.4));
+        const plants = new THREE.InstancedMesh(
+            this.prefab.plantGeo,
+            new THREE.MeshStandardMaterial({ color: 0x2e8b57, roughness: 0.6, metalness: 0.15 }),
+            Math.ceil(n * 0.4)
+        );
 
         this.topInst = tops; this.legInst = legs; this.chairInst = chairs; this.kbInst = kbs; this.mouseInst = mice; this.mugInst = mugs; this.plantInst = plants;
 
@@ -120,9 +124,10 @@ export class DeskGridManager {
                     const sz = z + Math.cos(yaw) * seatDist;
                     this.seatTransforms.push({ position: new THREE.Vector3(sx, 0, sz), yaw });
 
-                    // chair
-                    tmp.position.set(sx, 0.75, sz);
-                    tmp.rotation.set(0, yaw, 0); tmp.updateMatrix();
+                    // chair (baked geo is ground-pivoted; place on floor)
+                    tmp.position.set(sx, 0, sz);
+                    tmp.rotation.set(0, yaw + Math.PI, 0);
+                    tmp.updateMatrix();
                     chairs.setMatrixAt(deskPlaced, tmp.matrix);
 
                     // small props
@@ -147,6 +152,7 @@ export class DeskGridManager {
                     if (Math.random() < 0.4 && plantPlaced < plants.count) {
                         const px = x + Math.cos(yaw) * 0.22; const pz = z - Math.sin(yaw) * 0.22;
                         tmp.position.set(px, this.prefab.deskH + 0.16, pz);
+                        tmp.rotation.set(0, 0, 0); // plants don't need yaw
                         tmp.updateMatrix();
                         plants.setMatrixAt(plantPlaced++, tmp.matrix);
                     }
@@ -172,16 +178,20 @@ export class DeskGridManager {
     disposeInstanced() {
         const kill = (m?: THREE.InstancedMesh) => {
             if (!m) return;
-            try { (m.geometry as any).dispose?.(); } catch { }
-            const mat: any = m.material; if (Array.isArray(mat)) mat.forEach((mm: any) => mm.dispose?.()); else mat?.dispose?.();
+            try { (m.geometry as any).dispose?.(); } catch { /* ignore */ }
+            const mat: any = m.material;
+            if (Array.isArray(mat)) mat.forEach((mm: any) => mm.dispose?.());
+            else mat?.dispose?.();
             this.scene.remove(m);
         };
-        kill(this.topInst); kill(this.legInst); kill(this.chairInst); kill(this.kbInst); kill(this.mouseInst); kill(this.mugInst); kill(this.plantInst);
-        this.topInst = undefined; this.legInst = undefined; this.chairInst = undefined; this.kbInst = undefined; this.mouseInst = undefined; this.mugInst = undefined; this.plantInst = undefined;
+        kill(this.topInst); kill(this.legInst); kill(this.chairInst); kill(this.kbInst);
+        kill(this.mouseInst); kill(this.mugInst); kill(this.plantInst);
+        this.topInst = undefined; this.legInst = undefined; this.chairInst = undefined;
+        this.kbInst = undefined; this.mouseInst = undefined; this.mugInst = undefined; this.plantInst = undefined;
     }
 
     dispose() {
         this.disposeInstanced();
-        try { this.prefab.dispose(); } catch { }
+        try { this.prefab.dispose(); } catch { /* ignore */ }
     }
 }
