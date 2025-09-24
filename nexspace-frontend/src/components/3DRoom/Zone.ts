@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createSofa } from './sofa';
+import { createOfficeChair } from './officeChair';
 
 function createRealisticTiledFloor(scene: THREE.Scene, ROOM_W: number, ROOM_D: number) {
     // Remove the old simple grid if it exists
@@ -153,7 +154,7 @@ function createRealisticTiledFloor(scene: THREE.Scene, ROOM_W: number, ROOM_D: n
                     if (Array.isArray(child.material)) {
                         child.material.forEach(mat => mat.dispose());
                     } else {
-                        child.material.dispose();
+                        (child.material as THREE.Material).dispose();
                     }
                 }
             });
@@ -164,7 +165,7 @@ function createRealisticTiledFloor(scene: THREE.Scene, ROOM_W: number, ROOM_D: n
                     if (Array.isArray(child.material)) {
                         child.material.forEach(mat => mat.dispose());
                     } else {
-                        child.material.dispose();
+                        (child.material as THREE.Material).dispose();
                     }
                 }
             });
@@ -184,6 +185,10 @@ export type BuiltZonesInfo = {
     navEdges: Array<[string, string]>;
     meta: { gameRect: { minX: number; maxX: number; minZ: number; maxZ: number } };
     roomLabels?: THREE.Sprite[];
+    conferenceDoorBlocker?: THREE.Box3;
+    conferenceDoorPanel?: THREE.Mesh;
+    setConferenceDoorVisual?: (open: boolean) => void;
+    conferenceDoorOpen?: boolean;
 };
 
 function labelSprite(text: string, scaleX = 3.0, color = '#ffffff') {
@@ -353,6 +358,117 @@ function addRoomWithDoor(
     }
 }
 
+
+// type GlassRoomReturn = {
+//     doorPanel: THREE.Mesh;
+//     blockerBox: THREE.Box3;
+//     wall: 'N' | 'S' | 'E' | 'W';
+//     width: number;
+//     centerX?: number;
+//     centerZ?: number;
+//     height: number;
+//     thickness: number;
+// };
+
+function addGlassRoomWithOpenDoor(
+    scene: THREE.Scene,
+    colliders: THREE.Box3[],
+    rect: { minX: number; maxX: number; minZ: number; maxZ: number },
+    height: number,
+    thickness: number,
+    door: { wall: 'N' | 'S' | 'E' | 'W', width: number, centerX?: number, centerZ?: number },
+): any {
+    // Glass walls
+    const glassMat = new THREE.MeshPhysicalMaterial({
+        color: 0xffffff,
+        roughness: 0.12,
+        metalness: 0.0,
+        transmission: 0.92,
+        thickness: 0.08,
+        clearcoat: 0.3,
+        clearcoatRoughness: 0.15
+    });
+
+    const H = height, T = thickness;
+    const spanX = rect.maxX - rect.minX;
+    const spanZ = rect.maxZ - rect.minZ;
+    const doorW = door.width;
+    const segments: Array<{ x: number; y: number; z: number; w: number; h: number; d: number }> = [];
+
+    const addWallWithDoor = (wall: 'N' | 'S' | 'E' | 'W') => {
+        if (wall === 'N' || wall === 'S') {
+            const z = wall === 'N' ? rect.minZ : rect.maxZ;
+            const cx = door.centerX ?? (rect.minX + rect.maxX) / 2;
+            const leftW = (cx - doorW / 2) - rect.minX;
+            const rightW = rect.maxX - (cx + doorW / 2);
+            if (leftW > 0.01) segments.push({ x: rect.minX + leftW / 2, y: H / 2, z, w: leftW, h: H, d: T });
+            if (rightW > 0.01) segments.push({ x: rect.maxX - rightW / 2, y: H / 2, z, w: rightW, h: H, d: T });
+        } else {
+            const x = wall === 'W' ? rect.minX : rect.maxX;
+            const cz = door.centerZ ?? (rect.minZ + rect.maxZ) / 2;
+            const topD = (cz - doorW / 2) - rect.minZ;
+            const botD = rect.maxZ - (cz + doorW / 2);
+            if (topD > 0.01) segments.push({ x, y: H / 2, z: rect.minZ + topD / 2, w: T, h: H, d: topD });
+            if (botD > 0.01) segments.push({ x, y: H / 2, z: rect.maxZ - botD / 2, w: T, h: H, d: botD });
+        }
+    };
+
+    if (door.wall === 'N') addWallWithDoor('N'); else segments.push({ x: (rect.minX + rect.maxX) / 2, y: H / 2, z: rect.minZ, w: spanX, h: H, d: T });
+    if (door.wall === 'S') addWallWithDoor('S'); else segments.push({ x: (rect.minX + rect.maxX) / 2, y: H / 2, z: rect.maxZ, w: spanX, h: H, d: T });
+    if (door.wall === 'W') addWallWithDoor('W'); else segments.push({ x: rect.minX, y: H / 2, z: (rect.minZ + rect.maxZ) / 2, w: T, h: H, d: spanZ });
+    if (door.wall === 'E') addWallWithDoor('E'); else segments.push({ x: rect.maxX, y: H / 2, z: (rect.minZ + rect.maxZ) / 2, w: T, h: H, d: spanZ });
+
+    for (const s of segments) {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(s.w, s.h, s.d), glassMat);
+        wall.position.set(s.x, s.y, s.z);
+        wall.castShadow = false; wall.receiveShadow = true;
+        scene.add(wall);
+        colliders.push(new THREE.Box3().setFromObject(wall));
+    }
+
+    // Beige office ceiling (tiled, double-sided)
+    const tileSize = 0.6; // ~60cm tiles
+    const cTexCanvas = document.createElement('canvas'); cTexCanvas.width = cTexCanvas.height = 512;
+    const cg = cTexCanvas.getContext('2d')!;
+    cg.fillStyle = '#f1e5c8'; cg.fillRect(0, 0, 512, 512);
+    // draw T-bar grid
+    cg.strokeStyle = 'rgba(60,60,60,0.25)'; cg.lineWidth = 2;
+    const step = Math.floor(512 / 8);
+    for (let x = 0; x <= 512; x += step) { cg.beginPath(); cg.moveTo(x + 0.5, 0); cg.lineTo(x + 0.5, 512); cg.stroke(); }
+    for (let y = 0; y <= 512; y += step) { cg.beginPath(); cg.moveTo(0, y + 0.5); cg.lineTo(512, y + 0.5); cg.stroke(); }
+    const cTex = new THREE.CanvasTexture(cTexCanvas); cTex.wrapS = cTex.wrapT = THREE.RepeatWrapping;
+    cTex.repeat.set(Math.max(1, spanX / tileSize), Math.max(1, spanZ / tileSize));
+    const roof = new THREE.Mesh(
+        new THREE.PlaneGeometry(spanX, spanZ),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, map: cTex, roughness: 0.9, metalness: 0.02, side: THREE.DoubleSide })
+    );
+    roof.rotation.x = -Math.PI / 2;
+    roof.position.set((rect.minX + rect.maxX) / 2, H + 0.02, (rect.minZ + rect.maxZ) / 2);
+    roof.receiveShadow = true;
+    scene.add(roof);
+
+    // Visual glass door panel (always open) — no collider so it stays passable
+    const doorH = H * 0.92;
+    const doorPanel = new THREE.Mesh(new THREE.BoxGeometry(0.04, doorH, door.width), glassMat);
+    if (door.wall === 'W') {
+        const cz = door.centerZ ?? (rect.minZ + rect.maxZ) / 2;
+        doorPanel.position.set(rect.minX + 0.6, doorH / 2, cz);
+        doorPanel.rotation.y = Math.PI / 2; // swung open inside room
+    } else if (door.wall === 'E') {
+        const cz = door.centerZ ?? (rect.minZ + rect.maxZ) / 2;
+        doorPanel.position.set(rect.maxX - 0.6, doorH / 2, cz);
+        doorPanel.rotation.y = -Math.PI / 2;
+    } else if (door.wall === 'N') {
+        const cx = door.centerX ?? (rect.minX + rect.maxX) / 2;
+        doorPanel.position.set(cx, doorH / 2, rect.minZ + 0.6);
+        doorPanel.rotation.y = 0;
+    } else { // 'S'
+        const cx = door.centerX ?? (rect.minX + rect.maxX) / 2;
+        doorPanel.position.set(cx, doorH / 2, rect.maxZ - 0.6);
+        doorPanel.rotation.y = Math.PI;
+    }
+    scene.add(doorPanel);   // Compute blocker collider for the doorway (used when door is closed)\r\n    let blockerCenter: THREE.Vector3;\r\n    let blockerSize: THREE.Vector3;\r\n    if (door.wall === 'W' || door.wall === 'E') {\r\n        const cz = door.centerZ ?? (rect.minZ + rect.maxZ) / 2;\r\n        const bx = door.wall === 'W' ? rect.minX + T / 2 : rect.maxX - T / 2;\r\n        blockerCenter = new THREE.Vector3(bx, H / 2, cz);\r\n        blockerSize = new THREE.Vector3(T, H, door.width);\r\n    } else {\r\n        const cx = door.centerX ?? (rect.minX + rect.maxX) / 2;\r\n        const bz = door.wall === 'N' ? rect.minZ + T / 2 : rect.maxZ - T / 2;\r\n        blockerCenter = new THREE.Vector3(cx, H / 2, bz);\r\n        blockerSize = new THREE.Vector3(door.width, H, T);\r\n    }\r\n    const blockerBox = new THREE.Box3().setFromCenterAndSize(blockerCenter, blockerSize);\r\n\r\n    return { doorPanel, blockerBox, wall: door.wall, width: door.width, centerX: door.centerX, centerZ: door.centerZ, height: H, thickness: T };\r\n}\r\n
+}
 function segmentIntersectsAnyBox(a: THREE.Vector3, b: THREE.Vector3, boxes: THREE.Box3[]) {
     const steps = 16;
     for (let i = 0; i <= steps; i++) {
@@ -424,10 +540,10 @@ export function buildZones(
     doorways.push({ x: huddleA.maxX, z: -2.0 });
     addWarmLighting(scene, (huddleA.minX + huddleA.maxX) / 2, 2.2, (huddleA.minZ + huddleA.maxZ) / 2, 0x4a90e2);
 
-    // Conference Room - professional warm gray
-    addRoomWithDoor(scene, colliders, confRoom, 2.7, 0.12, { wall: 'W', width: 2.2, centerZ: -2.0 }, 0x4a4d52, 0x6b8e9c);
-    doorways.push({ x: confRoom.minX, z: 2.0 });
-    addWarmLighting(scene, (confRoom.minX + confRoom.maxX) / 2, 2.4, (confRoom.minZ + confRoom.maxZ) / 2, 0x87ceeb);
+    // Conference Room — glass walls with open glass door and beige roof
+    const confGlass = addGlassRoomWithOpenDoor(scene, colliders, confRoom, 3.2, 0.06, { wall: 'W', width: 2.2, centerZ: -2.0 });
+    doorways.push({ x: confRoom.minX, z: -2.0 });
+    addWarmLighting(scene, (confRoom.minX + confRoom.maxX) / 2, 2.7, (confRoom.minZ + confRoom.maxZ) / 2, 0xffd8a8);
 
     // Lounge - warm terracotta/rust
     addRoomWithDoor(scene, colliders, loungeRect, 0.5, 0.1, { wall: 'N', width: 2.6 }, 0x5c4033, 0x8b6914);
@@ -444,22 +560,81 @@ export function buildZones(
     doorways.push({ x: pantryRect.minX, z: (pantryRect.minZ + pantryRect.maxZ) / 2 });
     addWarmLighting(scene, (pantryRect.minX + pantryRect.maxX) / 2, 2.2, (pantryRect.minZ + pantryRect.maxZ) / 2, 0xffd700);
 
-    // Enhanced Conference Room with modern table
+    // Realistic Conference Room furniture (table, chairs, lights, TV)
     const confCenter = { x: (confRoom.minX + confRoom.maxX) / 2, z: (confRoom.minZ + confRoom.maxZ) / 2 };
-    const confTop = new THREE.Mesh(
-        new THREE.CylinderGeometry(2.4, 2.4, 0.1, 32),
-        createWoodMaterial(0x8b4513, 0.3)
+    const spanX = confRoom.maxX - confRoom.minX;
+    const spanZ = confRoom.maxZ - confRoom.minZ;
+
+    const tableLen = Math.min(spanX * 0.72, 8.0);
+    const tableDepth = Math.min(spanZ * 0.48, 3.2);
+    const confTableTop = new THREE.Mesh(
+        new THREE.BoxGeometry(tableLen, 0.08, tableDepth),
+        createWoodMaterial(0xd0b089, 0.35)
     );
-    const confPost = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.2, 0.2, 0.75, 24),
-        new THREE.MeshStandardMaterial({ color: 0x2f2f2f, metalness: 0.6, roughness: 0.4 })
-    );
-    confTop.position.set(confCenter.x, 0.85, confCenter.z);
-    confPost.position.set(confCenter.x, 0.42, confCenter.z);
-    confTop.castShadow = true; confTop.receiveShadow = true;
-    confPost.castShadow = true; confPost.receiveShadow = true;
-    scene.add(confTop, confPost);
-    colliders.push(new THREE.Box3().setFromObject(confTop));
+    confTableTop.position.set(confCenter.x, 0.82, confCenter.z);
+    confTableTop.castShadow = true; confTableTop.receiveShadow = true;
+    scene.add(confTableTop);
+    colliders.push(new THREE.Box3().setFromObject(confTableTop));
+
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x8a8e94, metalness: 0.75, roughness: 0.25 });
+    const legGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.78, 16);
+    const legOffsetX = (tableLen / 2) - 0.25;
+    const legOffsetZ = (tableDepth / 2) - 0.25;
+    [[legOffsetX, legOffsetZ], [-legOffsetX, legOffsetZ], [legOffsetX, -legOffsetZ], [-legOffsetX, -legOffsetZ]].forEach(([lx, lz]) => {
+        const leg = new THREE.Mesh(legGeo, legMat);
+        leg.position.set(confCenter.x + lx, 0.39, confCenter.z + lz);
+        leg.castShadow = true; leg.receiveShadow = true;
+        scene.add(leg);
+    });
+
+    const sideCount = 4;
+    const gap = tableLen / (sideCount + 1);
+    const chairDist = tableDepth / 2 + 0.55;
+    const chairColor = '#3d3f45';
+    const frameColor = '#d7cdb8';
+    for (let i = 1; i <= sideCount; i++) {
+        const offsetX = -tableLen / 2 + i * gap;
+        const c1 = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
+        c1.group.position.set(confCenter.x + offsetX, 0, confCenter.z + chairDist);
+        c1.group.rotation.y = Math.PI;
+        scene.add(c1.group);
+        const c2 = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
+        c2.group.position.set(confCenter.x + offsetX, 0, confCenter.z - chairDist);
+        c2.group.rotation.y = 0;
+        scene.add(c2.group);
+    }
+    const headDist = tableLen / 2 + 0.6;
+    const cWest = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
+    cWest.group.position.set(confCenter.x - headDist, 0, confCenter.z);
+    cWest.group.rotation.y = Math.PI / 2;
+    scene.add(cWest.group);
+    const cEast = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
+    cEast.group.position.set(confCenter.x + headDist, 0, confCenter.z);
+    cEast.group.rotation.y = -Math.PI / 2;
+    scene.add(cEast.group);
+
+    const lampY = 2.2;
+    const lampOffsetX = tableLen * 0.22;
+    const bulbMat = new THREE.MeshStandardMaterial({ color: 0xfff2cc, emissive: 0xffe0a8, emissiveIntensity: 1.4 });
+    const frameMat = new THREE.MeshBasicMaterial({ color: 0x404040, wireframe: true });
+    [-lampOffsetX, lampOffsetX].forEach((ox) => {
+        const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 12), bulbMat);
+        bulb.position.set(confCenter.x + ox, lampY, confCenter.z);
+        scene.add(bulb);
+        const shade = new THREE.Mesh(new THREE.IcosahedronGeometry(0.35, 0), frameMat);
+        shade.position.copy(bulb.position);
+        scene.add(shade);
+        const l = new THREE.PointLight(0xffd8a8, 0.9, 8, 2);
+        l.position.copy(bulb.position);
+        l.castShadow = true;
+        scene.add(l);
+    });
+
+    const tv = new THREE.Mesh(new THREE.PlaneGeometry(3.8, 2.1), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2, metalness: 0.8 }));
+    tv.position.set(confRoom.maxX - 0.07, 1.6, confCenter.z + 0.2);
+    tv.rotation.y = -Math.PI / 2;
+    tv.castShadow = true;
+    scene.add(tv);
 
     // Enhanced Game Room with modern table and detailed dice
     const gameCenter = { x: (gameRect.minX + gameRect.maxX) / 2, z: (gameRect.minZ + gameRect.maxZ) / 2 };
@@ -735,6 +910,38 @@ export function buildZones(
         navNodes,
         navEdges,
         meta: { gameRect },
-        roomLabels: roomLabelSprites
+        roomLabels: roomLabelSprites,
+        conferenceDoorBlocker: confGlass?.blockerBox,
+        conferenceDoorPanel: confGlass?.doorPanel,
+        conferenceDoorOpen: true,
+        setConferenceDoorVisual: (open: boolean) => {
+            try {
+                const d: any = confGlass;
+                if (!d) return;
+                const doorH = (d.height) * 0.92;
+                const cz = d.centerZ ?? (confRoom.minZ + confRoom.maxZ) / 2;
+                if (d.wall === 'W') {
+                    if (open) {
+                        d.doorPanel.position.set(confRoom.minX + 0.6, doorH / 2, cz);
+                        d.doorPanel.rotation.y = Math.PI / 2;
+                    } else {
+                        d.doorPanel.position.set(confRoom.minX + d.thickness / 2, doorH / 2, cz);
+                        d.doorPanel.rotation.y = 0;
+                    }
+                }
+            } catch { }
+        }
+
     };
 }
+
+
+
+
+
+
+
+
+
+
+
