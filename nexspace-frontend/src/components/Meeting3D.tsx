@@ -20,12 +20,38 @@ const norm = (v: any) => String(v ?? '');
 const ROOM_W = 48;
 const ROOM_D = 34;
 
-// --- Movement tuning ---
-const BASE_WALK_SPEED = 4.2;     // was ~2.5
-const SPRINT_MULT = 1.75;    // hold Shift
-const AUTO_PATH_SPEED = 4.8;     // for queued click-to-move
-const TURN_SPEED = 2.4;     // Q/E yaw (rad/s), was ~1.8
+// --- Global 3D cache to speed up re-mounts (switching back to 3D) ---
+type SceneCache = {
+  scene: THREE.Scene;
+  renderer: THREE.WebGLRenderer;
+  camera: THREE.PerspectiveCamera;
+  zonesInfo: BuiltZonesInfo | null;
+  obstacles: THREE.Box3[];
+  stageScreen: THREE.Mesh | null;
+  deskMgr: DeskGridManager | null;
+  avatarsGroup: THREE.Group | null;
+  avatarBySid: Map<string, THREE.Group>;
+  seatTransforms: SeatTransform[];
+  participantSeatMap: Map<string, number>;
+  monitorPlanes: Map<number, THREE.Mesh>;
+  roomLabels: THREE.Sprite[];
+  diceMesh: THREE.Mesh | null;
+  // camera/view state
+  yaw: number;
+  pitch: number;
+  camTarget: THREE.Vector3;
+  cameraDist: number;
+  targetDist: number;
+  viewMode: 'first-person' | 'third-person';
+};
 
+let GLOBAL_SCENE_CACHE: SceneCache | null = null;
+
+// --- Movement tuning ---
+const BASE_WALK_SPEED = 10.2;     // was ~2.5
+const SPRINT_MULT = 1.75;         // hold Shift
+const AUTO_PATH_SPEED = 6.8;      // for queued click-to-move
+const TURN_SPEED = 2.4;     // Q/E yaw (rad/s), was ~1.8
 
 // ——— Name sprite (smaller) ———
 function makeNameSpriteSmall(text: string): THREE.Sprite {
@@ -86,46 +112,112 @@ function makeVideoBadge(tex: THREE.VideoTexture): THREE.Mesh {
 // ——— A* helpers ———
 type NavNode = { id: string; x: number; z: number };
 type NavEdge = [string, string];
+type NavGraph = {
+  nodeById: Map<string, NavNode>;
+  neighbors: Map<string, Array<{ id: string; cost: number }>>;
+};
 function dist2(a: { x: number; z: number }, b: { x: number; z: number }) {
   const dx = a.x - b.x, dz = a.z - b.z; return dx * dx + dz * dz;
 }
-function aStar(nodes: NavNode[], edges: NavEdge[], startId: string, goalId: string) {
-  const byId = new Map(nodes.map(n => [n.id, n]));
-  const nbrs = new Map<string, string[]>();
-  for (const [a, b] of edges) {
-    if (!nbrs.has(a)) nbrs.set(a, []);
-    if (!nbrs.has(b)) nbrs.set(b, []);
-    nbrs.get(a)!.push(b);
-    nbrs.get(b)!.push(a);
+function buildNavGraph(nodes: NavNode[], edges: NavEdge[]): NavGraph {
+  const nodeById = new Map<string, NavNode>();
+  const neighbors = new Map<string, Array<{ id: string; cost: number }>>();
+  for (const n of nodes) {
+    nodeById.set(n.id, n);
+    neighbors.set(n.id, []);
   }
-  const g = new Map<string, number>(); g.set(startId, 0);
-  const h = (id: string) => Math.sqrt(dist2(byId.get(id)!, byId.get(goalId)!));
-  const f = new Map<string, number>(); f.set(startId, h(startId));
-  const came = new Map<string, string>();
-  const open = new Set<string>([startId]);
+  for (const [a, b] of edges) {
+    const na = nodeById.get(a);
+    const nb = nodeById.get(b);
+    if (!na || !nb) continue;
+    const cost = Math.sqrt(dist2(na, nb));
+    neighbors.get(a)!.push({ id: b, cost });
+    neighbors.get(b)!.push({ id: a, cost });
+  }
+  return { nodeById, neighbors };
+}
+type HeapNode = { id: string; g: number; f: number };
+class MinHeap<T> {
+  private data: T[];
+  private compare: (a: T, b: T) => number;
+  constructor(compare: (a: T, b: T) => number) {
+    this.data = [];
+    this.compare = compare;
+  }
+  push(item: T) {
+    this.data.push(item);
+    this.bubbleUp(this.data.length - 1);
+  }
+  pop(): T | undefined {
+    if (this.data.length === 0) return undefined;
+    const top = this.data[0];
+    const last = this.data.pop()!;
+    if (this.data.length) {
+      this.data[0] = last;
+      this.bubbleDown(0);
+    }
+    return top;
+  }
+  get size() {
+    return this.data.length;
+  }
+  private bubbleUp(index: number) {
+    while (index > 0) {
+      const parent = Math.floor((index - 1) / 2);
+      if (this.compare(this.data[index], this.data[parent]) >= 0) return;
+      [this.data[index], this.data[parent]] = [this.data[parent], this.data[index]];
+      index = parent;
+    }
+  }
+  private bubbleDown(index: number) {
+    const n = this.data.length;
+    while (true) {
+      const left = index * 2 + 1;
+      const right = left + 1;
+      let smallest = index;
+      if (left < n && this.compare(this.data[left], this.data[smallest]) < 0) smallest = left;
+      if (right < n && this.compare(this.data[right], this.data[smallest]) < 0) smallest = right;
+      if (smallest === index) return;
+      [this.data[index], this.data[smallest]] = [this.data[smallest], this.data[index]];
+      index = smallest;
+    }
+  }
+}
+function findPath(graph: NavGraph | null, startId: string, goalId: string): string[] | null {
+  if (!graph) return null;
+  if (startId === goalId) return [startId];
+  const { nodeById, neighbors } = graph;
+  const startNode = nodeById.get(startId);
+  const goalNode = nodeById.get(goalId);
+  if (!startNode || !goalNode) return null;
+  const open = new MinHeap<HeapNode>((a, b) => a.f - b.f);
+  const gScore = new Map<string, number>();
+  const cameFrom = new Map<string, string>();
+  gScore.set(startId, 0);
+  open.push({ id: startId, g: 0, f: Math.sqrt(dist2(startNode, goalNode)) });
   while (open.size) {
-    let current: string | null = null; let bestF = Infinity;
-    for (const id of open) { const fi = f.get(id) ?? Infinity; if (fi < bestF) { bestF = fi; current = id; } }
-    if (!current) break;
-    if (current === goalId) {
-      const path: string[] = [current];
-      while (came.has(path[0])) path.unshift(came.get(path[0])!);
+    const current = open.pop()!;
+    const currentBest = gScore.get(current.id);
+    if (currentBest === undefined || current.g > currentBest + 1e-6) continue;
+    if (current.id === goalId) {
+      const path = [current.id];
+      while (cameFrom.has(path[0])) {
+        path.unshift(cameFrom.get(path[0])!);
+      }
       return path;
     }
-    open.delete(current);
-    for (const nb of (nbrs.get(current) || [])) {
-      const tentative = (g.get(current) ?? Infinity) + Math.sqrt(dist2(byId.get(current)!, byId.get(nb)!));
-      if (tentative < (g.get(nb) ?? Infinity)) {
-        came.set(nb, current);
-        g.set(nb, tentative);
-        f.set(nb, tentative + h(nb));
-        open.add(nb);
-      }
+    for (const nb of neighbors.get(current.id) || []) {
+      const tentativeG = current.g + nb.cost;
+      if (tentativeG >= (gScore.get(nb.id) ?? Infinity) - 1e-6) continue;
+      cameFrom.set(nb.id, current.id);
+      gScore.set(nb.id, tentativeG);
+      const target = nodeById.get(nb.id)!;
+      const heuristic = Math.sqrt(dist2(target, goalNode));
+      open.push({ id: nb.id, g: tentativeG, f: tentativeG + heuristic });
     }
   }
   return null;
 }
-
 // ——— Path visualization ———
 function createPathLine(points: THREE.Vector3[]): THREE.Line {
   const geometry = new THREE.BufferGeometry().setFromPoints(points);
@@ -163,6 +255,10 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rafRef = useRef<number | null>(null);
 
+  // View mode state
+  const viewModeRef = useRef<'first-person' | 'third-person'>('third-person');
+  const [currentViewMode, setCurrentViewMode] = useState<'first-person' | 'third-person'>('third-person');
+
   // Controls
   const avatarRef = useRef<THREE.Group | null>(null);
   const yawRef = useRef<number>(0);
@@ -170,11 +266,32 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const keyState = useRef<Record<string, boolean>>({});
   const cameraDistRef = useRef<number>(7.0);
   const targetDistRef = useRef<number>(7.0);
+  const scrollMoveRef = useRef<number>(0);
+
+  // Tuning refs: speed multiplier + always-sprint
+  const speedMultRef = useRef<number>(1.0);
+  const [speedMultUI, setSpeedMultUI] = useState(1.0);
+  const alwaysSprintRef = useRef<boolean>(false);
+  const [alwaysSprintUI, setAlwaysSprintUI] = useState(false);
 
   // NEW: independent camera target & pan/follow lock
   const camTargetRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 1.2, 0));
   const isPanningRef = useRef<boolean>(false);
   const followLockRef = useRef<boolean>(false); // locks view after a pan until movement/rotate or explicit reset
+
+  // Camera transition state (smooth switch between modes)
+  const camTransitionRef = useRef<
+    | null
+    | {
+      toMode: 'first-person' | 'third-person';
+      t0: number;
+      dur: number;
+      startPos: THREE.Vector3;
+      startQuat: THREE.Quaternion;
+      endPos: THREE.Vector3;
+      endQuat: THREE.Quaternion;
+    }
+  >(null);
 
   // Auto-path with visualization
   const pathQueueRef = useRef<THREE.Vector3[]>([]);
@@ -183,7 +300,6 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
   // Static env
   const stageScreenRef = useRef<THREE.Mesh | null>(null);
-  const localDeskMonitorRef = useRef<THREE.Mesh | null>(null);
   const obstaclesRef = useRef<THREE.Box3[]>([]);
   const roomBoundsRef = useRef<{ minX: number; maxX: number; minZ: number; maxZ: number }>({ minX: -ROOM_W / 2 + 0.3, maxX: ROOM_W / 2 - 0.3, minZ: -ROOM_D / 2 + 0.3, maxZ: ROOM_D / 2 - 0.3 });
 
@@ -199,7 +315,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   // Zones/rooms
   const zonesInfoRef = useRef<BuiltZonesInfo | null>(null);
   const navNodesRef = useRef<NavNode[]>([]);
-  const navEdgesRef = useRef<Array<[string, string]>>([]);
+  const navGraphRef = useRef<NavGraph | null>(null);
   const minimapHitsRef = useRef<Array<{ x: number; y: number; w: number; h: number; target?: THREE.Vector3; allowGhost?: boolean; roomName?: string }>>([]);
   const roomLabelsRef = useRef<THREE.Sprite[]>([]);
 
@@ -216,27 +332,86 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const canSendDataRef = useRef<boolean>(false);
   const lastDataSentAtRef = useRef<number>(0);
 
-  // ---- Default camera view (initial "planner" angle) ----
-  const DEFAULT_VIEW = {
-    // yaw: turn around Y (left/right), pitch: tilt up/down
-    yaw: -1 * Math.PI,      
-    pitch: 0.46,                 // ~26° downward tilt
-    dist: 28.0,                  // zoomed out to see the full floor
-    // Aim around the center of your layout (tweak if your room layout shifts):
-    target: new THREE.Vector3(2.0, 1.2, 2.0),
-  } as const;
+  // Toggle view mode function
+  const startCamTransition = (toMode: 'first-person' | 'third-person') => {
+    const sceneCam = cameraRef.current;
+    const you = avatarRef.current;
+    if (!sceneCam || !you) {
+      // Fallback: just set mode if camera/avatar not ready
+      viewModeRef.current = toMode;
+      setCurrentViewMode(toMode);
+      return;
+    }
+    const newMode = toMode;
 
-  function applyDefaultView() {
-    yawRef.current = DEFAULT_VIEW.yaw;
-    pitchRef.current = DEFAULT_VIEW.pitch;
-    targetDistRef.current = DEFAULT_VIEW.dist;
-    cameraDistRef.current = DEFAULT_VIEW.dist;
-    camTargetRef.current.copy(DEFAULT_VIEW.target);
+    // Compute target transforms for both modes using current yaw/pitch/dist/target
+    const dist = cameraDistRef.current;
+    const pitch = pitchRef.current;
+    const yaw2 = yawRef.current;
+    const tgt = camTargetRef.current.clone();
 
-    // IMPORTANT: keep the camera parked on this view until the user
-    // pans/zooms/moves, instead of snapping to the avatar
-    followLockRef.current = true;
-  }
+    // Third-person desired camera transform
+    const thirdPos = (() => {
+      const off = new THREE.Vector3(
+        Math.sin(yaw2) * Math.cos(pitch),
+        Math.sin(pitch),
+        Math.cos(yaw2) * Math.cos(pitch)
+      ).multiplyScalar(dist);
+      return new THREE.Vector3(tgt.x + off.x, 1.2 + off.y, tgt.z + off.z);
+    })();
+    const thirdQuat = (() => {
+      const q = new THREE.Quaternion();
+      const look = new THREE.Vector3(tgt.x, 1.2, tgt.z);
+      const m = new THREE.Matrix4();
+      m.lookAt(thirdPos, look, new THREE.Vector3(0, 1, 0));
+      // camera looks down -Z, but Matrix4.lookAt builds view matrix; extract rotation by inverting
+      const rot = new THREE.Matrix4().copy(m).invert();
+      q.setFromRotationMatrix(rot);
+      return q;
+    })();
+
+    // First-person desired camera transform
+    const firstPos = new THREE.Vector3(you.position.x, 1.55, you.position.z);
+    const firstQuat = (() => {
+      const q = new THREE.Quaternion();
+      // build direction from yaw/pitch
+      const dir = new THREE.Vector3(
+        -Math.sin(yaw2) * Math.cos(pitch),
+        -Math.sin(pitch),
+        -Math.cos(yaw2) * Math.cos(pitch)
+      ).normalize();
+      const look = new THREE.Vector3().addVectors(firstPos, dir);
+      const m = new THREE.Matrix4();
+      m.lookAt(firstPos, look, new THREE.Vector3(0, 1, 0));
+      const rot = new THREE.Matrix4().copy(m).invert();
+      q.setFromRotationMatrix(rot);
+      return q;
+    })();
+
+    // Setup transition from current camera transform to target (1s)
+    const startPos = sceneCam.position.clone();
+    const startQuat = sceneCam.quaternion.clone();
+    const endPos = newMode === 'first-person' ? firstPos : thirdPos;
+    const endQuat = newMode === 'first-person' ? firstQuat : thirdQuat;
+
+    camTransitionRef.current = {
+      toMode: newMode,
+      t0: performance.now(),
+      dur: 1000,
+      startPos,
+      startQuat,
+      endPos,
+      endQuat,
+    };
+
+    viewModeRef.current = newMode;
+    setCurrentViewMode(newMode);
+  };
+
+  const toggleViewMode = () => {
+    const newMode = viewModeRef.current === 'first-person' ? 'third-person' : 'first-person';
+    startCamTransition(newMode);
+  };
 
   // —— Scene build (ONLY ONCE) —— 
   useEffect(() => {
@@ -252,7 +427,53 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     let renderer = rendererRef.current;
     let camera = cameraRef.current;
 
-    if (!scene) {
+    // If a cached scene exists, rehydrate from it for instant switch
+    if (GLOBAL_SCENE_CACHE) {
+      scene = GLOBAL_SCENE_CACHE.scene;
+      renderer = GLOBAL_SCENE_CACHE.renderer;
+      camera = GLOBAL_SCENE_CACHE.camera;
+      zonesInfoRef.current = GLOBAL_SCENE_CACHE.zonesInfo;
+      obstaclesRef.current = GLOBAL_SCENE_CACHE.obstacles;
+      stageScreenRef.current = GLOBAL_SCENE_CACHE.stageScreen;
+      deskMgrRef.current = GLOBAL_SCENE_CACHE.deskMgr;
+      avatarsGroupRef.current = GLOBAL_SCENE_CACHE.avatarsGroup;
+      avatarBySidRef.current = GLOBAL_SCENE_CACHE.avatarBySid;
+      seatTransformsRef.current = GLOBAL_SCENE_CACHE.seatTransforms;
+      participantSeatMapRef.current = GLOBAL_SCENE_CACHE.participantSeatMap;
+      monitorPlanesRef.current = GLOBAL_SCENE_CACHE.monitorPlanes;
+      roomLabelsRef.current = GLOBAL_SCENE_CACHE.roomLabels;
+      diceMeshRef.current = GLOBAL_SCENE_CACHE.diceMesh;
+      yawRef.current = GLOBAL_SCENE_CACHE.yaw;
+      pitchRef.current = GLOBAL_SCENE_CACHE.pitch;
+      camTargetRef.current.copy(GLOBAL_SCENE_CACHE.camTarget);
+      cameraDistRef.current = GLOBAL_SCENE_CACHE.cameraDist;
+      targetDistRef.current = GLOBAL_SCENE_CACHE.targetDist;
+      viewModeRef.current = GLOBAL_SCENE_CACHE.viewMode;
+      setCurrentViewMode(GLOBAL_SCENE_CACHE.viewMode);
+
+      // Restore local avatar ref promptly so controls work immediately
+      const maybeLocal = avatarBySidRef.current.get('__LOCAL__') || avatarBySidRef.current.get(norm(localSid));
+      if (maybeLocal) {
+        avatarRef.current = maybeLocal;
+      }
+
+      // Ensure no stale transition blocks input after remount
+      camTransitionRef.current = null;
+
+      // Attach renderer DOM to current container and resize
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.5));
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      if (renderer.domElement.parentElement !== container) {
+        try { renderer.domElement.parentElement?.removeChild(renderer.domElement); } catch { }
+        container.appendChild(renderer.domElement);
+      }
+
+      sceneRef.current = scene;
+      rendererRef.current = renderer;
+      cameraRef.current = camera;
+    }
+
+    if (!scene && !GLOBAL_SCENE_CACHE) {
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x111419);
       sceneRef.current = scene;
@@ -309,40 +530,52 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     container.setAttribute('tabindex', '0');
 
-    const { obstacles, stageScreen, localMonitor, disposeEnv } = buildEnvironment(scene, { ROOM_W, ROOM_D });
-    obstaclesRef.current = obstacles;
-    stageScreenRef.current = stageScreen;
-    localDeskMonitorRef.current = localMonitor;
+    // Build static environment if not cached
+    if (!GLOBAL_SCENE_CACHE) {
+      const env = buildEnvironment(scene!, { ROOM_W, ROOM_D });
+      obstaclesRef.current = env.obstacles;
+      stageScreenRef.current = env.stageScreen;
+    }
 
-    const zones = buildZones(scene, { ROOM_W, ROOM_D });
-    zonesInfoRef.current = zones;
-    obstaclesRef.current.push(...zones.zoneColliders);
-    if (zones.stageScreen) stageScreenRef.current = zones.stageScreen;
-    if (zones.roomLabels) roomLabelsRef.current = zones.roomLabels;
-    diceMeshRef.current = scene.getObjectByName?.('GAME_ROOM_DICE') as THREE.Mesh | null;
+    if (!GLOBAL_SCENE_CACHE) {
+      const zones = buildZones(scene!, { ROOM_W, ROOM_D });
+      zonesInfoRef.current = zones;
+      obstaclesRef.current.push(...zones.zoneColliders);
+      if (zones.stageScreen) stageScreenRef.current = zones.stageScreen;
+      if (zones.roomLabels) roomLabelsRef.current = zones.roomLabels;
+      diceMeshRef.current = scene!.getObjectByName?.('GAME_ROOM_DICE') as THREE.Mesh | null;
+    }
 
-    const prefab = createDeskModule();
-    deskPrefabRef.current = prefab;
+    if (!GLOBAL_SCENE_CACHE) {
+      const prefab = createDeskModule();
+      deskPrefabRef.current = prefab;
 
-    const mgr = new DeskGridManager(scene, prefab, {
-      bayCols: 5, bayRows: 2,
-      deskGapX: 1.5, deskGapZ: 1.7,
-      bayAisleX: 2.2, bayAisleZ: 2.4,
-      startX: zones.openOfficeArea.minX - 2.0,
-      startZ: zones.openOfficeArea.minZ - 5.0,
-      maxWidth: (zones.openOfficeArea.maxX - zones.openOfficeArea.minX) - 2.0,
-      maxDepth: (zones.openOfficeArea.maxZ - zones.openOfficeArea.minZ) - 1.8,
-      faceYaw: Math.PI,
-    });
-    deskMgrRef.current = mgr;
-    obstaclesRef.current.push(...mgr.colliders);
+      const zones = zonesInfoRef.current!;
+      const mgr = new DeskGridManager(scene!, prefab, {
+        bayCols: 5, bayRows: 2,
+        deskGapX: 1.5, deskGapZ: 1.7,
+        bayAisleX: 2.2, bayAisleZ: 2.4,
+        startX: zones.openOfficeArea.minX - 2.0,
+        startZ: zones.openOfficeArea.minZ - 5.0,
+        maxWidth: (zones.openOfficeArea.maxX - zones.openOfficeArea.minX) - 2.0,
+        maxDepth: (zones.openOfficeArea.maxZ - zones.openOfficeArea.minZ) - 1.8,
+        faceYaw: Math.PI,
+      });
+      deskMgrRef.current = mgr;
+      obstaclesRef.current.push(...mgr.colliders);
+    }
 
-    const avatars = new THREE.Group();
-    avatarsGroupRef.current = avatars;
-    scene.add(avatars);
+    if (!GLOBAL_SCENE_CACHE) {
+      const avatars = new THREE.Group();
+      avatarsGroupRef.current = avatars;
+      scene!.add(avatars);
+    }
 
-    navNodesRef.current = zones.navNodes.map(n => ({ id: n.id, x: n.x, z: n.z }));
-    navEdgesRef.current = zones.navEdges.map(e => [e[0], e[1]]);
+    if (zonesInfoRef.current) {
+      navNodesRef.current = zonesInfoRef.current.navNodes.map(n => ({ id: n.id, x: n.x, z: n.z }));
+      const edges = zonesInfoRef.current.navEdges as NavEdge[];
+      navGraphRef.current = buildNavGraph(navNodesRef.current, edges);
+    }
 
     // Enhanced pathfinding function with visualization
     const queuePathTo = (tx: number, tz: number, allowGhost = false, roomName?: string) => {
@@ -351,7 +584,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
       // Clear existing path line
       if (pathLineRef.current) {
-        scene.remove(pathLineRef.current);
+        scene!.remove(pathLineRef.current);
         pathLineRef.current.geometry.dispose();
         (pathLineRef.current.material as THREE.Material).dispose();
         pathLineRef.current = null;
@@ -369,15 +602,111 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       let startId = nodes[0].id, goalId = nodes[0].id;
       let bestS = Infinity, bestG = Infinity;
 
+      // If a room name is provided, prefer goal nodes inside that room's rect
+      const zinfo = zonesInfoRef.current;
+      let targetRect: { minX: number; maxX: number; minZ: number; maxZ: number } | null = null;
+      if (roomName && zinfo) {
+        const rr = zinfo.roomRects.find(r => r.name === roomName);
+        if (rr) targetRect = rr.rect;
+      }
+
+      const isPointClear = (x: number, z: number) => {
+        const box = new THREE.Box3().setFromCenterAndSize(
+          new THREE.Vector3(x, 0.85, z),
+          new THREE.Vector3(0.42, 1.6, 0.42)
+        );
+        for (const ob of obstaclesRef.current) {
+          if (ob.intersectsBox(box)) return false;
+        }
+        return true;
+      };
+
+      let bestInsideSafeId: string | null = null; let bestInsideSafeD = Infinity;
+      let bestInsideAnyId: string | null = null; let bestInsideAnyD = Infinity;
+      let bestOverallSafeId: string | null = null; let bestOverallSafeD = Infinity;
+      let bestOverallAnyId: string | null = null; let bestOverallAnyD = Infinity;
+      let lockedGoalId: string | null = null;
+
       for (const n of nodes) {
         const ds = dist2({ x: you.position.x, z: you.position.z }, n);
         if (ds < bestS) { bestS = ds; startId = n.id; }
         const dg = dist2({ x: tx, z: tz }, n);
-        if (dg < bestG) { bestG = dg; goalId = n.id; }
-      }
+        // Track best overall for fallback
+        if (isPointClear(n.x, n.z) && dg < bestOverallSafeD) { bestOverallSafeD = dg; bestOverallSafeId = n.id; }
+        if (dg < bestOverallAnyD) { bestOverallAnyD = dg; bestOverallAnyId = n.id; }
 
-      // Calculate path using A*
-      const pathIds = aStar(nodes, navEdgesRef.current as any, startId!, goalId!);
+        if (targetRect) {
+          const inside = (n.x >= targetRect.minX && n.x <= targetRect.maxX && n.z >= targetRect.minZ && n.z <= targetRect.maxZ);
+          if (inside) {
+            if (dg < bestInsideAnyD) { bestInsideAnyD = dg; bestInsideAnyId = n.id; }
+            if (isPointClear(n.x, n.z) && dg < bestInsideSafeD) { bestInsideSafeD = dg; bestInsideSafeId = n.id; }
+          }
+        } else {
+          if (dg < bestG) { bestG = dg; goalId = n.id; }
+        }
+      }
+      // Prefer safe inside-room node; else any inside-room node; else use doorway-nearest; else safest overall
+      if (targetRect) {
+        if (bestInsideSafeId) {
+          goalId = bestInsideSafeId;
+          lockedGoalId = goalId;
+        } else if (bestInsideAnyId) {
+          goalId = bestInsideAnyId;
+          lockedGoalId = goalId;
+        } else {
+          // Try doorways that belong to this room (touching its edges)
+          const doors = (zinfo?.doorways || []).filter(d => {
+            const eps = 0.8;
+            const onXEdge = (Math.abs(d.x - targetRect.minX) <= eps || Math.abs(d.x - targetRect.maxX) <= eps) && (d.z >= targetRect.minZ - eps && d.z <= targetRect.maxZ + eps);
+            const onZEdge = (Math.abs(d.z - targetRect.minZ) <= eps || Math.abs(d.z - targetRect.maxZ) <= eps) && (d.x >= targetRect.minX - eps && d.x <= targetRect.maxX + eps);
+            const inside = d.x >= targetRect.minX - eps && d.x <= targetRect.maxX + eps && d.z >= targetRect.minZ - eps && d.z <= targetRect.maxZ + eps;
+            return onXEdge || onZEdge || inside;
+          });
+          if (doors.length) {
+            let bestDoorNode: { id: string; d: number } | null = null;
+            for (const n of nodes) {
+              if (!isPointClear(n.x, n.z)) continue;
+              let md = Infinity;
+              for (const d of doors) {
+                const dd = Math.hypot(n.x - d.x, n.z - d.z);
+                if (dd < md) md = dd;
+              }
+              if (md < (bestDoorNode?.d ?? Infinity)) bestDoorNode = { id: n.id, d: md };
+            }
+            if (bestDoorNode) {
+              goalId = bestDoorNode.id;
+              lockedGoalId = goalId;
+            } else if (bestOverallSafeId) {
+              goalId = bestOverallSafeId;
+              lockedGoalId = goalId;
+            } else if (bestOverallAnyId) {
+              goalId = bestOverallAnyId;
+              lockedGoalId = goalId;
+            }
+          } else if (bestOverallSafeId) {
+            goalId = bestOverallSafeId;
+            lockedGoalId = goalId;
+          } else if (bestOverallAnyId) {
+            goalId = bestOverallAnyId;
+            lockedGoalId = goalId;
+          }
+        }
+      }
+      // Final safety: always bias to the node nearest to the requested target
+      // This restores previous behavior and prevents drifting to other rooms
+      if (lockedGoalId) {
+        goalId = lockedGoalId;
+      } else {
+        let nearestId = goalId;
+        let nearestD = Infinity;
+        for (const n of nodes) {
+          const d2 = dist2({ x: tx, z: tz }, n);
+          if (d2 < nearestD) { nearestD = d2; nearestId = n.id; }
+        }
+        goalId = nearestId;
+      }
+      // Calculate path using cached nav graph
+      const pathIds = findPath(navGraphRef.current, startId!, goalId!);
       const idToNode = new Map(nodes.map(n => [n.id, n]));
       const queue: THREE.Vector3[] = [];
       const visualPath: THREE.Vector3[] = [];
@@ -386,31 +715,96 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       visualPath.push(you.position.clone());
       visualPath[0].y = 0.1; // Slightly above ground
 
-      if (pathIds) {
-        for (const id of pathIds) {
-          const n = idToNode.get(id)!;
-          const pos = new THREE.Vector3(n.x, 0, n.z);
-          queue.push(pos.clone());
-          visualPath.push(new THREE.Vector3(n.x, 0.1, n.z));
+      if (pathIds && pathIds.length) {
+        pathIds.forEach((id, idx) => {
+          const node = idToNode.get(id);
+          if (!node) return;
+          const nodePos = new THREE.Vector3(node.x, 0, node.z);
+          const vizPos = new THREE.Vector3(node.x, 0.1, node.z);
+          if (idx === 0) {
+            const distToStart = Math.hypot(nodePos.x - you.position.x, nodePos.z - you.position.z);
+            if (distToStart > 0.4) {
+              queue.push(nodePos.clone());
+            }
+            visualPath.push(vizPos);
+          } else {
+            queue.push(nodePos.clone());
+            visualPath.push(vizPos);
+          }
+        });
+      }
+      // Ensure the final queued node is clear; if not, step backwards to a clear one
+      if (queue.length) {
+        for (let i = queue.length - 1; i >= 0; i--) {
+          const q = queue[i];
+          if (isPointClear(q.x, q.z)) { queue.splice(i + 1); break; }
+          if (i === 0) { /* none clear; keep as-is */ }
         }
       }
 
-      // Add final destination
+      // Decide whether to include a final hop to the exact target
       const finalPos = new THREE.Vector3(tx, 0, tz);
-      queue.push(finalPos.clone());
-      visualPath.push(new THREE.Vector3(tx, 0.1, tz));
+      const targetViz = new THREE.Vector3(tx, 0.1, tz);
+      visualPath.push(targetViz);
+
+      const hasClearPath = (a: THREE.Vector3, b: THREE.Vector3) => {
+        // sample along segment and check avatar box vs obstacles
+        const steps = 20;
+        for (let i = 1; i <= steps; i++) {
+          const t = i / steps;
+          const x = a.x + (b.x - a.x) * t;
+          const z = a.z + (b.z - a.z) * t;
+          const box = new THREE.Box3().setFromCenterAndSize(
+            new THREE.Vector3(x, 0.85, z),
+            new THREE.Vector3(0.35, 1.6, 0.35)
+          );
+          for (const ob of obstaclesRef.current) {
+            if (ob.intersectsBox(box)) return false;
+          }
+        }
+        return true;
+      };
+
+      // If we have a path: consider adding final exact point (only when not risky)
+      if (queue.length) {
+        const last = queue[queue.length - 1];
+        if (!allowGhost && hasClearPath(last, finalPos)) {
+          queue.push(finalPos.clone());
+        }
+        // when allowGhost, we intentionally stop at last nav node to avoid spawning inside furniture
+      } else {
+        // No path from A* (disconnected or same node)
+        if (allowGhost) {
+          // Route to nearest nav node to the target instead of the exact center to avoid furniture
+          let best: NavNode | null = null; let bd = Infinity;
+          for (const n of nodes) {
+            const d2 = dist2({ x: tx, z: tz }, n);
+            if (d2 < bd && isPointClear(n.x, n.z)) { bd = d2; best = n; }
+          }
+          if (best) {
+            queue.push(new THREE.Vector3(best.x, 0, best.z));
+            visualPath.push(new THREE.Vector3(best.x, 0.1, best.z));
+          } else {
+            queue.push(finalPos.clone());
+          }
+        } else {
+          // normal case: try direct
+          queue.push(finalPos.clone());
+        }
+      }
 
       pathQueueRef.current = queue;
 
       // Create visual path line
       if (visualPath.length > 1) {
         pathLineRef.current = createPathLine(visualPath);
-        scene.add(pathLineRef.current);
+        scene!.add(pathLineRef.current);
 
         // Remove path line after a delay or when reaching destination
         setTimeout(() => {
-          if (pathLineRef.current && scene) {
-            scene.remove(pathLineRef.current);
+          const sc = sceneRef.current;
+          if (pathLineRef.current && sc) {
+            sc.remove(pathLineRef.current);
             pathLineRef.current.geometry.dispose();
             (pathLineRef.current.material as THREE.Material).dispose();
             pathLineRef.current = null;
@@ -436,11 +830,29 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     const onKey = (e: KeyboardEvent) => {
       const code = e.code;
-      const keys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyQ', 'KeyE', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract'];
+      const keys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyQ', 'KeyE', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', 'KeyV', 'BracketLeft', 'BracketRight'];
       if (keys.includes(code)) {
         keyState.current[code] = e.type === 'keydown';
         e.preventDefault();
       }
+
+      // Toggle view mode with 'V' key
+      if (e.type === 'keydown' && code === 'KeyV') {
+        toggleViewMode();
+      }
+
+      // Adjust walk speed with [ and ]
+      if (e.type === 'keydown' && code === 'BracketLeft') {
+        const next = Math.max(0.5, Math.round((speedMultRef.current - 0.1) * 10) / 10);
+        speedMultRef.current = next;
+        setSpeedMultUI(next);
+      }
+      if (e.type === 'keydown' && code === 'BracketRight') {
+        const next = Math.min(3.0, Math.round((speedMultRef.current + 0.1) * 10) / 10);
+        speedMultRef.current = next;
+        setSpeedMultUI(next);
+      }
+
       if (e.type === 'keydown') container.focus();
     };
     window.addEventListener('keydown', onKey, { capture: true });
@@ -450,6 +862,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     let dragging = false, lastX = 0, lastY = 0, dragButton = 0;
 
     const onMouseDown = (e: MouseEvent) => {
+      if (camTransitionRef.current) return; // ignore new drags during transition
       dragging = true;
       dragButton = e.button;      // 0=LMB, 1=MMB, 2=RMB
       isPanningRef.current = (dragButton === 1 || dragButton === 2);
@@ -464,6 +877,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     };
 
     const onMouseMove = (e: MouseEvent) => {
+      if (camTransitionRef.current) return; // ignore orbit/pan during transition
       if (!dragging) return;
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
       lastX = e.clientX; lastY = e.clientY;
@@ -473,27 +887,29 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         yawRef.current -= dx * 0.2 * DEG2RAD;
         pitchRef.current = clamp(pitchRef.current - dy * 0.15 * DEG2RAD, -0.05, 0.8);
       } else if (dragButton === 1 || dragButton === 2) {
-        // MMB or RMB = PAN (Miro/Figma style)
-        const cam = cameraRef.current;
-        if (!cam) return;
+        // MMB or RMB = PAN (Miro/Figma style) - only in third-person mode
+        if (viewModeRef.current === 'third-person') {
+          const cam = cameraRef.current;
+          if (!cam) return;
 
-        // Pan amount scales with distance so it feels natural
-        const dist = cameraDistRef.current;
-        const k = 0.0018 * dist;
+          // Pan amount scales with distance so it feels natural
+          const dist = cameraDistRef.current;
+          const k = 0.0018 * dist;
 
-        // Camera's forward & right projected to ground plane (XZ)
-        const dir = new THREE.Vector3(); cam.getWorldDirection(dir);
-        const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
-        const fwdXZ = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), right).normalize();
+          // Camera's forward & right projected to ground plane (XZ)
+          const dir = new THREE.Vector3(); cam.getWorldDirection(dir);
+          const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
+          const fwdXZ = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), right).normalize();
 
-        // Move the camera TARGET (not the avatar)
-        camTargetRef.current.addScaledVector(right, -dx * k);
-        camTargetRef.current.addScaledVector(fwdXZ, dy * k);
+          // Move the camera TARGET (not the avatar)
+          camTargetRef.current.addScaledVector(right, -dx * k);
+          camTargetRef.current.addScaledVector(fwdXZ, dy * k);
 
-        // Clamp target to room bounds
-        const b = roomBoundsRef.current;
-        camTargetRef.current.x = clamp(camTargetRef.current.x, b.minX, b.maxX);
-        camTargetRef.current.z = clamp(camTargetRef.current.z, b.minZ, b.maxZ);
+          // Clamp target to room bounds
+          const b = roomBoundsRef.current;
+          camTargetRef.current.x = clamp(camTargetRef.current.x, b.minX, b.maxX);
+          camTargetRef.current.z = clamp(camTargetRef.current.z, b.minZ, b.maxZ);
+        }
       }
     };
 
@@ -503,14 +919,34 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     window.addEventListener('mousemove', onMouseMove);
     containerEl.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    // Wheel zoom
+    // Wheel zoom - only in third-person mode
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       container.focus();
-      const dir = Math.sign(e.deltaY);
-      const step = 1.0;
-      const next = targetDistRef.current + dir * step;
-      targetDistRef.current = clamp(next, 1.6, 32.0);
+      if (camTransitionRef.current) return; // ignore input during transition
+
+      if (viewModeRef.current === 'third-person') {
+        const dir = Math.sign(e.deltaY);
+        const step = 1.0;
+        const next = targetDistRef.current + dir * step;
+        targetDistRef.current = clamp(next, 1.6, 32.0);
+      } else if (viewModeRef.current === 'first-person') {
+        const modeFactor = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1;
+        const delta = e.deltaY * modeFactor;
+        const move = THREE.MathUtils.clamp(-delta * 0.004, -3, 3);
+        if (move !== 0) {
+          scrollMoveRef.current += move;
+          pathQueueRef.current = [];
+          autoGhostRef.current = false;
+          const sc = sceneRef.current;
+          if (pathLineRef.current && sc) {
+            sc.remove(pathLineRef.current);
+            pathLineRef.current.geometry.dispose();
+            (pathLineRef.current.material as THREE.Material).dispose();
+            pathLineRef.current = null;
+          }
+        }
+      }
     };
     containerEl.addEventListener('wheel', onWheel, { passive: false });
 
@@ -575,6 +1011,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     };
 
     const onDblClick = (e: MouseEvent) => {
+      if (camTransitionRef.current) return; // ignore recenter during transition
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -(((e.clientY - rect.top) / rect.height) * 2 - 1));
       const ray = new THREE.Raycaster();
@@ -585,18 +1022,20 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       const hits = ray.intersectObject(screen, true);
       if (hits && hits.length) {
         e.preventDefault();
-        targetDistRef.current = cameraDistRef.current = 7.0;
-        pitchRef.current = 0.25;
-        // keep yaw as-is
+        if (viewModeRef.current === 'third-person') {
+          targetDistRef.current = cameraDistRef.current = 7.0;
+          pitchRef.current = 0.25;
+          // keep yaw as-is
 
-        // Re-center camera target on your avatar for convenience
-        if (avatarRef.current) {
-          camTargetRef.current.copy(avatarRef.current.position);
-          camTargetRef.current.y = 1.2;
+          // Re-center camera target on your avatar for convenience
+          if (avatarRef.current) {
+            camTargetRef.current.copy(avatarRef.current.position);
+            camTargetRef.current.y = 1.2;
+          }
+
+          // Release follow lock when explicitly recentering
+          followLockRef.current = false;
         }
-
-        // Release follow lock when explicitly recentering
-        followLockRef.current = false;
       }
     };
 
@@ -619,8 +1058,22 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         }
       }
     };
+    const onMinimapMove = (e: MouseEvent) => {
+      const canvas = minimapRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      let hoveringRoom = false;
+      for (const h of minimapHitsRef.current) {
+        if (mx >= h.x && mx <= h.x + h.w && my >= h.y && my <= h.y + h.h) {
+          if (h.roomName) { hoveringRoom = true; break; }
+        }
+      }
+      canvas.style.cursor = hoveringRoom ? 'pointer' : 'default';
+    };
     minimapRef.current?.addEventListener('click', onMinimapClick);
-    applyDefaultView();
+    minimapRef.current?.addEventListener('mousemove', onMinimapMove);
+
     // Animation loop
     let lastT = performance.now();
     const animate = () => {
@@ -635,24 +1088,35 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       const you = avatarRef.current;
       const cam = cameraRef.current!;
 
-      if (you) {
-        const isSprinting = keyState.current['ShiftLeft'] || keyState.current['ShiftRight'];
+      // Ensure avatar ref exists after rehydrate
+      if (!you) {
+        const found = avatarBySidRef.current.get('__LOCAL__') || avatarBySidRef.current.get(norm(localSid));
+        if (found) avatarRef.current = found;
+      }
+
+      if (avatarRef.current) {
+        const you = avatarRef.current;
+        const isSprinting = alwaysSprintRef.current || keyState.current['ShiftLeft'] || keyState.current['ShiftRight'];
         const yaw = yawRef.current;
 
         let vx = 0, vz = 0;
         const fwd = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw));
         const rgt = new THREE.Vector2(-fwd.y, fwd.x);
-        const manualMove = (
+        const viewMode = viewModeRef.current;
+        const manualKeyMove = (
           keyState.current['KeyW'] || keyState.current['ArrowUp'] ||
           keyState.current['KeyS'] || keyState.current['ArrowDown'] ||
           keyState.current['KeyA'] || keyState.current['ArrowLeft'] ||
           keyState.current['KeyD'] || keyState.current['ArrowRight']
         );
+        const hasScroll = viewMode === 'first-person' && Math.abs(scrollMoveRef.current) > 0.0001;
+        const manualMove = manualKeyMove || hasScroll;
         const rotating = keyState.current['KeyQ'] || keyState.current['KeyE'];
         const autoPathing = pathQueueRef.current.length > 0;
         const speed =
           (autoPathing ? AUTO_PATH_SPEED : BASE_WALK_SPEED) *
-          (isSprinting ? SPRINT_MULT : 1);
+          (isSprinting ? SPRINT_MULT : 1) *
+          speedMultRef.current;
 
         if (manualMove) {
           pathQueueRef.current = [];
@@ -672,8 +1136,12 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         if (keyState.current['KeyD'] || keyState.current['ArrowRight']) { vx += rgt.x; vz += rgt.y; }
         if (keyState.current['KeyQ']) { yawRef.current += TURN_SPEED * dt; }
         if (keyState.current['KeyE']) { yawRef.current -= TURN_SPEED * dt; }
-        if (keyState.current['Equal'] || keyState.current['NumpadAdd']) { targetDistRef.current = clamp(targetDistRef.current - 2.5 * dt, 1.6, 18.0); }
-        if (keyState.current['Minus'] || keyState.current['NumpadSubtract']) { targetDistRef.current = clamp(targetDistRef.current + 2.5 * dt, 1.6, 32.0); }
+
+        // Only allow zoom in third-person mode (and not during camera transition)
+        if (viewMode === 'third-person' && !camTransitionRef.current) {
+          if (keyState.current['Equal'] || keyState.current['NumpadAdd']) { targetDistRef.current = clamp(targetDistRef.current - 2.5 * dt, 1.6, 18.0); }
+          if (keyState.current['Minus'] || keyState.current['NumpadSubtract']) { targetDistRef.current = clamp(targetDistRef.current + 2.5 * dt, 1.6, 32.0); }
+        }
 
         // Follow queued path if not manually moving
         if (!manualMove && pathQueueRef.current.length) {
@@ -681,9 +1149,52 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           const dx = t.x - you.position.x;
           const dz = t.z - you.position.z;
           const d = Math.hypot(dx, dz);
-          if (d < 0.15) {
+          if (d < 0.25) {
             pathQueueRef.current.shift();
             if (!pathQueueRef.current.length) {
+              // If we were ghosting, ensure we end up at a safe, non-colliding spot
+              if (autoGhostRef.current) {
+                const isCollidingAt = (p: THREE.Vector3) => {
+                  const box = new THREE.Box3().setFromCenterAndSize(
+                    new THREE.Vector3(p.x, 0.85, p.z),
+                    new THREE.Vector3(0.35, 1.6, 0.35)
+                  );
+                  for (const ob of obstaclesRef.current) if (ob.intersectsBox(box)) return true;
+                  return false;
+                };
+                if (isCollidingAt(you.position)) {
+                  // Try nearest nav node to current position first
+                  let best: NavNode | null = null; let bd = Infinity;
+                  for (const n of navNodesRef.current) {
+                    const d2 = dist2({ x: you.position.x, z: you.position.z }, n);
+                    if (d2 < bd) { bd = d2; best = n; }
+                  }
+                  if (best) {
+                    const cand = new THREE.Vector3(best.x, you.position.y, best.z);
+                    if (!isCollidingAt(cand)) you.position.copy(cand);
+                  }
+                  // If still colliding, sample a small radial neighborhood
+                  if (isCollidingAt(you.position)) {
+                    const radii = [0.2, 0.35, 0.5, 0.8, 1.0];
+                    let fixed = false;
+                    for (const r of radii) {
+                      for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
+                        const cand = new THREE.Vector3(
+                          you.position.x + Math.cos(a) * r,
+                          you.position.y,
+                          you.position.z + Math.sin(a) * r
+                        );
+                        const b = roomBoundsRef.current;
+                        cand.x = clamp(cand.x, b.minX, b.maxX);
+                        cand.z = clamp(cand.z, b.minZ, b.maxZ);
+                        if (!isCollidingAt(cand)) { you.position.copy(cand); fixed = true; break; }
+                      }
+                      if (fixed) break;
+                    }
+                  }
+                }
+              }
+
               autoGhostRef.current = false;
               // Clear path line when destination reached
               if (pathLineRef.current) {
@@ -759,7 +1270,46 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           }
         }
 
-        // Camera behavior
+        if (viewMode === 'first-person') {
+          const pending = scrollMoveRef.current;
+          if (Math.abs(pending) > 0.0001) {
+            const maxStep = speed * dt;
+            const step = THREE.MathUtils.clamp(pending, -maxStep, maxStep);
+            scrollMoveRef.current -= step;
+            const bounds = roomBoundsRef.current;
+            const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+            forward.normalize();
+            const target = new THREE.Vector3(
+              you.position.x + forward.x * step,
+              you.position.y,
+              you.position.z + forward.z * step
+            );
+            const youBox = new THREE.Box3().setFromCenterAndSize(
+              new THREE.Vector3(target.x, 0.85, target.z),
+              new THREE.Vector3(0.35, 1.6, 0.35)
+            );
+            let blocked = false;
+            for (const b of obstaclesRef.current) {
+              if (b.intersectsBox(youBox)) {
+                blocked = true;
+                break;
+              }
+            }
+            if (!blocked) {
+              you.position.set(
+                Math.min(bounds.maxX, Math.max(bounds.minX, target.x)),
+                you.position.y,
+                Math.min(bounds.maxZ, Math.max(bounds.minZ, target.z))
+              );
+            } else {
+              scrollMoveRef.current = 0;
+            }
+          }
+        } else if (scrollMoveRef.current !== 0) {
+          scrollMoveRef.current = 0;
+        }
+
+        // Camera behavior - Modified for view modes
         const zoomSpeed = 6.0;
         cameraDistRef.current += (targetDistRef.current - cameraDistRef.current) * Math.min(1, zoomSpeed * dt);
         const dist = cameraDistRef.current;
@@ -770,21 +1320,75 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         // immediately snap target back to avatar and unlock follow.
         if (followLockRef.current && (manualMove || rotating || autoPathing)) {
           camTargetRef.current.set(you.position.x, 1.2, you.position.z);
-          followLockRef.current = false; // resume normal auto-follow
+          followLockRef.current = false;
         }
 
         // Smoothly follow avatar when NOT actively panning and NOT locked
         if (you && !isPanningRef.current && !followLockRef.current) {
           const follow = new THREE.Vector3(you.position.x, 1.2, you.position.z);
-          camTargetRef.current.lerp(follow, 0.14); // slightly faster to feel snappy
+          camTargetRef.current.lerp(follow, 0.14);
         }
 
-        const off = new THREE.Vector3(Math.sin(yaw2) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw2) * Math.cos(pitch)).multiplyScalar(dist);
         const tgt = camTargetRef.current;
         const targetY = 1.2;
 
-        cam.position.set(tgt.x + off.x, targetY + off.y, tgt.z + off.z);
-        cam.lookAt(tgt.x, targetY, tgt.z);
+        const trans = camTransitionRef.current;
+        if (trans) {
+          const now = performance.now();
+          const k = Math.min(1, (now - trans.t0) / trans.dur);
+          // easeInOutCubic
+          const s = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+
+          // Interpolate position and rotation
+          cam.position.lerpVectors(trans.startPos, trans.endPos, s);
+          cam.quaternion.slerpQuaternions(trans.startQuat, trans.endQuat, s);
+
+          // Manage local avatar visibility during transition
+          if (trans.toMode === 'first-person') {
+            // Keep avatar visible for most of the move-in, hide near the end
+            you.visible = s < 0.85;
+          } else {
+            // Ensure avatar is visible when pulling back
+            you.visible = true;
+          }
+
+          if (k >= 1) {
+            // Finish transition
+            camTransitionRef.current = null;
+            // Ensure final visibility matches mode
+            you.visible = viewModeRef.current === 'third-person';
+          }
+        } else if (viewMode === 'first-person') {
+          // First-person mode: Camera at avatar's head position
+          const headHeight = 1.55; // Same as the head mesh position
+          cam.position.set(you.position.x, headHeight, you.position.z);
+
+          // Look direction based on yaw and pitch
+          const lookDir = new THREE.Vector3(
+            -Math.sin(yaw2) * Math.cos(pitch),
+            -Math.sin(pitch),
+            -Math.cos(yaw2) * Math.cos(pitch)
+          );
+
+          const lookTarget = new THREE.Vector3().addVectors(cam.position, lookDir);
+          cam.lookAt(lookTarget);
+
+          // Hide the local avatar in first-person mode
+          you.visible = false;
+        } else {
+          // Third-person mode: Original camera behavior
+          const off = new THREE.Vector3(
+            Math.sin(yaw2) * Math.cos(pitch),
+            Math.sin(pitch),
+            Math.cos(yaw2) * Math.cos(pitch)
+          ).multiplyScalar(dist);
+
+          cam.position.set(tgt.x + off.x, targetY + off.y, tgt.z + off.z);
+          cam.lookAt(tgt.x, targetY, tgt.z);
+
+          // Show the local avatar in third-person mode
+          you.visible = true;
+        }
 
         // Inside Game Room?
         const zinfo = zonesInfoRef.current;
@@ -792,6 +1396,20 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           const gr = zinfo.meta.gameRect;
           const inside = you.position.x > gr.minX + 0.05 && you.position.x < gr.maxX - 0.05 && you.position.z > gr.minZ + 0.05 && you.position.z < gr.maxZ - 0.05;
           if (inside !== insideGameRoom) setInsideGameRoom(inside);
+        }
+      } else {
+        // No local avatar yet; still advance any pending camera transition
+        const cam = cameraRef.current!;
+        const trans = camTransitionRef.current;
+        if (trans) {
+          const now = performance.now();
+          const k = Math.min(1, (now - trans.t0) / trans.dur);
+          const s = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+          cam.position.lerpVectors(trans.startPos, trans.endPos, s);
+          cam.quaternion.slerpQuaternions(trans.startQuat, trans.endQuat, s);
+          if (k >= 1) {
+            camTransitionRef.current = null;
+          }
         }
       }
 
@@ -857,35 +1475,49 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       containerEl.removeEventListener('click', onClick);
       containerEl.removeEventListener('dblclick', onDblClick);
       minimapRef.current?.removeEventListener('click', onMinimapClick);
+      minimapRef.current?.removeEventListener('mousemove', onMinimapMove);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
 
-      // Clean up path line
-      if (pathLineRef.current && scene) {
-        scene.remove(pathLineRef.current);
-        pathLineRef.current.geometry.dispose();
-        (pathLineRef.current.material as THREE.Material).dispose();
+      // Preserve scene/renderer in a global cache for fast remount
+      if (sceneRef.current && rendererRef.current && cameraRef.current) {
+        GLOBAL_SCENE_CACHE = {
+          scene: sceneRef.current,
+          renderer: rendererRef.current,
+          camera: cameraRef.current as THREE.PerspectiveCamera,
+          zonesInfo: zonesInfoRef.current,
+          obstacles: obstaclesRef.current,
+          stageScreen: stageScreenRef.current,
+          deskMgr: deskMgrRef.current,
+          avatarsGroup: avatarsGroupRef.current,
+          avatarBySid: avatarBySidRef.current,
+          seatTransforms: seatTransformsRef.current,
+          participantSeatMap: participantSeatMapRef.current,
+          monitorPlanes: monitorPlanesRef.current,
+          roomLabels: roomLabelsRef.current,
+          diceMesh: diceMeshRef.current,
+          yaw: yawRef.current,
+          pitch: pitchRef.current,
+          camTarget: camTargetRef.current.clone(),
+          cameraDist: cameraDistRef.current,
+          targetDist: targetDistRef.current,
+          viewMode: viewModeRef.current,
+        };
+        // Detach canvas but do not dispose
+        try {
+          if (rendererRef.current.domElement?.parentElement === containerEl) {
+            containerEl.removeChild(rendererRef.current.domElement);
+          }
+        } catch { }
       }
 
-      try { deskMgrRef.current?.dispose(); } catch { }
-      try { zones.disposeZones?.(); } catch { }
-      try { disposeEnv?.(); } catch { }
-
-      try {
-        renderer?.dispose();
-        if (renderer?.domElement?.parentElement === containerEl)
-          containerEl.removeChild(renderer.domElement);
-      } catch { }
-
+      // Reset transient refs only
+      rafRef.current = null;
       sceneRef.current = null;
       rendererRef.current = null;
       cameraRef.current = null;
-      avatarsGroupRef.current = null;
-      stageScreenRef.current = null;
-      obstaclesRef.current = [];
       avatarRef.current = null;
-      avatarBySidRef.current.clear();
       navNodesRef.current = [];
-      navEdgesRef.current = [];
+      navGraphRef.current = null;
       canSendDataRef.current = false;
     };
   }, []); // NO DEPENDENCIES - scene built only once
@@ -1247,37 +1879,6 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
     }
 
-    // Local desk monitor
-    const localMon = localDeskMonitorRef.current;
-    if (localMon) {
-      let appliedLocal = false;
-      for (const ref of cameraRefs) {
-        if (!isTrackReference(ref)) continue;
-        const sid: string = norm(((ref as any)?.participant?.sid ?? (ref as any)?.participant?.identity));
-        if (!sid || sid !== norm(localSid)) continue;
-        const track: any = ref?.publication?.track;
-        if (!track) continue;
-        const el = document.createElement('video');
-        el.muted = true;
-        el.playsInline = true;
-        el.autoplay = true;
-        try {
-          track.attach(el);
-          el.play?.().catch(() => { });
-        } catch { }
-        const tex = new THREE.VideoTexture(el);
-        tex.minFilter = THREE.LinearFilter;
-        tex.magFilter = THREE.LinearFilter;
-        (tex as any).colorSpace = (THREE as any).SRGBColorSpace ?? undefined;
-        (localMon.material as any) = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });
-        appliedLocal = true;
-        break;
-      }
-      if (!appliedLocal) {
-        (localMon.material as any) = new THREE.MeshBasicMaterial({ map: makeCardTexture('You'), toneMapped: false });
-      }
-    }
-
     const camTexBySid = new Map<string, THREE.VideoTexture>();
     for (const ref of cameraRefs) {
       if (!isTrackReference(ref)) continue;
@@ -1401,9 +2002,118 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         className="absolute right-4 bottom-4 rounded-lg border border-[#26272B] bg-[#18181B]/80"
         style={{ zIndex: 5 }}
       />
-      <div className="absolute left-4 bottom-[94px] text-white/70 text-xs bg-[#00000066] px-2 py-1 rounded">
-        LMB: orbit • MMB / RMB: pan • Wheel: zoom • WASD move • Q / E rotate • +/− zoom • Click room names: navigate • Dbl-click screen: recenter
+
+      {/* Controls Panel */}
+      <div
+        className="absolute left-4 top-4 text-xs rounded-lg px-3 py-2 space-y-2"
+        style={{ background: '#1f2330', color: '#ffffff', border: '1px solid #3b3f4b', width: 260 }}
+      >
+        <div className="flex items-center justify-between mb-1">
+          <div className="font-semibold text-[13px]">3D Controls</div>
+          <div className="relative group" style={{ zIndex: 60 }}>
+            <span
+              className="cursor-help inline-flex items-center justify-center w-5 h-5 rounded-full border text-[11px]"
+              style={{ borderColor: '#3b3f4b', background: '#2b2f3b', color: '#cfd3dc' }}
+            >?
+            </span>
+            <div
+              className="pointer-events-none absolute left-full ml-2 top-5 transform -translate-y-1/2 w-72 rounded-md border p-3 text-[11px] leading-5 opacity-0 group-hover:opacity-100 transition-opacity"
+              style={{ background: '#0f1117', borderColor: '#3b3f4b', color: '#e5e7eb', boxShadow: '0 6px 18px rgba(0,0,0,0.45)' }}
+            >
+              LMB: orbit • MMB / RMB: pan • Wheel: zoom (3rd) / walk (1st) • WASD move • Q / E rotate • +/− zoom • V: toggle view • Click room names: navigate • Dbl-click screen: recenter
+            </div>
+          </div>
+        </div>
+
+        {/* View mode */}
+        <div className="flex items-center justify-between">
+          <span className="opacity-80">View</span>
+          <div className="space-x-2">
+            <button
+              onClick={() => startCamTransition('first-person')}
+              className="px-2 py-1 rounded border"
+              style={{
+                background: currentViewMode === 'first-person' ? '#2b2f3b' : 'transparent',
+                borderColor: '#3b3f4b', color: '#fff'
+              }}
+            >FP</button>
+            <button
+              onClick={() => startCamTransition('third-person')}
+              className="px-2 py-1 rounded border"
+              style={{
+                background: currentViewMode === 'third-person' ? '#2b2f3b' : 'transparent',
+                borderColor: '#3b3f4b', color: '#fff'
+              }}
+            >TP</button>
+          </div>
+        </div>
+
+        {/* Speed */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="opacity-80">Speed</span>
+            <span className="opacity-80">{speedMultUI.toFixed(1)}x</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => { const next = Math.max(0.5, Math.round((speedMultRef.current - 0.1) * 10) / 10); speedMultRef.current = next; setSpeedMultUI(next); }}
+              className="px-2 py-1 rounded border"
+              style={{ borderColor: '#3b3f4b' }}
+            >−</button>
+            <input
+              type="range" min={0.5} max={3} step={0.1}
+              value={speedMultUI}
+              onChange={(e) => { const v = parseFloat(e.target.value); setSpeedMultUI(v); speedMultRef.current = v; }}
+              className="flex-1"
+            />
+            <button
+              onClick={() => { const next = Math.min(3.0, Math.round((speedMultRef.current + 0.1) * 10) / 10); speedMultRef.current = next; setSpeedMultUI(next); }}
+              className="px-2 py-1 rounded border"
+              style={{ borderColor: '#3b3f4b' }}
+            >+</button>
+          </div>
+          <div className="mt-2 flex items-center justify-between">
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={alwaysSprintUI}
+                onChange={(e) => { setAlwaysSprintUI(e.target.checked); alwaysSprintRef.current = e.target.checked; }}
+              />
+              <span className="opacity-80">Always sprint</span>
+            </label>
+            <button
+              onClick={() => { speedMultRef.current = 1.0; setSpeedMultUI(1.0); }}
+              className="px-2 py-1 rounded border"
+              style={{ borderColor: '#3b3f4b' }}
+            >Reset</button>
+          </div>
+        </div>
+
+        {/* Camera */}
+        <div className="flex items-center justify-between mt-1">
+          <span className="opacity-80">Camera</span>
+          <div className="space-x-2">
+            <button
+              onClick={() => {
+                // Recenter camera target to avatar and restore default pitch/zoom
+                if (avatarRef.current) {
+                  camTargetRef.current.copy(avatarRef.current.position);
+                  camTargetRef.current.y = 1.2;
+                }
+                targetDistRef.current = cameraDistRef.current = 7.0;
+                pitchRef.current = 0.25;
+                followLockRef.current = false;
+              }}
+              className="px-2 py-1 rounded border"
+              style={{ borderColor: '#3b3f4b', color: '#fff' }}
+            >Recenter</button>
+          </div>
+        </div>
       </div>
+
+      {/* <div className="absolute left-4 bottom-[94px] text-white/70 text-xs bg-[#00000066] px-2 py-1 rounded">
+        LMB: orbit • MMB / RMB: pan • Wheel: zoom (3rd) / walk (1st) • WASD move • Q / E rotate • +/− zoom • V: toggle view • Click room names: navigate • Dbl-click screen: recenter
+      </div> */}
 
       {insideGameRoom && (
         <button
@@ -1502,7 +2212,7 @@ function drawMinimap(
         w: metrics.width + 8,
         h: 16,
         target: new THREE.Vector3(centerX, 0, centerZ),
-        allowGhost: false, // Use proper pathfinding for rooms
+        allowGhost: false, // Follow nav mesh when clicking rooms on minimap
         roomName: roomName
       });
     }
