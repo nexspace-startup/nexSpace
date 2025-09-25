@@ -158,9 +158,10 @@ export class DeskGridManager {
                     }
 
                     // collider for desk+chair footprint
+                    // Tighter, symmetric footprint to avoid encroaching shared corridors
                     const box = new THREE.Box3(
-                        new THREE.Vector3(x - deskW / 2 - 0.1, 0, z - deskD / 2 - 0.2),
-                        new THREE.Vector3(x + deskW / 2 + 0.1, 1.2, z + deskD / 2 + 0.6)
+                        new THREE.Vector3(x - deskW / 2 - 0.12, 0, z - deskD / 2 - 0.12),
+                        new THREE.Vector3(x + deskW / 2 + 0.12, 1.2, z + deskD / 2 + 0.12)
                     );
                     this.colliders.push(box);
 
@@ -190,8 +191,28 @@ export class DeskGridManager {
         this.kbInst = undefined; this.mouseInst = undefined; this.mugInst = undefined; this.plantInst = undefined;
     }
 
+    // Simple distance-based LOD for small props
+    updateLOD(camPos: THREE.Vector3, hideDistance: number = 18) {
+        if (!this.bayRects.length) return;
+        let minD2 = Infinity;
+        for (const r of this.bayRects) {
+            const dx = camPos.x < r.minX ? (r.minX - camPos.x) : (camPos.x > r.maxX ? (camPos.x - r.maxX) : 0);
+            const dz = camPos.z < r.minZ ? (r.minZ - camPos.z) : (camPos.z > r.maxZ ? (camPos.z - r.maxZ) : 0);
+            const d2 = dx * dx + dz * dz;
+            if (d2 < minD2) minD2 = d2;
+        }
+        const dist = Math.sqrt(minD2);
+        const hideSmall = dist > hideDistance; // threshold in world units
+        if (this.kbInst) this.kbInst.visible = !hideSmall;
+        if (this.mouseInst) this.mouseInst.visible = !hideSmall;
+        if (this.mugInst) this.mugInst.visible = !hideSmall;
+        if (this.plantInst) this.plantInst.visible = !hideSmall;
+    }
     dispose() {
         this.disposeInstanced();
         try { this.prefab.dispose(); } catch { /* ignore */ }
     }
 }
+
+
+

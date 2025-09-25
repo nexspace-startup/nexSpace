@@ -3,16 +3,30 @@ import * as THREE from 'three';
 import { useTracks, isTrackReference } from '@livekit/components-react';
 import { RoomEvent, Track } from 'livekit-client';
 import { useMeetingStore } from '../stores/meetingStore';
+import { useUIStore } from '../stores/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { DeskGridManager, type SeatTransform } from './3DRoom/DeskGridManager';
 import { assignParticipantsToDesks } from './3DRoom/Participants';
 import { type DeskPrefab, createDeskModule } from './3DRoom/Desks';
-import { buildEnvironment } from './3DRoom/Environment';
-import { type BuiltZonesInfo, buildZones } from './3DRoom/Zone';
+import { buildEnvironment, applyEnvironmentTheme, animateEnvironmentTheme } from './3DRoom/Environment';
+import { MODE_PALETTE } from './3DRoom/themeConfig';
+import { type BuiltZonesInfo, buildZones, applyZoneTheme, animateZoneTheme } from './3DRoom/Zone';
+import { COLLIDER_BLOCKLIST } from './3DRoom/colliderBlocklist';
 
 type Props = { bottomSafeAreaPx?: number; topSafeAreaPx?: number; };
 
-const DEG2RAD = Math.PI / 180;
+  const DEG2RAD = Math.PI / 180;
+  // Collision box half-extent for avatar (slightly slimmer to avoid snagging on thin walls)
+  const AVATAR_HALF = 0.32;
+
+  const isBlocked = (box: THREE.Box3) => {
+    const c = box.getCenter(new THREE.Vector3());
+    const s = box.getSize(new THREE.Vector3());
+    const tol = 0.08; // ~8cm tolerance for matching
+    const arrEq = (a: [number,number,number], b: THREE.Vector3) => Math.abs(a[0]-b.x) < tol && Math.abs(a[1]-b.y) < tol && Math.abs(a[2]-b.z) < tol;
+    for (const it of COLLIDER_BLOCKLIST) { if (arrEq(it.center, c) && arrEq(it.size, s)) return true; }
+    return false;
+  };
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const norm = (v: any) => String(v ?? '');
 
@@ -233,6 +247,10 @@ function createPathLine(points: THREE.Vector3[]): THREE.Line {
 const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96 }) => {
   const { participants, room } = useMeetingStore(useShallow((s) => ({ participants: s.participants, room: s.room })));
   const chatOpen = useMeetingStore((s) => s.chatOpen);
+  const theme = useUIStore((s) => s.theme);
+  const toggleTheme = useUIStore((s) => s.toggleTheme);
+  const micEnabled = useMeetingStore((s) => s.micEnabled);
+  const screenShareEnabled = useMeetingStore((s) => s.screenShareEnabled);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const minimapRef = useRef<HTMLCanvasElement | null>(null);
@@ -252,8 +270,27 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   // Scene
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const minFrameMsRef = useRef<number>(0); // adaptive render throttle
+  const minimapNextAtRef = useRef<number>(0); // minimap throttle timestamp
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rafRef = useRef<number | null>(null);
+  const coldStartFramesRef = useRef(0);
+
+  // Centralized helper: ensure we start in a valid third-person view on first frames
+  const applyColdStartSafety = () => {
+    if (coldStartFramesRef.current >= 2) return;
+    const you = avatarRef.current;
+    if (you) {
+      camTargetRef.current.set(you.position.x, 1.2, you.position.z);
+      viewModeRef.current = 'third-person';
+      try { setCurrentViewMode('third-person'); } catch {}
+      cameraDistRef.current = targetDistRef.current = 7.0;
+      pitchRef.current = 0.25;
+      followLockRef.current = false;
+      you.visible = true;
+    }
+    coldStartFramesRef.current++;
+  };
 
   // View mode state
   const viewModeRef = useRef<'first-person' | 'third-person'>('third-person');
@@ -318,6 +355,12 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const navGraphRef = useRef<NavGraph | null>(null);
   const minimapHitsRef = useRef<Array<{ x: number; y: number; w: number; h: number; target?: THREE.Vector3; allowGhost?: boolean; roomName?: string }>>([]);
   const roomLabelsRef = useRef<THREE.Sprite[]>([]);
+  // Conference room audio isolation state
+  const insideConferenceRef = useRef<boolean>(false);
+  const [insideConference, setInsideConference] = useState(false);
+  const remoteInConferenceRef = useRef<Map<string, boolean>>(new Map());
+  const lastAudioSubRef = useRef<Map<string, boolean>>(new Map());
+  const avatarLodNextAtRef = useRef<number>(0);
 
   // Remote movement sync
   const remoteTargetsRef = useRef<Map<string, { pos: THREE.Vector3; yaw: number }>>(new Map());
@@ -328,14 +371,153 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const diceSpinRef = useRef<{ t: number; dur: number; targetEuler: THREE.Euler } | null>(null);
   const [insideGameRoom, setInsideGameRoom] = useState(false);
 
+  // Debug overlays (component-scope so multiple effects can use them)
+  const debugStateRef = useRef<{ hitboxes: THREE.Group | null; nav: THREE.Group | null; avatar: THREE.Mesh | null }>({ hitboxes: null, nav: null, avatar: null });
+  const addColliderDebug = () => {
+    const scene = sceneRef.current; if (!scene) return;
+    const g = new THREE.Group(); g.name = 'DEBUG_COLLIDERS';
+    for (const box of obstaclesRef.current) {
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
+      const mat = new THREE.MeshBasicMaterial({ color: 0xff4444, wireframe: true, transparent: true, opacity: 0.55, depthTest: false });
+      const m = new THREE.Mesh(geo, mat); m.position.copy(center); g.add(m);
+    }
+    const dims = new THREE.Vector3(AVATAR_HALF * 2, 1.6, AVATAR_HALF * 2);
+    const geoA = new THREE.BoxGeometry(dims.x, dims.y, dims.z);
+    const matA = new THREE.MeshBasicMaterial({ color: 0x33ff99, wireframe: true, transparent: true, opacity: 0.8, depthWrite: false });
+    const mA = new THREE.Mesh(geoA, matA); mA.name = 'DEBUG_AVATAR_AABB';
+    const you = avatarRef.current; if (you) mA.position.set(you.position.x, 0.85, you.position.z);
+    g.add(mA); debugStateRef.current.avatar = mA;
+    scene.add(g); debugStateRef.current.hitboxes = g;
+  };
+  const removeColliderDebug = () => {
+    const scene = sceneRef.current; if (!scene) return;
+    const g = debugStateRef.current.hitboxes; if (!g) return;
+    scene.remove(g);
+    try { g.traverse((o:any)=>{ if (o.geometry) o.geometry.dispose?.(); if (o.material) { Array.isArray(o.material) ? o.material.forEach((mm:any)=>mm.dispose?.()) : o.material.dispose?.(); } }); } catch {}
+    debugStateRef.current.hitboxes = null; debugStateRef.current.avatar = null;
+  };
+  const toggleColliderDebug = () => { debugStateRef.current.hitboxes ? removeColliderDebug() : addColliderDebug(); };
+
+  const addNavDebug = () => {
+    const scene = sceneRef.current; if (!scene) return;
+    const g = new THREE.Group(); g.name = 'DEBUG_NAV';
+    const nodeMat = new THREE.MeshBasicMaterial({ color: 0x33aaff });
+    for (const n of navNodesRef.current) {
+      const s = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), nodeMat);
+      s.position.set(n.x, 0.06, n.z); g.add(s);
+    }
+    if (navGraphRef.current) {
+      const lineMat = new THREE.LineBasicMaterial({ color: 0x88aaff, transparent: true, opacity: 0.8 });
+      for (const [aId, neighbors] of navGraphRef.current.neighbors) {
+        const a = navNodesRef.current.find(n => n.id === aId); if (!a) continue;
+        for (const nb of neighbors) {
+          const b = navNodesRef.current.find(n => n.id === nb.id); if (!b) continue;
+          const geom = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(a.x, 0.02, a.z),
+            new THREE.Vector3(b.x, 0.02, b.z)
+          ]);
+          const line = new THREE.Line(geom, lineMat);
+          g.add(line);
+        }
+      }
+    }
+    scene.add(g); debugStateRef.current.nav = g;
+  };
+  const removeNavDebug = () => {
+    const scene = sceneRef.current; if (!scene) return;
+    const g = debugStateRef.current.nav; if (!g) return;
+    scene.remove(g);
+    try { g.traverse((o:any)=>{ if (o.geometry) o.geometry.dispose?.(); if (o.material) { Array.isArray(o.material) ? o.material.forEach((mm:any)=>mm.dispose?.()) : o.material.dispose?.(); } }); } catch {}
+    debugStateRef.current.nav = null;
+  };
+  const toggleNavDebug = () => { debugStateRef.current.nav ? removeNavDebug() : addNavDebug(); };
+
   // —— LiveKit data send guard (NEW) ——
   const canSendDataRef = useRef<boolean>(false);
   const lastDataSentAtRef = useRef<number>(0);
+  const [perfLow, setPerfLow] = useState(false);
+  const [lodAvatarDist, setLodAvatarDist] = useState(40);
+  const lodAvatarDistRef = useRef(40);
+  const [lodPropsDist, setLodPropsDist] = useState(40);
+  const lodPropsDistRef = useRef(40);
+  
+  // —— Helper: conference rect lookup ——
+  const getConferenceRect = () => {
+    const info = zonesInfoRef.current;
+    if (!info) return undefined as undefined | { minX: number; maxX: number; minZ: number; maxZ: number };
+    const r = (info.roomRects || []).find(r => r.name === 'Conference');
+    return r?.rect;
+  };
+  const isInsideRect = (
+    p: { x: number; z: number },
+    rect?: { minX: number; maxX: number; minZ: number; maxZ: number },
+    prevInside?: boolean
+  ) => {
+    if (!rect) return false;
+    const enterPad = 0.35; // require a bit deeper to count as entering
+    const exitPad = 0.1;   // allow slight overlap before exiting
+    const pad = prevInside ? exitPad : enterPad;
+    return (
+      p.x > rect.minX + pad &&
+      p.x < rect.maxX - pad &&
+      p.z > rect.minZ + pad &&
+      p.z < rect.maxZ - pad
+    );
+  };
+  const scheduleAudioSubUpdate = () => {
+    // microtask batching
+    Promise.resolve().then(() => updateConferenceAudioSubscriptions());
+  };
+  const updateConferenceAudioSubscriptions = () => {
+    const lkRoom: any = room as any;
+    const rect = getConferenceRect();
+    if (!lkRoom || !lkRoom.remoteParticipants) return;
+    const localIn = insideConferenceRef.current;
+    const entries: Array<[string, any]> = Array.from(lkRoom.remoteParticipants?.entries?.() || lkRoom.remoteParticipants);
+    for (const [_mapKey, rp] of entries) {
+      // Normalize identifiers from participant object
+      const rpSid = norm((rp as any)?.sid);
+      const rpIdentity = norm((rp as any)?.identity);
+
+      // Determine remote membership; prefer explicit sid/identity flags from movement data
+      let rin = remoteInConferenceRef.current.get(rpSid);
+      if (rin === undefined && rpIdentity) rin = remoteInConferenceRef.current.get(rpIdentity);
+      // Fallback to avatar position if available (identity first, then sid)
+      if (rin === undefined) {
+        const g = avatarBySidRef.current.get(rpIdentity) || avatarBySidRef.current.get(rpSid);
+        if (g) rin = isInsideRect({ x: g.position.x, z: g.position.z }, rect);
+      }
+      rin = !!rin;
+      const shouldHear = (localIn && rin) || (!localIn && !rin);
+      const applyPub = (pub: any) => {
+        if (!pub) return;
+        const desired = !!shouldHear;
+        try {
+          const isDesired = typeof pub.isDesired === 'boolean' ? pub.isDesired : undefined;
+          if (isDesired === desired) return;
+        } catch {}
+        try { pub.setSubscribed(desired); } catch {}
+      };
+      try {
+        const micPub = rp.getTrackPublication?.(Track.Source.Microphone);
+        applyPub(micPub);
+      } catch {}
+      try {
+        const sharePub = rp.getTrackPublication?.(Track.Source.ScreenShareAudio);
+        applyPub(sharePub);
+      } catch {}
+      lastAudioSubRef.current.set(rpSid || rpIdentity || 'unknown', shouldHear);
+    }
+  };
 
   // Toggle view mode function
   const startCamTransition = (toMode: 'first-person' | 'third-person') => {
     const sceneCam = cameraRef.current;
     const you = avatarRef.current;
+      // Cold-start safety to ensure a valid third-person view
+      applyColdStartSafety();
     if (!sceneCam || !you) {
       // Fallback: just set mode if camera/avatar not ready
       viewModeRef.current = toMode;
@@ -485,12 +667,13 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           antialias: true,
           alpha: false,
           failIfMajorPerformanceCaveat: false,
-          preserveDrawingBuffer: false
+          preserveDrawingBuffer: false,
+          powerPreference: 'high-performance'
         });
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.5));
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
         renderer.setSize(container.clientWidth, container.clientHeight);
         rendererRef.current = renderer;
         container.appendChild(renderer.domElement);
@@ -532,13 +715,16 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     // Build static environment if not cached
     if (!GLOBAL_SCENE_CACHE) {
-      const env = buildEnvironment(scene!, { ROOM_W, ROOM_D });
+      const env = buildEnvironment(scene!, { ROOM_W, ROOM_D, palette: MODE_PALETTE[theme] });
       obstaclesRef.current = env.obstacles;
       stageScreenRef.current = env.stageScreen;
+      try { applyEnvironmentTheme(scene!, theme); } catch {}
     }
 
+    
+
     if (!GLOBAL_SCENE_CACHE) {
-      const zones = buildZones(scene!, { ROOM_W, ROOM_D });
+      const zones = buildZones(scene!, { ROOM_W, ROOM_D, palette: MODE_PALETTE[theme], mode: theme });
       zonesInfoRef.current = zones;
       obstaclesRef.current.push(...zones.zoneColliders);
       if (zones.stageScreen) stageScreenRef.current = zones.stageScreen;
@@ -562,7 +748,28 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         faceYaw: Math.PI,
       });
       deskMgrRef.current = mgr;
-      obstaclesRef.current.push(...mgr.colliders);
+      // Compose structural zone colliders with desk colliders (with a corridor carve only on desks)
+      try {
+        const zinfo = zonesInfoRef.current!;
+        const lounge = zinfo.roomRects.find(r => r.name === 'Lounge')?.rect;
+        let desks = mgr.colliders;
+        if (lounge) {
+          const cx = (lounge.minX + lounge.maxX) / 2;
+          const cz = lounge.minZ;
+          const carve1 = new THREE.Box3().setFromCenterAndSize(
+            new THREE.Vector3(cx, 1.2, cz - 0.8),
+            new THREE.Vector3(7.0, 3.0, 4.0)
+          );
+          const carve2 = new THREE.Box3().setFromCenterAndSize(
+            new THREE.Vector3(cx, 1.2, cz - 2.2),
+            new THREE.Vector3(7.0, 3.0, 3.0)
+          );
+          desks = desks.filter(b => !b.intersectsBox(carve1) && !b.intersectsBox(carve2));
+        }
+        obstaclesRef.current = [ ...(zinfo?.zoneColliders ?? []), ...desks ].filter(b => !isBlocked(b));
+        // If debug overlay is active, rebuild it to reflect new obstacles
+        if (debugStateRef.current.hitboxes) { removeColliderDebug(); addColliderDebug(); }
+      } catch { obstaclesRef.current.push(...mgr.colliders); }
     }
 
     if (!GLOBAL_SCENE_CACHE) {
@@ -580,6 +787,8 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     // Enhanced pathfinding function with visualization
     const queuePathTo = (tx: number, tz: number, allowGhost = false, roomName?: string) => {
       const you = avatarRef.current;
+      // Cold-start safety to ensure a valid third-person view
+      applyColdStartSafety();
       if (!you) return;
 
       // Clear existing path line
@@ -754,10 +963,10 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           const t = i / steps;
           const x = a.x + (b.x - a.x) * t;
           const z = a.z + (b.z - a.z) * t;
-          const box = new THREE.Box3().setFromCenterAndSize(
-            new THREE.Vector3(x, 0.85, z),
-            new THREE.Vector3(0.35, 1.6, 0.35)
-          );
+        const box = new THREE.Box3().setFromCenterAndSize(
+          new THREE.Vector3(x, 0.85, z),
+          new THREE.Vector3(AVATAR_HALF, 1.6, AVATAR_HALF)
+        );
           for (const ob of obstaclesRef.current) {
             if (ob.intersectsBox(box)) return false;
           }
@@ -827,10 +1036,27 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       camera.updateProjectionMatrix();
     };
     window.addEventListener('resize', onResize);
+    const onVis = () => {
+      if (document.hidden) {
+        if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+      } else {
+        // Restore focus and restart render loop after tab switch
+        try { container.focus(); } catch {}
+        if (!rafRef.current) {
+          onResize();
+          rafRef.current = requestAnimationFrame(animate);
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    // Clear sticky keys when the window loses focus
+    const onBlur = () => { keyState.current = {}; };
+    window.addEventListener('blur', onBlur);
+    
 
     const onKey = (e: KeyboardEvent) => {
       const code = e.code;
-      const keys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyQ', 'KeyE', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', 'KeyV', 'BracketLeft', 'BracketRight'];
+      const keys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyQ', 'KeyE', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', 'KeyV', 'BracketLeft', 'BracketRight', 'KeyH', 'KeyN'];
       if (keys.includes(code)) {
         keyState.current[code] = e.type === 'keydown';
         e.preventDefault();
@@ -840,6 +1066,10 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       if (e.type === 'keydown' && code === 'KeyV') {
         toggleViewMode();
       }
+
+      // Toggle debug overlays: H -> hitboxes, N -> nav graph
+      if (e.type === 'keydown' && code === 'KeyH') toggleColliderDebug();
+      if (e.type === 'keydown' && code === 'KeyN') toggleNavDebug();
 
       // Adjust walk speed with [ and ]
       if (e.type === 'keydown' && code === 'BracketLeft') {
@@ -914,10 +1144,11 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     };
 
     const containerEl = container;
-    containerEl.addEventListener('mousedown', onMouseDown);
+    const targetEl: HTMLElement = (rendererRef.current?.domElement as any) || containerEl;
+    targetEl.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
     window.addEventListener('mousemove', onMouseMove);
-    containerEl.addEventListener('contextmenu', (e) => e.preventDefault());
+    targetEl.addEventListener('contextmenu', (e) => e.preventDefault());
 
     // Wheel zoom - only in third-person mode
     const onWheel = (e: WheelEvent) => {
@@ -948,10 +1179,11 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         }
       }
     };
-    containerEl.addEventListener('wheel', onWheel, { passive: false });
+    targetEl.addEventListener('wheel', onWheel, { passive: false });
 
     // Single click for room navigation, double-click the big presentation screen => reset & recenter
     const onClick = (e: MouseEvent) => {
+      // Dev deletion via Alt+Click removed per request
       // Don't navigate if we're dragging
       if (dragging) return;
 
@@ -1039,9 +1271,9 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
     };
 
-    containerEl.addEventListener('click', onClick);
-    containerEl.addEventListener('mousemove', onMouseMoveHover);
-    containerEl.addEventListener('dblclick', onDblClick);
+    targetEl.addEventListener('click', onClick);
+    targetEl.addEventListener('mousemove', onMouseMoveHover);
+    targetEl.addEventListener('dblclick', onDblClick);
 
     // Minimap click (names => ghost through walls, rooms => smart pathfinding)
     const onMinimapClick = (e: MouseEvent) => {
@@ -1076,6 +1308,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     // Animation loop
     let lastT = performance.now();
+    let lastFrameAt = lastT;
     const animate = () => {
       // Don't run animation if WebGL failed
       if (!renderer || !scene || !camera) {
@@ -1083,9 +1316,17 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
 
       const now = performance.now();
+      const minDtMs = minFrameMsRef.current;
+      if (minDtMs > 0 && now - lastFrameAt < minDtMs) {
+        rafRef.current = requestAnimationFrame(animate);
+        return;
+      }
+      lastFrameAt = now;
       const dt = Math.min(0.05, (now - lastT) / 1000);
       lastT = now;
       const you = avatarRef.current;
+      // Cold-start safety to ensure a valid third-person view
+      applyColdStartSafety();
       const cam = cameraRef.current!;
 
       // Ensure avatar ref exists after rehydrate
@@ -1096,6 +1337,17 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
       if (avatarRef.current) {
         const you = avatarRef.current;
+      // Cold-start safety to ensure a valid third-person view
+      applyColdStartSafety();
+        // Update conference-room membership for LOCAL
+        const confRect = getConferenceRect();
+        const nowInConf = isInsideRect({ x: you.position.x, z: you.position.z }, confRect, insideConferenceRef.current);
+        if (nowInConf !== insideConferenceRef.current) {
+          insideConferenceRef.current = nowInConf;
+          try { setInsideConference(nowInConf); } catch {}
+          scheduleAudioSubUpdate();
+        }
+
         const isSprinting = alwaysSprintRef.current || keyState.current['ShiftLeft'] || keyState.current['ShiftRight'];
         const yaw = yawRef.current;
 
@@ -1157,7 +1409,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
                 const isCollidingAt = (p: THREE.Vector3) => {
                   const box = new THREE.Box3().setFromCenterAndSize(
                     new THREE.Vector3(p.x, 0.85, p.z),
-                    new THREE.Vector3(0.35, 1.6, 0.35)
+                    new THREE.Vector3(AVATAR_HALF, 1.6, AVATAR_HALF)
                   );
                   for (const ob of obstaclesRef.current) if (ob.intersectsBox(box)) return true;
                   return false;
@@ -1236,7 +1488,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
                 you.position.y,
                 Math.min(bounds.maxZ, Math.max(bounds.minZ, nz))
               );
-              const youBox = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(target.x, 0.85, target.z), new THREE.Vector3(0.35, 1.6, 0.35));
+              const youBox = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(target.x, 0.85, target.z), new THREE.Vector3(AVATAR_HALF, 1.6, AVATAR_HALF));
               let blocked = false;
               for (const b of obstaclesRef.current) {
                 if (b.intersectsBox(youBox)) {
@@ -1247,8 +1499,8 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
               if (!blocked) {
                 you.position.set(target.x, you.position.y, target.z);
               } else {
-                const tryX = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(target.x, 0.85, you.position.z), new THREE.Vector3(0.35, 1.6, 0.35));
-                const tryZ = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(you.position.x, 0.85, target.z), new THREE.Vector3(0.35, 1.6, 0.35));
+                const tryX = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(target.x, 0.85, you.position.z), new THREE.Vector3(AVATAR_HALF, 1.6, AVATAR_HALF));
+                const tryZ = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(you.position.x, 0.85, target.z), new THREE.Vector3(AVATAR_HALF, 1.6, AVATAR_HALF));
                 let okX = true;
                 for (const b of obstaclesRef.current) {
                   if (b.intersectsBox(tryX)) {
@@ -1286,7 +1538,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
             );
             const youBox = new THREE.Box3().setFromCenterAndSize(
               new THREE.Vector3(target.x, 0.85, target.z),
-              new THREE.Vector3(0.35, 1.6, 0.35)
+              new THREE.Vector3(AVATAR_HALF, 1.6, AVATAR_HALF)
             );
             let blocked = false;
             for (const b of obstaclesRef.current) {
@@ -1415,7 +1667,8 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
       // Ease remotes
       avatarBySidRef.current.forEach((g, sid) => {
-        if (sid === norm(localSid)) return;
+        // Skip easing for local avatar which uses direct controls
+        if (sid === '__LOCAL__') return;
         const t = remoteTargetsRef.current.get(sid);
         if (!t) return;
         g.position.lerp(t.pos, 0.2);
@@ -1448,16 +1701,51 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
 
       // Render + minimap
+      deskMgrRef.current?.updateLOD(cameraRef.current!.position, lodPropsDistRef.current);
+      // Avatar billboard LOD (throttled)
+      if (now >= avatarLodNextAtRef.current) {
+        avatarBySidRef.current.forEach((g) => {
+          const cam = cameraRef.current!; if (!cam || !g) { return; }
+          const d = g.position.distanceTo(cam.position);
+          const far = d > lodAvatarDistRef.current;
+          let bb = g.getObjectByName('AV_BB') as THREE.Sprite | null;
+          if (far) {
+            if (!bb) {
+              const c = document.createElement('canvas'); c.width = c.height = 128; const ctx = c.getContext('2d')!;
+              ctx.clearRect(0,0,128,128); ctx.fillStyle = '#8a8af0'; ctx.beginPath(); ctx.arc(64,64,56,0,Math.PI*2); ctx.fill();
+              const tex = new THREE.CanvasTexture(c);
+              const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+              bb = new THREE.Sprite(mat); bb.name = 'AV_BB'; bb.scale.set(0.9,0.9,1); bb.position.set(0,1.6,0); g.add(bb);
+            }
+            g.children.forEach((ch)=>{ if (ch !== bb) (ch as any).visible = false; }); if (bb) bb.visible = true;
+          } else {
+            if (bb) bb.visible = false;
+            g.children.forEach((ch)=>{ if (ch !== bb) (ch as any).visible = true; });
+          }
+        });
+        avatarLodNextAtRef.current = now + 80; // ~12 fps updates
+      }
+      // If debug avatar AABB exists, keep it in sync
+      if (debugStateRef.current.avatar && avatarRef.current) {
+        const you = avatarRef.current;
+        debugStateRef.current.avatar.position.set(you.position.x, 0.85, you.position.z);
+      }
+
       renderer!.render(scene!, cameraRef.current!);
+      // Throttle minimap redraw to reduce CPU during heavy load
       minimapHitsRef.current = [];
-      drawMinimap(
-        minimapRef.current,
-        avatarRef.current?.position ?? new THREE.Vector3(),
-        getSeatDotsForMinimap(),
-        deskMgrRef.current,
-        zonesInfoRef.current,
-        minimapHitsRef.current
-      );
+      if (now >= minimapNextAtRef.current) {
+        drawMinimap(
+          minimapRef.current,
+          avatarRef.current?.position ?? new THREE.Vector3(),
+          getSeatDotsForMinimap(),
+          deskMgrRef.current,
+          zonesInfoRef.current,
+          minimapHitsRef.current
+        );
+        const budgetMs = (screenShareEnabled || micEnabled) ? 180 : 90;
+        minimapNextAtRef.current = now + budgetMs;
+      }
 
       rafRef.current = requestAnimationFrame(animate);
     };
@@ -1470,13 +1758,26 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       containerEl.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mouseup', onMouseUp);
       window.removeEventListener('mousemove', onMouseMove);
-      containerEl.removeEventListener('mousemove', onMouseMoveHover);
-      containerEl.removeEventListener('wheel', onWheel);
-      containerEl.removeEventListener('click', onClick);
-      containerEl.removeEventListener('dblclick', onDblClick);
+      const tgt: any = (rendererRef.current?.domElement as any) || containerEl;
+      tgt?.removeEventListener('mousemove', onMouseMoveHover);
+      tgt?.removeEventListener('wheel', onWheel);
+      tgt?.removeEventListener('click', onClick);
+      tgt?.removeEventListener('dblclick', onDblClick);
+      window.removeEventListener('blur', onBlur as any);
       minimapRef.current?.removeEventListener('click', onMinimapClick);
       minimapRef.current?.removeEventListener('mousemove', onMinimapMove);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      // Remove debug groups if active
+      try {
+        const ds = debugStateRef.current;
+        const scn = sceneRef.current;
+        if ((ds.hitboxes || ds.nav) && scn) {
+          if (ds.hitboxes) { scn.remove(ds.hitboxes); }
+          if (ds.nav) { scn.remove(ds.nav); }
+        }
+      } catch {}
+
+
 
       // Preserve scene/renderer in a global cache for fast remount
       if (sceneRef.current && rendererRef.current && cameraRef.current) {
@@ -1533,7 +1834,29 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         if (msg?.t === 'pos' && msg?.id) {
           const sid = norm(msg.id);
           if (sid === norm(localSid)) return;
-          remoteTargetsRef.current.set(sid, { pos: new THREE.Vector3(msg.x, msg.y, msg.z), yaw: msg.yaw ?? 0 });
+          const vec = new THREE.Vector3(msg.x, msg.y, msg.z);
+
+          // Try to resolve identity for this sid (map iteration is small)
+          let identity = '';
+          try {
+            const parts: any[] = Array.from(((room as any)?.remoteParticipants?.values?.() ?? []));
+            const rp = parts.find((p: any) => norm(p?.sid) === sid);
+            identity = norm(rp?.identity);
+          } catch { /* ignore */ }
+
+          // Track movement by both sid and identity so either key resolves
+          remoteTargetsRef.current.set(sid, { pos: vec, yaw: msg.yaw ?? 0 });
+          if (identity) remoteTargetsRef.current.set(identity, { pos: vec, yaw: msg.yaw ?? 0 });
+
+          // Update conference membership for the sender (both keys)
+          const confRect = getConferenceRect();
+          const nowIn = isInsideRect({ x: vec.x, z: vec.z }, confRect, remoteInConferenceRef.current.get(sid));
+          const prev = remoteInConferenceRef.current.get(sid);
+          if (prev === undefined || prev !== nowIn) {
+            remoteInConferenceRef.current.set(sid, nowIn);
+            if (identity) remoteInConferenceRef.current.set(identity, nowIn);
+            scheduleAudioSubUpdate();
+          }
         }
       } catch { }
     };
@@ -1569,10 +1892,12 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
   // —— Movement broadcasting (separate effect) ——
   useEffect(() => {
-    let intervalId: NodeJS.Timeout;
+    let intervalId: number | null = null;
 
     const broadcastMovement = () => {
       const you = avatarRef.current;
+      // Cold-start safety to ensure a valid third-person view
+      applyColdStartSafety();
       if (!you || !canSendDataRef.current) return;
 
       try {
@@ -1596,10 +1921,10 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     };
 
     // Broadcast at ~6fps instead of in animation loop
-    intervalId = setInterval(broadcastMovement, 160);
+    intervalId = window.setInterval(broadcastMovement, 160);
 
     return () => {
-      if (intervalId) clearInterval(intervalId);
+      if (intervalId) window.clearInterval(intervalId);
     };
   }, [room, localSid]);
 
@@ -1711,6 +2036,29 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     const targetDeskCount = Math.max(10, uniq.length + 8);
     seatTransformsRef.current = mgr.ensureDeskCount(targetDeskCount);
 
+    // Refresh desk colliders in obstacles after re-layout
+    try {
+      const zinfo = zonesInfoRef.current!;
+      let desks = mgr.colliders;
+      // Carve corridor in front of Lounge (apply only to desk colliders)
+      const lounge = zinfo.roomRects.find(r => r.name === 'Lounge')?.rect;
+      if (lounge) {
+        const cx = (lounge.minX + lounge.maxX) / 2;
+        const cz = lounge.minZ;
+        const carve1 = new THREE.Box3().setFromCenterAndSize(
+          new THREE.Vector3(cx, 1.2, cz - 0.8),
+          new THREE.Vector3(7.0, 3.0, 4.0)
+        );
+        const carve2 = new THREE.Box3().setFromCenterAndSize(
+          new THREE.Vector3(cx, 1.2, cz - 2.2),
+          new THREE.Vector3(7.0, 3.0, 3.0)
+        );
+        desks = desks.filter(b => !b.intersectsBox(carve1) && !b.intersectsBox(carve2));
+      }
+      obstaclesRef.current = [ ...(zinfo?.zoneColliders ?? []), ...desks ].filter(b => !isBlocked(b));
+      if (debugStateRef.current.hitboxes) { removeColliderDebug(); addColliderDebug(); }
+    } catch {}
+
     // Update seat assignments
     participantSeatMapRef.current = assignParticipantsToDesks(
       uniq,
@@ -1777,8 +2125,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
 
       // Create new avatar only if it doesn't exist
-      const g = new THREE.Group();
-      g.position.copy(seat.position);
+      const g = new THREE.Group(); g.userData.displayName = (p.name || 'User'); g.userData.isLocal = isLocal; g.position.copy(seat.position);
       g.rotation.y = seat.yaw;
 
       const bodyColor = isLocal ? 0x3D93F8 : 0x8a8af0;
@@ -1873,6 +2220,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         const tex = new THREE.VideoTexture(el);
         tex.minFilter = THREE.LinearFilter;
         tex.magFilter = THREE.LinearFilter;
+        tex.generateMipmaps = false;
         (tex as any).colorSpace = (THREE as any).SRGBColorSpace ?? undefined;
         (screenMesh.material as any) = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });
         break;
@@ -1899,6 +2247,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       const tex = new THREE.VideoTexture(el);
       tex.minFilter = THREE.LinearFilter;
       tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = false;
       (tex as any).colorSpace = (THREE as any).SRGBColorSpace ?? undefined;
 
       if (sid) camTexBySid.set(sid, tex);
@@ -1984,8 +2333,56 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     camera.updateProjectionMatrix();
   }, [chatOpen, bottomSafeAreaPx, topSafeAreaPx]);
 
+  // Update 3D theme with smooth transition
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const prev: 'light' | 'dark' = (scene as any).__lastTheme || theme;
+    if (prev !== theme) {
+      try {
+        animateEnvironmentTheme(scene, MODE_PALETTE[prev], MODE_PALETTE[theme], 260);
+        animateZoneTheme(scene, MODE_PALETTE[prev], MODE_PALETTE[theme], 220);
+      } catch {
+        applyEnvironmentTheme(scene, theme);
+        try { applyZoneTheme(scene, MODE_PALETTE[theme]); } catch {}
+      }
+    } else {
+      applyEnvironmentTheme(scene, theme);
+      try { applyZoneTheme(scene, MODE_PALETTE[theme]); } catch {}
+    }
+    (scene as any).__lastTheme = theme;
+  }, [theme]);
+
+  // Re-apply conference audio isolation when local membership toggles or participants list changes
+  useEffect(() => {
+    updateConferenceAudioSubscriptions();
+  }, [insideConference, participants, room]);
+
+  // Adaptive performance: when streaming or many participants, lower GPU load.
+  useEffect(() => {
+    const r = rendererRef.current;
+    if (!r) return;
+    // Don't override explicit Battery Saver selection
+    if (perfLow) return;
+    const count = (participants as any[])?.length ?? 0;
+    const heavy = Boolean(screenShareEnabled || (micEnabled && count > 1) || count >= 10);
+    if (heavy) {
+      try { r.setPixelRatio(1.0); } catch { }
+      r.shadowMap.enabled = false;
+      minFrameMsRef.current = Math.round(1000 / 45); // ~45fps cap
+    } else {
+      try { r.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); } catch { }
+      r.shadowMap.enabled = true;
+      minFrameMsRef.current = 0;
+    }
+  }, [micEnabled, screenShareEnabled, participants, perfLow]);
+
+  // UI: collapsible 3D controls panel
+  const [controlsOpen, setControlsOpen] = useState(true);
+
+  const themeClass = theme === 'light' ? 'theme-light' : 'theme-dark';
   return (
-    <div className="relative h-full w-full" >
+    <div className={`relative h-full w-full ns-meeting3d ${themeClass}`} >
       <div
         ref={containerRef}
         className="relative mx-auto h-full w-full"
@@ -1999,116 +2396,184 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         ref={minimapRef}
         width={300}
         height={300}
-        className="absolute right-4 bottom-4 rounded-lg border border-[#26272B] bg-[#18181B]/80"
-        style={{ zIndex: 5 }}
+        className="absolute right-4 bottom-4 rounded-lg border"
+        style={{ zIndex: 5, borderColor: 'var(--panel-border)', background: 'var(--surface-1)' }}
       />
 
       {/* Controls Panel */}
       <div
-        className="absolute left-4 top-4 text-xs rounded-lg px-3 py-2 space-y-2"
-        style={{ background: '#1f2330', color: '#ffffff', border: '1px solid #3b3f4b', width: 260 }}
+        className="absolute left-4 top-4 text-[11px] rounded-lg px-3 py-2"
+        style={{ background: 'var(--panel-bg)', color: 'var(--panel-text)', border: '1px solid var(--panel-border)', width: 320 }}
       >
-        <div className="flex items-center justify-between mb-1">
-          <div className="font-semibold text-[13px]">3D Controls</div>
-          <div className="relative group" style={{ zIndex: 60 }}>
+        {/* Header: title, help, collapse toggle */}
+        <button
+          type="button"
+          onClick={() => setControlsOpen((o) => !o)}
+          className="w-full flex items-center justify-between select-none"
+          aria-expanded={controlsOpen}
+          title={controlsOpen ? 'Collapse controls' : 'Expand controls'}
+        >
+          <div className="flex items-center gap-2">
+            <div className="font-semibold text-[13px]">3D Controls</div>
+            <span className="text-[10px] opacity-70">Movement, View, Performance, Camera</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative group" style={{ zIndex: 60 }}>
+              <span
+                className="cursor-help inline-flex items-center justify-center w-5 h-5 rounded-full border text-[11px]"
+                style={{ borderColor: 'var(--panel-border)', background: 'var(--panel-subtle)', color: 'var(--text-2)' }}
+              >?
+              </span>
+              <div
+                className="pointer-events-none absolute left-full ml-2 top-5 transform -translate-y-1/2 w-72 rounded-md border p-3 text-[11px] leading-5 opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ background: 'var(--surface-2)', borderColor: 'var(--panel-border)', color: 'var(--text-1)', boxShadow: '0 6px 18px rgba(0,0,0,0.25)' }}
+              >
+                • Left mouse: orbit • Middle/Right: pan • Wheel: zoom (3rd) / walk (1st)
+                • WASD move • Q / E rotate • V: toggle view • Double‑click to recenter
+              </div>
+            </div>
             <span
-              className="cursor-help inline-flex items-center justify-center w-5 h-5 rounded-full border text-[11px]"
-              style={{ borderColor: '#3b3f4b', background: '#2b2f3b', color: '#cfd3dc' }}
-            >?
-            </span>
-            <div
-              className="pointer-events-none absolute left-full ml-2 top-5 transform -translate-y-1/2 w-72 rounded-md border p-3 text-[11px] leading-5 opacity-0 group-hover:opacity-100 transition-opacity"
-              style={{ background: '#0f1117', borderColor: '#3b3f4b', color: '#e5e7eb', boxShadow: '0 6px 18px rgba(0,0,0,0.45)' }}
-            >
-              LMB: orbit • MMB / RMB: pan • Wheel: zoom (3rd) / walk (1st) • WASD move • Q / E rotate • +/− zoom • V: toggle view • Click room names: navigate • Dbl-click screen: recenter
+              className="inline-block transition-transform"
+              style={{ transform: controlsOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+              aria-hidden
+            >▾</span>
+          </div>
+        </button>
+
+        {!controlsOpen ? null : (
+          <div className="mt-2 grid grid-cols-[120px_minmax(0,1fr)] gap-y-2 gap-x-3">
+            {/* View mode */}
+            <div className="self-center" style={{ color: 'var(--text-2)' }}>View Mode</div>
+            <div className="flex items-center gap-2 justify-end">
+              <button
+                onClick={() => startCamTransition('first-person')}
+                className="px-2 py-1 rounded border"
+                style={{
+                  background: currentViewMode === 'first-person' ? 'var(--panel-subtle)' : 'transparent',
+                  borderColor: 'var(--panel-border)', color: 'var(--panel-text)'
+                }}
+                title="First Person"
+              >First</button>
+              <button
+                onClick={() => startCamTransition('third-person')}
+                className="px-2 py-1 rounded border"
+                style={{
+                  background: currentViewMode === 'third-person' ? 'var(--panel-subtle)' : 'transparent',
+                  borderColor: 'var(--panel-border)', color: 'var(--panel-text)'
+                }}
+                title="Third Person"
+              >Third</button>
+            </div>
+
+            {/* Speed */}
+            <div className="self-center" style={{ color: 'var(--text-2)' }}>Move Speed</div>
+            <div className="flex items-center gap-2 justify-end">
+              <button
+                onClick={() => { const next = Math.max(0.5, Math.round((speedMultRef.current - 0.1) * 10) / 10); speedMultRef.current = next; setSpeedMultUI(next); }}
+                className="px-2 py-1 rounded border"
+                style={{ borderColor: 'var(--panel-border)' }}
+                aria-label="Decrease speed"
+              >−</button>
+              <input
+                type="range" min={0.5} max={3} step={0.1}
+                value={speedMultUI}
+                onChange={(e) => { const v = parseFloat(e.target.value); setSpeedMultUI(v); speedMultRef.current = v; }}
+                className="flex-1"
+                aria-label="Speed"
+              />
+              <button
+                onClick={() => { const next = Math.min(3.0, Math.round((speedMultRef.current + 0.1) * 10) / 10); speedMultRef.current = next; setSpeedMultUI(next); }}
+                className="px-2 py-1 rounded border"
+                style={{ borderColor: 'var(--panel-border)' }}
+                aria-label="Increase speed"
+              >+</button>
+              <span className="opacity-80 w-8 text-right">{speedMultUI.toFixed(1)}x</span>
+            </div>
+
+            <div className="self-center" style={{ color: 'var(--text-2)' }}>Always Sprint</div>
+            <div className="flex items-center justify-end">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={alwaysSprintUI}
+                  onChange={(e) => { setAlwaysSprintUI(e.target.checked); alwaysSprintRef.current = e.target.checked; }}
+                />
+                <span className="opacity-75">Hold less to run</span>
+              </label>
+              <button
+                onClick={() => { speedMultRef.current = 1.0; setSpeedMultUI(1.0); }}
+                className="ml-3 px-2 py-1 rounded border"
+                style={{ borderColor: 'var(--panel-border)' }}
+              >Reset</button>
+            </div>
+
+            {/* Divider */}
+            <div className="col-span-2 border-t" style={{ borderColor: 'var(--panel-border)' }} />
+
+            {/* Performance */}
+            <div style={{ color: 'var(--text-2)' }}>Battery Saver</div>
+            <div className="flex items-center justify-end">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={perfLow}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setPerfLow(on);
+                    const r = rendererRef.current; if (r) {
+                      r.setPixelRatio(on ? 1.0 : Math.min(window.devicePixelRatio, 1.5));
+                      r.shadowMap.enabled = !on;
+                    }
+                  }}
+                />
+                <span className="opacity-75">Lower quality for FPS</span>
+              </label>
+            </div>
+
+            {/* Theme */}
+            <div style={{ color: 'var(--text-2)' }}>Theme</div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => toggleTheme()}
+                className="px-2 py-1 rounded border"
+                style={{ borderColor: 'var(--panel-border)', background: 'var(--panel-subtle)', color: 'var(--panel-text)' }}
+              >{theme === 'light' ? 'Light' : 'Dark'}</button>
+            </div>
+
+            <div style={{ color: 'var(--text-2)' }}>Avatar LOD</div>
+            <div className="flex items-center justify-end gap-3">
+              <input className="w-44" type="range" min={8} max={40} step={1} value={lodAvatarDist} onChange={(e)=>{ const v=parseInt(e.target.value); setLodAvatarDist(v); lodAvatarDistRef.current=v; }} />
+              <span className="opacity-70 w-8 text-right">{lodAvatarDist}</span>
+            </div>
+
+            <div style={{ color: 'var(--text-2)' }}>Props LOD</div>
+            <div className="flex items-center justify-end gap-3">
+              <input className="w-44" type="range" min={10} max={40} step={1} value={lodPropsDist} onChange={(e)=>{ const v=parseInt(e.target.value); setLodPropsDist(v); lodPropsDistRef.current=v; }} />
+              <span className="opacity-70 w-8 text-right">{lodPropsDist}</span>
+            </div>
+
+            {/* Divider */}
+            <div className="col-span-2 border-t" style={{ borderColor: 'var(--panel-border)' }} />
+
+            {/* Camera */}
+            <div className="self-center" style={{ color: 'var(--text-2)' }}>Camera</div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => {
+                  if (avatarRef.current) {
+                    camTargetRef.current.copy(avatarRef.current.position);
+                    camTargetRef.current.y = 1.2;
+                  }
+                  targetDistRef.current = cameraDistRef.current = 7.0;
+                  pitchRef.current = 0.25;
+                  followLockRef.current = false;
+                }}
+                className="px-2 py-1 rounded border"
+                style={{ borderColor: 'var(--panel-border)', color: 'var(--panel-text)' }}
+              >Recenter</button>
             </div>
           </div>
-        </div>
-
-        {/* View mode */}
-        <div className="flex items-center justify-between">
-          <span className="opacity-80">View</span>
-          <div className="space-x-2">
-            <button
-              onClick={() => startCamTransition('first-person')}
-              className="px-2 py-1 rounded border"
-              style={{
-                background: currentViewMode === 'first-person' ? '#2b2f3b' : 'transparent',
-                borderColor: '#3b3f4b', color: '#fff'
-              }}
-            >FP</button>
-            <button
-              onClick={() => startCamTransition('third-person')}
-              className="px-2 py-1 rounded border"
-              style={{
-                background: currentViewMode === 'third-person' ? '#2b2f3b' : 'transparent',
-                borderColor: '#3b3f4b', color: '#fff'
-              }}
-            >TP</button>
-          </div>
-        </div>
-
-        {/* Speed */}
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="opacity-80">Speed</span>
-            <span className="opacity-80">{speedMultUI.toFixed(1)}x</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => { const next = Math.max(0.5, Math.round((speedMultRef.current - 0.1) * 10) / 10); speedMultRef.current = next; setSpeedMultUI(next); }}
-              className="px-2 py-1 rounded border"
-              style={{ borderColor: '#3b3f4b' }}
-            >−</button>
-            <input
-              type="range" min={0.5} max={3} step={0.1}
-              value={speedMultUI}
-              onChange={(e) => { const v = parseFloat(e.target.value); setSpeedMultUI(v); speedMultRef.current = v; }}
-              className="flex-1"
-            />
-            <button
-              onClick={() => { const next = Math.min(3.0, Math.round((speedMultRef.current + 0.1) * 10) / 10); speedMultRef.current = next; setSpeedMultUI(next); }}
-              className="px-2 py-1 rounded border"
-              style={{ borderColor: '#3b3f4b' }}
-            >+</button>
-          </div>
-          <div className="mt-2 flex items-center justify-between">
-            <label className="flex items-center space-x-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={alwaysSprintUI}
-                onChange={(e) => { setAlwaysSprintUI(e.target.checked); alwaysSprintRef.current = e.target.checked; }}
-              />
-              <span className="opacity-80">Always sprint</span>
-            </label>
-            <button
-              onClick={() => { speedMultRef.current = 1.0; setSpeedMultUI(1.0); }}
-              className="px-2 py-1 rounded border"
-              style={{ borderColor: '#3b3f4b' }}
-            >Reset</button>
-          </div>
-        </div>
-
-        {/* Camera */}
-        <div className="flex items-center justify-between mt-1">
-          <span className="opacity-80">Camera</span>
-          <div className="space-x-2">
-            <button
-              onClick={() => {
-                // Recenter camera target to avatar and restore default pitch/zoom
-                if (avatarRef.current) {
-                  camTargetRef.current.copy(avatarRef.current.position);
-                  camTargetRef.current.y = 1.2;
-                }
-                targetDistRef.current = cameraDistRef.current = 7.0;
-                pitchRef.current = 0.25;
-                followLockRef.current = false;
-              }}
-              className="px-2 py-1 rounded border"
-              style={{ borderColor: '#3b3f4b', color: '#fff' }}
-            >Recenter</button>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* <div className="absolute left-4 bottom-[94px] text-white/70 text-xs bg-[#00000066] px-2 py-1 rounded">
@@ -2120,17 +2585,17 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           onClick={rollDice}
           className="absolute left-4 bottom-4 text-sm rounded-lg px-3 py-2"
           style={{
-            background: '#2b2f3b',
-            color: '#d9f99d',
-            border: '1px solid #3b3f4b'
+            background: 'var(--panel-subtle)',
+            color: 'var(--panel-text)',
+            border: '1px solid var(--panel-border)'
           }}
         >
           🎲 Roll Dice
         </button>
       )}
-    </div>
-  );
-};
+      </div>
+      );
+    };
 
 // ——— Enhanced Minimap with Clickable Room Names ———
 function drawMinimap(
@@ -2144,9 +2609,23 @@ function drawMinimap(
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
+  // Theme-aware colors
+  const css = getComputedStyle(canvas);
+  const panelBg = (css.getPropertyValue('--surface-1') || '#14171e').trim();
+  const borderCol = (css.getPropertyValue('--panel-border') || '#2f2f36').trim();
+  const text1 = (css.getPropertyValue('--text-1') || '#e5e7eb').trim();
+  const text2 = (css.getPropertyValue('--text-2') || '#cfd3dc').trim();
+  const accent = (css.getPropertyValue('--accent') || '#3D93F8').trim();
+  const toRGBA = (hex: string, a: number) => {
+    const h = hex.replace('#', '');
+    const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+    const num = parseInt(full, 16);
+    const r = (num >> 16) & 255, g = (num >> 8) & 255, b = num & 255;
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  };
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#14171e';
+  ctx.fillStyle = panelBg || '#14171e';
   ctx.fillRect(0, 0, W, H);
   const pad = 16;
   const rw = W - pad * 2, rh = H - pad * 2;
@@ -2155,7 +2634,7 @@ function drawMinimap(
     Y: pad + ((z + ROOM_D / 2) / ROOM_D) * rh
   });
 
-  ctx.strokeStyle = '#2f2f36';
+  ctx.strokeStyle = borderCol || '#2f2f36';
   ctx.lineWidth = 2;
   ctx.strokeRect(pad, pad, rw, rh);
 
@@ -2167,18 +2646,18 @@ function drawMinimap(
 
       // Room background with subtle gradient
       const roomGrad = ctx.createLinearGradient(a.X, a.Y, b.X, b.Y);
-      roomGrad.addColorStop(0, 'rgba(74, 144, 226, 0.08)');
-      roomGrad.addColorStop(1, 'rgba(74, 144, 226, 0.04)');
+      roomGrad.addColorStop(0, toRGBA(accent, 0.10));
+      roomGrad.addColorStop(1, toRGBA(accent, 0.05));
       ctx.fillStyle = roomGrad;
       ctx.fillRect(a.X, a.Y, (b.X - a.X), (b.Y - a.Y));
 
       // Room border
-      ctx.strokeStyle = '#4a90e2';
+      ctx.strokeStyle = accent;
       ctx.lineWidth = 1.5;
       ctx.strokeRect(a.X, a.Y, (b.X - a.X), (b.Y - a.Y));
 
       // Enhanced room name with better visibility
-      ctx.fillStyle = '#87ceeb';
+      ctx.fillStyle = text2;
       ctx.font = 'bold 11px system-ui, -apple-system';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
@@ -2218,7 +2697,7 @@ function drawMinimap(
     }
 
     // Enhanced doorways
-    ctx.fillStyle = '#00ffcc';
+    ctx.fillStyle = accent;
     for (const d of zones.doorways) {
       const p = toMap(d.x, d.z);
       ctx.beginPath();
@@ -2228,13 +2707,13 @@ function drawMinimap(
       // Add subtle glow effect
       ctx.beginPath();
       ctx.arc(p.X, p.Y, 5, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0, 255, 204, 0.3)';
+      ctx.fillStyle = toRGBA(accent, 0.30);
       ctx.fill();
-      ctx.fillStyle = '#00ffcc';
+      ctx.fillStyle = accent;
     }
 
     // Enhanced landmarks
-    ctx.fillStyle = '#7fffd4';
+    ctx.fillStyle = accent;
     ctx.font = '10px system-ui';
     for (const lm of zones.landmarks) {
       const p = toMap(lm.x, lm.z);
@@ -2242,18 +2721,18 @@ function drawMinimap(
       // Landmark dot with glow
       ctx.beginPath();
       ctx.arc(p.X, p.Y, 4, 0, Math.PI * 2);
-      ctx.fillStyle = '#7fffd4';
+      ctx.fillStyle = accent;
       ctx.fill();
 
       // Glow effect
       ctx.beginPath();
       ctx.arc(p.X, p.Y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(127, 255, 212, 0.4)';
+      ctx.fillStyle = toRGBA(accent, 0.40);
       ctx.fill();
 
       // Landmark label
       const label = `• ${lm.name}`;
-      ctx.fillStyle = '#c8ffe6';
+      ctx.fillStyle = text2;
       ctx.font = 'bold 10px system-ui';
       ctx.textAlign = 'left';
       ctx.fillText(label, p.X + 8, p.Y - 4);
@@ -2273,12 +2752,12 @@ function drawMinimap(
 
   // Desk areas
   if (mgr) {
-    ctx.fillStyle = 'rgba(36, 42, 52, 0.6)';
+    ctx.fillStyle = toRGBA(borderCol, 0.20);
     for (const r of mgr.bayRects) {
       const a = toMap(r.minX, r.minZ), b = toMap(r.maxX, r.maxZ);
       ctx.fillRect(a.X, a.Y, (b.X - a.X), (b.Y - a.Y));
     }
-    ctx.strokeStyle = '#3a4050';
+    ctx.strokeStyle = borderCol;
     ctx.setLineDash([4, 2]);
     ctx.lineWidth = 1;
     for (const a of mgr.aisleLines) {
@@ -2358,7 +2837,7 @@ function drawMinimap(
   const time = Date.now() * 0.003;
   const glowIntensity = 0.6 + 0.4 * Math.sin(time);
 
-  ctx.fillStyle = '#3D93F8';
+  ctx.fillStyle = accent;
   ctx.beginPath();
   ctx.arc(yp.X, yp.Y, 5, 0, Math.PI * 2);
   ctx.fill();
@@ -2366,11 +2845,11 @@ function drawMinimap(
   // Pulsing glow
   ctx.beginPath();
   ctx.arc(yp.X, yp.Y, 8 + 2 * Math.sin(time), 0, Math.PI * 2);
-  ctx.fillStyle = `rgba(61, 147, 248, ${glowIntensity * 0.3})`;
+  ctx.fillStyle = toRGBA(accent, glowIntensity * 0.3);
   ctx.fill();
 
   // "You" label with better styling
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = text1;
   ctx.font = 'bold 11px system-ui';
   ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
   ctx.shadowBlur = 3;
@@ -2386,3 +2865,17 @@ function drawMinimap(
 }
 
 export default Meeting3D;
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -19,10 +19,34 @@ type UIState = {
   setActiveNav: (id: string) => void;
 
   setMeetingControlsVisible: (v: boolean) => void;
+
+  // Theme
+  theme: 'dark' | 'light';
+  setTheme: (t: 'dark' | 'light') => void;
+  toggleTheme: () => void;
 };
 
 export const useUIStore = create<UIState>()(
   devtools((set, get) => ({
+    // Theme initialization
+    theme: (() => {
+      if (typeof window === 'undefined') return 'dark';
+      try {
+        const v = window.localStorage.getItem('theme');
+        return v === 'light' ? 'light' : 'dark';
+      } catch {
+        return 'dark';
+      }
+    })(),
+    setTheme: (t) => {
+      try { localStorage.setItem('theme', t); } catch {}
+      set({ theme: t });
+    },
+    toggleTheme: () => {
+      const next = get().theme === 'dark' ? 'light' : 'dark';
+      try { localStorage.setItem('theme', next); } catch {}
+      set({ theme: next });
+    },
     isWorkspacePanelOpen: true,
     toggleWorkspacePanel: (open) =>
       set({ isWorkspacePanelOpen: typeof open === "boolean" ? open : !get().isWorkspacePanelOpen }),

@@ -132,3 +132,68 @@
   100% { transform: scale(1.10); opacity: .90; }
 }
 .pulse-ring { animation: pulse-ring 900ms ease-out infinite alternate; }
+
+/* Scoped theme variables for Meeting3D only */
+.ns-meeting3d.theme-dark {
+  --text-1: #ffffff;
+  --text-2: #cfd3dc;
+  --panel-bg: #1f2330;
+  --panel-text: #ffffff;
+  --panel-border: #3b3f4b;
+  --panel-subtle: #2b2f3b;
+  --surface-1: #18181B;
+  --surface-2: #202024;
+  --accent: #3D93F8;
+}
+.ns-meeting3d.theme-light {
+  --text-1: #0f172a;
+  --text-2: #334155;
+  --panel-bg: #ffffff;
+  --panel-text: #0f172a;
+  --panel-border: #e5e7eb;
+  --panel-subtle: #f3f4f6;
+  --surface-1: #ffffff;
+  --surface-2: #f8fafc;
+  --accent: #2563eb;
+}
+
+:root {
+  --app-bg: #0b0f16;
+  --text-1: #ffffff;
+  --text-2: #cfd3dc;
+  --panel-bg: #1f2330;
+  --panel-text: #ffffff;
+  --panel-border: #3b3f4b;
+  --panel-subtle: #2b2f3b;
+  --surface-1: #18181B;
+  --surface-2: #202024;
+  --ring: #26272B;
+  --accent: #3D93F8;
+}
+html[data-theme="light"] {
+  --app-bg: #f3f4f6;
+  --text-1: #0f172a;
+  --text-2: #334155;
+  --panel-bg: #ffffff;
+  --panel-text: #0f172a;
+  --panel-border: #e5e7eb;
+  --panel-subtle: #f3f4f6;
+  --surface-1: #ffffff;
+  --surface-2: #f8fafc;
+  --ring: #e5e7eb;
+  --accent: #2563eb;
+}
+
+/* Apply background */
+body { background: var(--app-bg); color: var(--text-1); }
+
+/* Override key surfaces to use variables */
+.control-bar { background-color: var(--surface-1) !important; }
+.pill-dark { background-color: var(--surface-1) !important; color: var(--text-1) !important; }
+.widget-top-inner { background-color: var(--surface-1) !important; }
+.status-chip { background-color: var(--surface-2) !important; }
+.btn-circle-ghost { background-color: var(--surface-2) !important; }
+.menu { background-color: var(--surface-2) !important; border-color: var(--ring) !important; }
+.tile-profile { background-color: var(--surface-1) !important; }
+
+

@@ -1,8 +1,15 @@
 import * as THREE from 'three';
 import { createSofa } from './sofa';
 import { createOfficeChair } from './officeChair';
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { MODE_PALETTE, type ModePalette } from './themeConfig';
 
-function createRealisticTiledFloor(scene: THREE.Scene, ROOM_W: number, ROOM_D: number) {
+function createRealisticTiledFloor(
+    scene: THREE.Scene,
+    ROOM_W: number,
+    ROOM_D: number,
+    palette: import('./themeConfig').ModePalette
+) {
     // Remove the old simple grid if it exists
     const existingGrid = scene.getObjectByName('floor-grid');
     if (existingGrid) {
@@ -19,7 +26,7 @@ function createRealisticTiledFloor(scene: THREE.Scene, ROOM_W: number, ROOM_D: n
     // Create the base floor plane to exactly match room size
     const baseFloorGeo = new THREE.PlaneGeometry(ROOM_W, ROOM_D);
     const baseFloorMat = new THREE.MeshStandardMaterial({
-        color: 0x1a1a1a,
+        color: palette.floorBase,
         roughness: 0.15,
         metalness: 0.05,
     });
@@ -39,29 +46,14 @@ function createRealisticTiledFloor(scene: THREE.Scene, ROOM_W: number, ROOM_D: n
     const tileGeo = new THREE.PlaneGeometry(tileSize * 0.98, tileSize * 0.98);
 
     // Create tile materials
-    const tileMaterials = [
-        new THREE.MeshStandardMaterial({
-            color: 0xb5bac2,
-            roughness: 0.2,
+    const tileMaterials = (palette.floorTiles && palette.floorTiles.length ? palette.floorTiles : [0xB5BAC2, 0xA7ADB6, 0x7C828A])
+        .map((c, i) => new THREE.MeshStandardMaterial({
+            color: c,
+            roughness: 0.22,
             metalness: 0.1,
             transparent: true,
-            opacity: 0.9
-        }),
-        new THREE.MeshStandardMaterial({
-            color: 0xa7adb6,
-            roughness: 0.25,
-            metalness: 0.08,
-            transparent: true,
-            opacity: 0.85
-        }),
-        new THREE.MeshStandardMaterial({
-            color: 0x7c828a,
-            roughness: 0.18,
-            metalness: 0.12,
-            transparent: true,
-            opacity: 0.95
-        })
-    ];
+            opacity: 0.88 + (i % 3) * 0.02
+        }));
 
     // Create tiles - start from room boundaries and work inward
     const startX = -ROOM_W / 2 + tileSize / 2; // Start at left edge + half tile
@@ -91,41 +83,25 @@ function createRealisticTiledFloor(scene: THREE.Scene, ROOM_W: number, ROOM_D: n
 
     scene.add(tileGroup);
 
-    // Add grout lines
-    const groutGroup = new THREE.Group();
-    groutGroup.name = 'floor-grout';
-
-    // Horizontal grout lines (running along X axis)
+    // Add grout lines (merged into a single mesh to reduce draw calls)
+    const groutPieces: THREE.BufferGeometry[] = [];
     for (let j = 0; j <= tilesZ; j++) {
-        const groutGeo = new THREE.PlaneGeometry(ROOM_W, 0.003);
-        const groutMat = new THREE.MeshBasicMaterial({
-            color: 0x151518,
-            transparent: true,
-            opacity: 0.6
-        });
-
-        const groutLine = new THREE.Mesh(groutGeo, groutMat);
-        groutLine.rotation.x = -Math.PI / 2;
-        groutLine.position.set(0, 0.0005, startZ - tileSize / 2 + j * tileSize);
-        groutGroup.add(groutLine);
+        const g = new THREE.PlaneGeometry(ROOM_W, 0.003);
+        g.rotateX(-Math.PI / 2);
+        g.translate(0, 0.0005, startZ - tileSize / 2 + j * tileSize);
+        groutPieces.push(g);
     }
-
-    // Vertical grout lines (running along Z axis)
     for (let i = 0; i <= tilesX; i++) {
-        const groutGeo = new THREE.PlaneGeometry(0.003, ROOM_D);
-        const groutMat = new THREE.MeshBasicMaterial({
-            color: 0x151518,
-            transparent: true,
-            opacity: 0.6
-        });
-
-        const groutLine = new THREE.Mesh(groutGeo, groutMat);
-        groutLine.rotation.x = -Math.PI / 2;
-        groutLine.position.set(startX - tileSize / 2 + i * tileSize, 0.0005, 0);
-        groutGroup.add(groutLine);
+        const g = new THREE.PlaneGeometry(0.003, ROOM_D);
+        g.rotateX(-Math.PI / 2);
+        g.translate(startX - tileSize / 2 + i * tileSize, 0.0005, 0);
+        groutPieces.push(g);
     }
-
-    scene.add(groutGroup);
+    const mergedGroutGeo = BufferGeometryUtils.mergeGeometries(groutPieces, false) || new THREE.PlaneGeometry(0, 0);
+    const groutMat = new THREE.MeshBasicMaterial({ color: palette.floorGrout, transparent: true, opacity: 0.6 });
+    const groutMesh = new THREE.Mesh(mergedGroutGeo, groutMat);
+    groutMesh.name = 'floor-grout-merged';
+    scene.add(groutMesh);
 
     // Enhanced lighting for tile visibility
     const floorSpotlight = new THREE.SpotLight(0xffffff, 0.3, 0, Math.PI / 8);
@@ -138,37 +114,23 @@ function createRealisticTiledFloor(scene: THREE.Scene, ROOM_W: number, ROOM_D: n
     // Return cleanup function (same as before)
     return {
         dispose: () => {
-            scene.remove(baseFloor);
-            scene.remove(tileGroup);
-            scene.remove(groutGroup);
-            scene.remove(floorSpotlight);
+            try { scene.remove(baseFloor); } catch { }
+            try { scene.remove(tileGroup); } catch { }
+            try { scene.remove(groutMesh); } catch { }
+            try { scene.remove(floorSpotlight); scene.remove(floorSpotlight.target); } catch { }
 
-            baseFloorGeo.dispose();
-            baseFloorMat.dispose();
-            tileGeo.dispose();
-            tileMaterials.forEach(mat => mat.dispose());
+            try { baseFloorGeo.dispose(); baseFloorMat.dispose(); } catch { }
+            try { tileGeo.dispose(); tileMaterials.forEach(m => m.dispose()); } catch { }
+            try { mergedGroutGeo.dispose(); (groutMesh.material as THREE.Material).dispose?.(); } catch { }
 
-            tileGroup.children.forEach(child => {
-                if (child instanceof THREE.Mesh) {
-                    child.geometry.dispose();
-                    if (Array.isArray(child.material)) {
-                        child.material.forEach(mat => mat.dispose());
-                    } else {
-                        (child.material as THREE.Material).dispose();
+            try {
+                tileGroup.traverse((o: any) => {
+                    if (o?.isMesh) {
+                        o.geometry?.dispose?.();
+                        const m = o.material; Array.isArray(m) ? m.forEach((mm: any) => mm.dispose?.()) : m?.dispose?.();
                     }
-                }
-            });
-
-            groutGroup.children.forEach(child => {
-                if (child instanceof THREE.Mesh) {
-                    child.geometry.dispose();
-                    if (Array.isArray(child.material)) {
-                        child.material.forEach(mat => mat.dispose());
-                    } else {
-                        (child.material as THREE.Material).dispose();
-                    }
-                }
-            });
+                });
+            } catch { }
         }
     };
 }
@@ -299,7 +261,8 @@ function addRoomWithDoor(
     thickness: number,
     door: { wall: 'N' | 'S' | 'E' | 'W', width: number, centerX?: number, centerZ?: number },
     color = 0x4a4a52,
-    accentColor?: number
+    accentColor?: number,
+    roomKey?: keyof ModePalette['rooms']
 ) {
     const mat = new THREE.MeshStandardMaterial({
         color,
@@ -343,6 +306,8 @@ function addRoomWithDoor(
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(s.w, s.h, s.d), mat);
         mesh.position.set(s.x, s.y, s.z);
         mesh.castShadow = true; mesh.receiveShadow = true;
+        mesh.name = 'ROOM_WALL';
+        (mesh as any).userData.roomKey = roomKey;
         scene.add(mesh);
         colliders.push(new THREE.Box3().setFromObject(mesh));
 
@@ -353,6 +318,8 @@ function addRoomWithDoor(
                 new THREE.MeshStandardMaterial({ color: accentColor, emissive: accentColor, emissiveIntensity: 0.2 })
             );
             stripe.position.set(s.x, s.y + s.h * 0.3, s.z);
+            stripe.name = 'ROOM_ACCENT';
+            (stripe as any).userData.roomKey = roomKey;
             scene.add(stripe);
         }
     }
@@ -420,7 +387,7 @@ function addGlassRoomWithOpenDoor(
 
     for (const s of segments) {
         const wall = new THREE.Mesh(new THREE.BoxGeometry(s.w, s.h, s.d), glassMat);
-        wall.position.set(s.x, s.y, s.z);
+        wall.matrixAutoUpdate = false; wall.position.set(s.x, s.y, s.z); wall.updateMatrix();
         wall.castShadow = false; wall.receiveShadow = true;
         scene.add(wall);
         colliders.push(new THREE.Box3().setFromObject(wall));
@@ -470,11 +437,13 @@ function addGlassRoomWithOpenDoor(
     scene.add(doorPanel);   // Compute blocker collider for the doorway (used when door is closed)\r\n    let blockerCenter: THREE.Vector3;\r\n    let blockerSize: THREE.Vector3;\r\n    if (door.wall === 'W' || door.wall === 'E') {\r\n        const cz = door.centerZ ?? (rect.minZ + rect.maxZ) / 2;\r\n        const bx = door.wall === 'W' ? rect.minX + T / 2 : rect.maxX - T / 2;\r\n        blockerCenter = new THREE.Vector3(bx, H / 2, cz);\r\n        blockerSize = new THREE.Vector3(T, H, door.width);\r\n    } else {\r\n        const cx = door.centerX ?? (rect.minX + rect.maxX) / 2;\r\n        const bz = door.wall === 'N' ? rect.minZ + T / 2 : rect.maxZ - T / 2;\r\n        blockerCenter = new THREE.Vector3(cx, H / 2, bz);\r\n        blockerSize = new THREE.Vector3(door.width, H, T);\r\n    }\r\n    const blockerBox = new THREE.Box3().setFromCenterAndSize(blockerCenter, blockerSize);\r\n\r\n    return { doorPanel, blockerBox, wall: door.wall, width: door.width, centerX: door.centerX, centerZ: door.centerZ, height: H, thickness: T };\r\n}\r\n
 }
 function segmentIntersectsAnyBox(a: THREE.Vector3, b: THREE.Vector3, boxes: THREE.Box3[]) {
+    // Slightly slimmer probe to avoid false positives at tight doorways
+    const half = 0.28;
     const steps = 16;
     for (let i = 0; i <= steps; i++) {
         const t = i / steps;
         const p = new THREE.Vector3(a.x + (b.x - a.x) * t, 1.0, a.z + (b.z - a.z) * t);
-        const probe = new THREE.Box3().setFromCenterAndSize(p, new THREE.Vector3(0.3, 1.8, 0.3));
+        const probe = new THREE.Box3().setFromCenterAndSize(p, new THREE.Vector3(half, 1.8, half));
         for (const box of boxes) { if (box.intersectsBox(probe)) return true; }
     }
     return false;
@@ -482,8 +451,9 @@ function segmentIntersectsAnyBox(a: THREE.Vector3, b: THREE.Vector3, boxes: THRE
 
 export function buildZones(
     scene: THREE.Scene,
-    { ROOM_W, ROOM_D }: { ROOM_W: number; ROOM_D: number; }
+    { ROOM_W, ROOM_D, palette, mode }: { ROOM_W: number; ROOM_D: number; palette?: import('./themeConfig').ModePalette; mode?: 'light' | 'dark' }
 ): BuiltZonesInfo {
+    const activePalette: import('./themeConfig').ModePalette = palette ?? MODE_PALETTE[mode || 'dark'];
     const colliders: THREE.Box3[] = [];
 
     // Enhanced big screen (north) with modern look
@@ -535,106 +505,197 @@ export function buildZones(
     // Walls with warm, inviting colors and modern design
     const doorways: Array<{ x: number; z: number }> = [];
 
-    // Focus Pod A - calm blue-gray
-    addRoomWithDoor(scene, colliders, huddleA, 2.5, 0.12, { wall: 'E', width: 1.8, centerZ: -6.5 }, 0x3d4a5c, 0x5a7a95);
+    // Focus Pod A - light powder blue (light mode friendly)
+    addRoomWithDoor(
+        scene,
+        colliders,
+        huddleA,
+        2.5,
+        0.12,
+        { wall: 'E', width: 1.8, centerZ: -6.5 },
+        activePalette.rooms.focus.base,
+        activePalette.rooms.focus.accent,
+        'focus'
+    );
     doorways.push({ x: huddleA.maxX, z: -2.0 });
     addWarmLighting(scene, (huddleA.minX + huddleA.maxX) / 2, 2.2, (huddleA.minZ + huddleA.maxZ) / 2, 0x4a90e2);
 
     // Conference Room — glass walls with open glass door and beige roof
-    const confGlass = addGlassRoomWithOpenDoor(scene, colliders, confRoom, 3.2, 0.06, { wall: 'W', width: 2.2, centerZ: -2.0 });
+    const confGlass = addGlassRoomWithOpenDoor(scene, colliders, confRoom, 5.2, 0.06, { wall: 'W', width: 2.2, centerZ: -2.0 });
     doorways.push({ x: confRoom.minX, z: -2.0 });
     addWarmLighting(scene, (confRoom.minX + confRoom.maxX) / 2, 2.7, (confRoom.minZ + confRoom.maxZ) / 2, 0xffd8a8);
 
-    // Lounge - warm terracotta/rust
-    addRoomWithDoor(scene, colliders, loungeRect, 0.5, 0.1, { wall: 'N', width: 2.6 }, 0x5c4033, 0x8b6914);
+    // Lounge - warm peach
+    addRoomWithDoor(
+        scene,
+        colliders,
+        loungeRect,
+        0.5,
+        0.1,
+        { wall: 'N', width: 2.6 },
+        activePalette.rooms.lounge.base,
+        activePalette.rooms.lounge.accent,
+        'lounge'
+    );
     doorways.push({ x: (loungeRect.minX + loungeRect.maxX) / 2, z: loungeRect.minZ });
     addWarmLighting(scene, (loungeRect.minX + loungeRect.maxX) / 2, 2.2, (loungeRect.minZ + loungeRect.maxZ) / 2, 0xffa500);
 
-    // Game Room - fun purple
-    addRoomWithDoor(scene, colliders, gameRect, 2.5, 0.12, { wall: 'E', width: 2.0 }, 0x4a3f5c, 0x7b68ee);
+    // Game Room - soft lavender
+    addRoomWithDoor(
+        scene,
+        colliders,
+        gameRect,
+        2.5,
+        0.12,
+        { wall: 'E', width: 2.0 },
+        activePalette.rooms.game.base,
+        activePalette.rooms.game.accent,
+        'game'
+    );
     doorways.push({ x: (gameRect.minX + gameRect.maxX) / 2, z: gameRect.minZ });
     addWarmLighting(scene, (gameRect.minX + gameRect.maxX) / 2, 2.2, (gameRect.minZ + gameRect.maxZ) / 2, 0xda70d6);
 
-    // Kitchen - warm cream
-    addRoomWithDoor(scene, colliders, pantryRect, 2.5, 0.1, { wall: 'W', width: 1.8 }, 0x5c5233, 0xdaa520);
+    // Kitchen - pale mint
+    addRoomWithDoor(
+        scene,
+        colliders,
+        pantryRect,
+        2.5,
+        0.1,
+        { wall: 'W', width: 1.8 },
+        activePalette.rooms.kitchen.base,
+        activePalette.rooms.kitchen.accent,
+        'kitchen'
+    );
     doorways.push({ x: pantryRect.minX, z: (pantryRect.minZ + pantryRect.maxZ) / 2 });
     addWarmLighting(scene, (pantryRect.minX + pantryRect.maxX) / 2, 2.2, (pantryRect.minZ + pantryRect.maxZ) / 2, 0xffd700);
 
-    // Realistic Conference Room furniture (table, chairs, lights, TV)
-    const confCenter = { x: (confRoom.minX + confRoom.maxX) / 2, z: (confRoom.minZ + confRoom.maxZ) / 2 };
-    const spanX = confRoom.maxX - confRoom.minX;
-    const spanZ = confRoom.maxZ - confRoom.minZ;
+    // 1) Compute center once
+    const confCenter = {
+        x: (confRoom.minX + confRoom.maxX) / 2,
+        z: (confRoom.minZ + confRoom.maxZ) / 2
+    };
 
-    const tableLen = Math.min(spanX * 0.72, 8.0);
-    const tableDepth = Math.min(spanZ * 0.48, 3.2);
+    // 2) Make a pivot at the room center and add to scene
+    const confPivot = new THREE.Group();
+    confPivot.position.set(confCenter.x, 0, confCenter.z);
+    scene.add(confPivot);
+
+    // 3) Build everything as before, but temporarily add to scene (or a temp array)
+    const created = []; // collect objects to reparent cleanly
+
+    // --- table ---
+    const tableLen = Math.min((confRoom.maxX - confRoom.minX) * 0.72, 8.0);
+    const tableDepth = Math.min((confRoom.maxZ - confRoom.minZ) * 0.48, 3.2);
+
     const confTableTop = new THREE.Mesh(
         new THREE.BoxGeometry(tableLen, 0.08, tableDepth),
         createWoodMaterial(0xd0b089, 0.35)
     );
     confTableTop.position.set(confCenter.x, 0.82, confCenter.z);
-    confTableTop.castShadow = true; confTableTop.receiveShadow = true;
+    confTableTop.castShadow = confTableTop.receiveShadow = true;
     scene.add(confTableTop);
-    colliders.push(new THREE.Box3().setFromObject(confTableTop));
+    created.push(confTableTop);
 
+    // legs
     const legMat = new THREE.MeshStandardMaterial({ color: 0x8a8e94, metalness: 0.75, roughness: 0.25 });
     const legGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.78, 16);
     const legOffsetX = (tableLen / 2) - 0.25;
     const legOffsetZ = (tableDepth / 2) - 0.25;
-    [[legOffsetX, legOffsetZ], [-legOffsetX, legOffsetZ], [legOffsetX, -legOffsetZ], [-legOffsetX, -legOffsetZ]].forEach(([lx, lz]) => {
-        const leg = new THREE.Mesh(legGeo, legMat);
-        leg.position.set(confCenter.x + lx, 0.39, confCenter.z + lz);
-        leg.castShadow = true; leg.receiveShadow = true;
-        scene.add(leg);
-    });
 
+    [[legOffsetX, legOffsetZ], [-legOffsetX, legOffsetZ], [legOffsetX, -legOffsetZ], [-legOffsetX, -legOffsetZ]]
+        .forEach(([lx, lz]) => {
+            const leg = new THREE.Mesh(legGeo, legMat);
+            leg.position.set(confCenter.x + lx, 0.39, confCenter.z + lz);
+            leg.castShadow = leg.receiveShadow = true;
+            scene.add(leg);
+            created.push(leg);
+        });
+
+    // chairs
     const sideCount = 4;
     const gap = tableLen / (sideCount + 1);
     const chairDist = tableDepth / 2 + 0.55;
     const chairColor = '#3d3f45';
     const frameColor = '#d7cdb8';
+
     for (let i = 1; i <= sideCount; i++) {
         const offsetX = -tableLen / 2 + i * gap;
+
         const c1 = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
         c1.group.position.set(confCenter.x + offsetX, 0, confCenter.z + chairDist);
         c1.group.rotation.y = Math.PI;
         scene.add(c1.group);
+        created.push(c1.group);
+
         const c2 = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
         c2.group.position.set(confCenter.x + offsetX, 0, confCenter.z - chairDist);
         c2.group.rotation.y = 0;
         scene.add(c2.group);
+        created.push(c2.group);
     }
+
     const headDist = tableLen / 2 + 0.6;
+
     const cWest = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
     cWest.group.position.set(confCenter.x - headDist, 0, confCenter.z);
     cWest.group.rotation.y = Math.PI / 2;
     scene.add(cWest.group);
+    created.push(cWest.group);
+
     const cEast = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
     cEast.group.position.set(confCenter.x + headDist, 0, confCenter.z);
     cEast.group.rotation.y = -Math.PI / 2;
     scene.add(cEast.group);
+    created.push(cEast.group);
 
+    // lamps
     const lampY = 2.2;
     const lampOffsetX = tableLen * 0.22;
     const bulbMat = new THREE.MeshStandardMaterial({ color: 0xfff2cc, emissive: 0xffe0a8, emissiveIntensity: 1.4 });
     const frameMat = new THREE.MeshBasicMaterial({ color: 0x404040, wireframe: true });
+
     [-lampOffsetX, lampOffsetX].forEach((ox) => {
         const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 12), bulbMat);
         bulb.position.set(confCenter.x + ox, lampY, confCenter.z);
         scene.add(bulb);
+        created.push(bulb);
+
         const shade = new THREE.Mesh(new THREE.IcosahedronGeometry(0.35, 0), frameMat);
         shade.position.copy(bulb.position);
         scene.add(shade);
+        created.push(shade);
+
         const l = new THREE.PointLight(0xffd8a8, 0.9, 8, 2);
         l.position.copy(bulb.position);
         l.castShadow = true;
         scene.add(l);
+        created.push(l);
     });
 
-    const tv = new THREE.Mesh(new THREE.PlaneGeometry(3.8, 2.1), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2, metalness: 0.8 }));
+    // TV
+    const tv = new THREE.Mesh(
+        new THREE.PlaneGeometry(3.8, 2.1),
+        new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2, metalness: 0.8 })
+    );
     tv.position.set(confRoom.maxX - 0.07, 1.6, confCenter.z + 0.2);
     tv.rotation.y = -Math.PI / 2;
     tv.castShadow = true;
     scene.add(tv);
+    created.push(tv);
+
+    // 4) Re-parent all created objects UNDER the pivot, preserving world transform
+    for (const obj of created) confPivot.attach(obj);
+
+    // 5) Now rotate the pivot 90° around Y (about the room center)
+    confPivot.rotation.y = Math.PI / 2;
+
+    // 6) (Optional) Recompute colliders after rotation
+    //    If you rely on world-space boxes, rebuild them now:
+    // colliders.length = 0;
+    // const bbox = new THREE.Box3().setFromObject(confPivot);
+    // colliders.push(bbox);
+
 
     // Enhanced Game Room with modern table and detailed dice
     const gameCenter = { x: (gameRect.minX + gameRect.maxX) / 2, z: (gameRect.minZ + gameRect.maxZ) / 2 };
@@ -839,7 +900,7 @@ export function buildZones(
     scene.add(directionalLight);
 
     // Add floor with subtle pattern
-    createRealisticTiledFloor(scene, ROOM_W, ROOM_D);
+    createRealisticTiledFloor(scene, ROOM_W, ROOM_D, activePalette);
     // const floorGeometry = new THREE.PlaneGeometry(ROOM_W, ROOM_D);
     // const floorMaterial = new THREE.MeshStandardMaterial({
     //     color: 0x2d2d2d,
@@ -934,6 +995,115 @@ export function buildZones(
 
     };
 }
+
+
+export function applyZoneTheme(scene: THREE.Scene, palette: ModePalette) {
+    try {
+        // Floor base
+        const base = scene.getObjectByName('floor-base') as THREE.Mesh | null;
+        if (base && (base.material as any)?.color) {
+            ((base.material as any).color as THREE.Color).set(palette.floorBase);
+            (base.material as any).needsUpdate = true;
+        }
+        // Floor tiles
+        const grid = scene.getObjectByName('floor-grid') as THREE.Group | null;
+        if (grid) {
+            const lc = palette.floorTiles && palette.floorTiles.length ? palette.floorTiles : [0xB5BAC2, 0xA7ADB6, 0x7C828A];
+            let idx = 0;
+            grid.traverse((o: any) => {
+                if (o && o.isMesh && o.material && (o.material as any).color) {
+                    const c = lc[idx++ % lc.length];
+                    ((o.material as any).color as THREE.Color).set(c);
+                    (o.material as any).needsUpdate = true;
+                }
+            });
+        }
+        // Grout
+        const grout = scene.getObjectByName('floor-grout-merged') as THREE.Mesh | null;
+        if (grout && (grout.material as any)?.color) {
+            ((grout.material as any).color as THREE.Color).set(palette.floorGrout);
+            (grout.material as any).needsUpdate = true;
+        }
+
+        // Room walls & accents
+        const applyColorTo = (obj: THREE.Object3D | null, color: number) => {
+            if (!obj) return;
+            const m: any = (obj as any).material;
+            if (m && m.color) { m.color.set(color); m.needsUpdate = true; }
+        };
+        scene.traverse((o) => {
+            if (!(o as any).isMesh) return;
+            if (o.name === 'ROOM_WALL' || o.name === 'ROOM_ACCENT') {
+                const key = (o as any).userData?.roomKey as keyof ModePalette['rooms'] | undefined;
+                if (!key || !palette.rooms[key]) return;
+                const col = o.name === 'ROOM_WALL' ? palette.rooms[key].base : palette.rooms[key].accent;
+                applyColorTo(o, col);
+            }
+        });
+    } catch { /* ignore */ }
+}
+
+// Smoothly animate zone (floor + room walls) colors between palettes
+let ZONE_THEME_ANIM: number | null = null;
+export function animateZoneTheme(scene: THREE.Scene, from: ModePalette, to: ModePalette, durationMs: number = 200) {
+    if (ZONE_THEME_ANIM) { cancelAnimationFrame(ZONE_THEME_ANIM); ZONE_THEME_ANIM = null; }
+    const t0 = performance.now();
+    const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
+
+    const floorBase = scene.getObjectByName('floor-base') as THREE.Mesh | null;
+    const baseFrom = new THREE.Color(from.floorBase); const baseTo = new THREE.Color(to.floorBase);
+
+    // We snap tile colors (many materials) to avoid heavy per-frame loops.
+    // If preferred, we can animate tiles too later.
+
+    // Pre-collect room walls/accents by key
+    const roomMeshes: Array<{ m: any; from: THREE.Color; to: THREE.Color }> = [];
+    scene.traverse((o) => {
+        const mesh: any = o as any;
+        if (!mesh?.isMesh || !mesh.material) return;
+        if (o.name === 'ROOM_WALL' || o.name === 'ROOM_ACCENT') {
+            const key = mesh.userData?.roomKey as keyof ModePalette['rooms'] | undefined; if (!key) return;
+            const toRoom = (to.rooms as any)[key];
+            const fromRoom = (from.rooms as any)[key];
+            if (!toRoom || !fromRoom) return;
+            const target = o.name === 'ROOM_WALL' ? toRoom.base : toRoom.accent;
+            const source = o.name === 'ROOM_WALL' ? fromRoom.base : fromRoom.accent;
+            roomMeshes.push({ m: mesh.material, from: new THREE.Color(source), to: new THREE.Color(target) });
+        }
+    });
+
+    const step = () => {
+        const k = Math.min(1, (performance.now() - t0) / durationMs);
+        if (floorBase && (floorBase.material as any)?.color) {
+            const c: any = (floorBase.material as any).color;
+            c.r = lerp(baseFrom.r, baseTo.r, k);
+            c.g = lerp(baseFrom.g, baseTo.g, k);
+            c.b = lerp(baseFrom.b, baseTo.b, k);
+            (floorBase.material as any).needsUpdate = true;
+        }
+        for (const it of roomMeshes) {
+            if (!it.m?.color) continue;
+            it.m.color.r = lerp(it.from.r, it.to.r, k);
+            it.m.color.g = lerp(it.from.g, it.to.g, k);
+            it.m.color.b = lerp(it.from.b, it.to.b, k);
+            it.m.needsUpdate = true;
+        }
+        if (k < 1) {
+            ZONE_THEME_ANIM = requestAnimationFrame(step);
+        } else {
+            ZONE_THEME_ANIM = null;
+            applyZoneTheme(scene, to); // ensure final colors applied everywhere
+        }
+    };
+    step();
+}
+
+
+
+
+
+
+
 
 
 
