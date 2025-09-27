@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { joinMeeting, listMyWorkspaces, createWorkspace, deleteWorkspace } from "../controllers/workspace.controller.js";
-import { createMessage, getMessages, removeMyMessage, adminRemoveAny, eraseMe } from "../controllers/chat.controller.js";
+import { joinMeeting, listMyWorkspaces, createWorkspace, deleteWorkspace, listWorkspaceMembersCtrl } from "../controllers/workspace.controller.js";
+import { createMessage, getMessages, removeMyMessage, adminRemoveAny, eraseMe, getDMThreads, markThreadReadCtrl } from "../controllers/chat.controller.js";
 import { requireUser } from "../middleware/auth.js";
 
 const router = Router();
@@ -19,6 +19,7 @@ router.post( "/:workspaceUid/meeting/join", asyncHandler(joinMeeting) );
 router.get("/", asyncHandler(listMyWorkspaces));
 router.post("/", asyncHandler(createWorkspace));
 router.delete("/:workspaceUid", asyncHandler(deleteWorkspace));
+router.get("/:workspaceUid/members", asyncHandler(listWorkspaceMembersCtrl));
 
 // Chat endpoints (persistent)
 router.get("/:workspaceUid/chat/messages", asyncHandler(getMessages));
@@ -26,5 +27,7 @@ router.post("/:workspaceUid/chat/messages", asyncHandler(createMessage));
 router.delete("/:workspaceUid/chat/messages/:messageId", asyncHandler(removeMyMessage));
 router.delete("/:workspaceUid/chat/admin/messages/:messageId", asyncHandler(adminRemoveAny));
 router.delete("/:workspaceUid/chat/erase/me", asyncHandler(eraseMe));
+router.get("/:workspaceUid/chat/threads", asyncHandler(getDMThreads));
+router.post("/:workspaceUid/chat/threads/:peerId/read", asyncHandler(markThreadReadCtrl));
 
 export default router;

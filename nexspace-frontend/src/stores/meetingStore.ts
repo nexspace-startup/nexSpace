@@ -12,7 +12,7 @@ type JoinResponse =
 
 export type MeetingAvatar = { id: string; name?: string };
 
-export type MeetingState = {          // 👈 export the type so consumers can annotate selectors
+export type MeetingState = {
   joining: boolean;
   connected: boolean;
   error: string | null;
@@ -34,6 +34,10 @@ export type MeetingState = {          // 👈 export the type so consumers can a
   chatOpen: boolean;
   unreadCount: number;
   messages: ChatMessage[];
+  // current DM conversation context
+  activeDMPeer: string | null;
+  // dm thread previews (server-provided)
+  dmThreads?: DMThreadPreview[];
 
   // screen share state
   screenShareEnabled: boolean;
@@ -55,9 +59,18 @@ export type MeetingState = {          // 👈 export the type so consumers can a
 
   // chat controls
   toggleChat: () => void;
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, toIdentity?: string | null) => Promise<void>;
   retryMessage: (id: string) => Promise<void>;
-  loadChatHistory: (limit?: number) => Promise<void>;
+  loadChatHistory: (limit?: number, peerIdentity?: string | null) => Promise<void>;
+  loadDMThreads: () => Promise<void>;
+  markDMRead: (peerIdentity: string) => Promise<void>;
+  // DM conversation controls
+  setActiveDMPeer: (peerId: string | null) => void;
+  getGroupMessages: () => ChatMessage[];
+  getDMMessages: (peerId?: string) => ChatMessage[];
+  getUnreadGroupCount: () => number;
+  getUnreadDMCount: (peerId?: string) => number;
+
   // screen share control
   toggleScreenShare: () => Promise<void>;
   // speaker playback control
@@ -70,9 +83,24 @@ export type ChatMessage = {
   ts: number; // epoch ms
   senderSid: string;
   senderName: string;
+  // when present, this is a private message directed to this identity
+  recipientSid?: string;
   isLocal: boolean;
   // delivery status for UI: pending until server persists and echoes via LiveKit, success on echo, failed on API error
   status?: 'pending' | 'success' | 'failed';
+  // message type to distinguish group vs DM
+  messageType: 'group' | 'dm';
+  // for DM messages, this indicates the other party in the conversation
+  dmPeerId?: string;
+};
+
+export type DMThreadPreview = {
+  peerId: string;
+  peerName: string;
+  peerAvatar?: string;
+  text?: string;
+  ts?: number;
+  unread: number;
 };
 
 /**
@@ -116,6 +144,13 @@ export const useMeetingStore = create<MeetingState>()(
     // helper to update statuses
     const markStatusesByIds = (ids: string[], status: 'pending' | 'success' | 'failed') =>
       set((s) => ({ messages: s.messages.map((m) => (ids.includes(m.id) ? { ...m, status } : m)) }));
+
+    // helper to determine DM peer ID for a message
+    const getDMPeerForMessage = (message: { senderSid: string; recipientSid?: string }, currentUserId: string) => {
+      if (!message.recipientSid) return undefined;
+      // If I sent it, the peer is the recipient. If someone sent it to me, the peer is the sender.
+      return message.senderSid === currentUserId ? message.recipientSid : message.senderSid;
+    };
 
     const attachRoomListeners = (room: Room | null) => {
       detachEvents?.();
@@ -167,23 +202,6 @@ export const useMeetingStore = create<MeetingState>()(
         } catch { }
       };
 
-      /**
-       * Process incoming data from other clients in the room. Currently only
-       * processes 'whisper' messages, which are used to control whether the local
-       * user can hear the audio of another user in the room.
-       *
-       * The message format is a JSON object with the following fields:
-       *
-       * - `type`: should be 'whisper'
-       * - `action`: one of 'start' or 'stop'
-       * - `originSid`: the sid of the user that sent the message
-       * - `targetSid`: the sid of the user that is the target of the action
-       *
-       * If the action is 'start', the local user will be subscribed to the sender's
-       * audio if and only if the targetSid matches the local user's sid. If the
-       * action is 'stop', the local user will be unsubscribed from the sender's
-       * audio.
-       */
       const onData = (
         payload: Uint8Array,
         _participant?: Participant,
@@ -213,11 +231,34 @@ export const useMeetingStore = create<MeetingState>()(
           // Handle chat messages (authoritative echo from server)
           if ((topic === undefined || topic === 'chat') && msg.type === 'chat') {
             const senderSid: string = msg.senderSid ?? _participant?.identity ?? 'unknown';
-            let senderName: string | undefined = typeof msg.senderName === 'string' ? msg.senderName : undefined; if (!senderName || !String(senderName).trim()) { try { const lp: any = room.localParticipant as any; if (String(lp?.identity) === String(senderSid)) { senderName = (lp?.name ?? lp?.identity) as string; } else { const remotes: any[] = Array.from((room as any).remoteParticipants?.values?.() ?? []); const rp = remotes.find((p: any) => String(p?.identity) === String(senderSid)); senderName = (rp?.name ?? rp?.identity) as string | undefined; } } catch { } } if (!senderName || !String(senderName).trim()) senderName = String(senderSid || 'User');
+            let senderName: string | undefined = typeof msg.senderName === 'string' ? msg.senderName : undefined;
+            if (!senderName || !String(senderName).trim()) {
+              try {
+                const lp: any = room.localParticipant as any;
+                if (String(lp?.identity) === String(senderSid)) {
+                  senderName = (lp?.name ?? lp?.identity) as string;
+                } else {
+                  const remotes: any[] = Array.from((room as any).remoteParticipants?.values?.() ?? []);
+                  const rp = remotes.find((p: any) => String(p?.identity) === String(senderSid));
+                  senderName = (rp?.name ?? rp?.identity) as string | undefined;
+                }
+              } catch { }
+            }
+            if (!senderName || !String(senderName).trim()) senderName = String(senderSid || 'User');
+
             const id: string = msg.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             const text: string = String(msg.text ?? '');
             if (!text) return;
             const isLocal = senderSid === localSid;
+            const rawRecipient =
+              (typeof msg.recipientSid === 'string' && msg.recipientSid) ||
+              (typeof msg.recipientId === 'string' && msg.recipientId) ||
+              undefined;
+            const recipientSid: string | undefined = rawRecipient ? String(rawRecipient) : undefined;
+
+            // Determine message type and DM peer
+            const messageType: 'group' | 'dm' = recipientSid ? 'dm' : 'group';
+            const dmPeerId = messageType === 'dm' ? getDMPeerForMessage({ senderSid, recipientSid }, localSid) : undefined;
 
             set((s) => {
               const idx = s.messages.findIndex((m) => m.id === id);
@@ -230,23 +271,78 @@ export const useMeetingStore = create<MeetingState>()(
                   text,
                   senderSid,
                   senderName,
+                  recipientSid,
                   ts: now,
                   status: 'success',
+                  messageType,
+                  dmPeerId,
                 };
                 const arr = s.messages.slice();
                 arr[idx] = updated;
-                return {
-                  messages: arr,
-                  unreadCount: s.chatOpen || prev.isLocal ? s.unreadCount : s.unreadCount + 1,
-                };
+
+                // Update unread count based on message type and context
+                let newUnreadCount = s.unreadCount;
+                if (!s.chatOpen && !prev.isLocal) {
+                  if (messageType === 'group') {
+                    newUnreadCount = s.unreadCount + 1;
+                  } else if (messageType === 'dm' && s.activeDMPeer !== dmPeerId) {
+                    newUnreadCount = s.unreadCount + 1;
+                  }
+                }
+
+                return { messages: arr, unreadCount: newUnreadCount };
               }
+
               // not found locally: append as new
+              const newMessage: ChatMessage = {
+                id,
+                text,
+                ts: now,
+                senderSid,
+                senderName,
+                recipientSid,
+                isLocal,
+                status: 'success',
+                messageType,
+                dmPeerId,
+              };
+
+              // Update unread count for new messages
+              let newUnreadCount = s.unreadCount;
+              if (!s.chatOpen && !isLocal) {
+                if (messageType === 'group') {
+                  newUnreadCount = s.unreadCount + 1;
+                } else if (messageType === 'dm' && s.activeDMPeer !== dmPeerId) {
+                  newUnreadCount = s.unreadCount + 1;
+                }
+              }
+
+              // Upsert DM thread preview for DMs
+              let newDMThreads = s.dmThreads;
+              if (messageType === 'dm' && dmPeerId) {
+                const threads = (s.dmThreads || []).slice();
+                const i = threads.findIndex((t) => t.peerId === dmPeerId);
+                const addUnread = !isLocal && (!s.chatOpen || s.activeDMPeer !== dmPeerId);
+                if (i >= 0) {
+                  const t = threads[i];
+                  threads[i] = {
+                    ...t,
+                    text,
+                    ts: now,
+                    unread: Math.max(0, (t.unread || 0) + (addUnread ? 1 : 0)),
+                  };
+                } else {
+                  const peerNameGuess = !isLocal ? senderName : (s.participants.find((p) => String(p.id) === String(dmPeerId))?.name || String(dmPeerId));
+                  threads.unshift({ peerId: dmPeerId, peerName: peerNameGuess, text, ts: now, unread: addUnread ? 1 : 0 });
+                }
+                threads.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+                newDMThreads = threads;
+              }
+
               return {
-                messages: [
-                  ...s.messages,
-                  { id, text, ts: now, senderSid, senderName, isLocal: isLocal, status: 'success' },
-                ],
-                unreadCount: s.chatOpen || isLocal ? s.unreadCount : s.unreadCount + 1,
+                messages: [...s.messages, newMessage],
+                unreadCount: newUnreadCount,
+                dmThreads: newDMThreads,
               };
             });
             return;
@@ -328,6 +424,7 @@ export const useMeetingStore = create<MeetingState>()(
       chatOpen: false,
       unreadCount: 0,
       messages: [],
+      activeDMPeer: null,
       viewMode: 'grid',
 
       setRoom: (room) => {
@@ -384,6 +481,7 @@ export const useMeetingStore = create<MeetingState>()(
           chatOpen: false,
           unreadCount: 0,
           messages: [],
+          activeDMPeer: null,
           screenShareEnabled: false,
           speakerEnabled: true,
         });
@@ -480,24 +578,56 @@ export const useMeetingStore = create<MeetingState>()(
         set((s) => ({ chatOpen: !s.chatOpen, unreadCount: !s.chatOpen ? 0 : s.unreadCount }));
       },
 
-      sendMessage: async (text: string) => {
+      sendMessage: async (text: string, toIdentity?: string | null) => {
         const room = get().room;
         if (!room) return;
         const clean = text.trim();
         if (!clean) return;
         const lp: any = room.localParticipant as any;
-        const senderSid = (lp?.sid ?? lp?.identity) as string;
+        const senderSid = (lp?.identity ?? lp?.sid) as string;
         const senderName = (lp?.name ?? lp?.identity) as string;
-
+        const { activeWorkspaceMembers } = useWorkspaceStore.getState();
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const now = Date.now();
+
+        // Determine message type and DM peer
+        const messageType: 'group' | 'dm' = toIdentity ? 'dm' : 'group';
+        const dmPeerId = messageType === 'dm' ? toIdentity : undefined;
+
         // optimistic local append (pending)
-        set((s) => ({
-          messages: [
-            ...s.messages,
-            { id, text: clean, ts: now, senderSid, senderName, isLocal: true, status: 'pending' },
-          ],
-        }));
+        const newMessage: ChatMessage = {
+          id,
+          text: clean,
+          ts: now,
+          senderSid,
+          senderName,
+          recipientSid: toIdentity || undefined,
+          isLocal: true,
+          status: 'pending',
+          messageType,
+          dmPeerId: dmPeerId || undefined,
+        };
+        set((s) => {
+          // Upsert DM thread preview if this is a DM
+          let newDMThreads = s.dmThreads;
+          if (messageType === 'dm' && dmPeerId) {
+            const threads = (s.dmThreads || []).slice();
+            const i = threads.findIndex((t) => t.peerId === dmPeerId);
+            if (i >= 0) {
+              const t = threads[i];
+              threads[i] = { ...t, text: clean, ts: now };
+            } else {
+              const peerNameGuess = activeWorkspaceMembers?.find((p) => String(p.id) === String(dmPeerId))?.name || String(dmPeerId);
+              threads.unshift({ peerId: dmPeerId, peerName: peerNameGuess, text: clean, ts: now, unread: 0 });
+            }
+            threads.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+            newDMThreads = threads;
+          }
+          return {
+            messages: [...s.messages, newMessage],
+            dmThreads: newDMThreads,
+          };
+        });
 
         // Single message POST to server which persists and broadcasts to LiveKit
         try {
@@ -506,7 +636,7 @@ export const useMeetingStore = create<MeetingState>()(
             markStatusesByIds([id], 'failed');
             return;
           }
-          await api.post(`/workspace/${activeWorkspaceId}/chat/messages`, { text: clean, id }, { withCredentials: true });
+          await api.post(`/workspace/${activeWorkspaceId}/chat/messages`, { text: clean, id, ...(toIdentity ? { to: toIdentity } : {}) }, { withCredentials: true });
           // Mark success on API success; LiveKit echo will also upsert/confirm
           markStatusesByIds([id], 'success');
         } catch {
@@ -522,44 +652,108 @@ export const useMeetingStore = create<MeetingState>()(
         try {
           const { activeWorkspaceId } = useWorkspaceStore.getState();
           if (!activeWorkspaceId) { markStatusesByIds([id], 'failed'); return; }
-          await api.post(`/workspace/${activeWorkspaceId}/chat/messages`, { text: msg.text, id }, { withCredentials: true });
+          await api.post(`/workspace/${activeWorkspaceId}/chat/messages`, { text: msg.text, id, ...(msg.recipientSid ? { to: msg.recipientSid } : {}) }, { withCredentials: true });
           markStatusesByIds([id], 'success');
         } catch {
           markStatusesByIds([id], 'failed');
         }
       },
 
-      loadChatHistory: async (limit = 100) => {
+      loadChatHistory: async (limit = 100, peerIdentity?: string | null) => {
         try {
           const { activeWorkspaceId } = useWorkspaceStore.getState();
           if (!activeWorkspaceId) return;
+          const params: any = { limit };
+          if (peerIdentity) params.peer = peerIdentity;
           const { data } = await api.get(`/workspace/${activeWorkspaceId}/chat/messages`, {
-            params: { limit },
+            params,
             withCredentials: true,
           });
-          console.log('history ->', data);
+
           if ((data as any)?.success && Array.isArray((data as any).data)) {
-            const items: Array<{ id: string; text: string; ts: string; sender: { id: string; name: string } }> = (data as any).data;
+            const items: Array<{ id: string; text: string; ts: string; sender: { id: string; name: string }, recipientId?: string | null }> = (data as any).data;
             // Determine current user id from LiveKit identity (not SID)
             let currentId: string | undefined;
             try {
               const room = get().room as any;
               currentId = room?.localParticipant?.identity as string | undefined;
             } catch { }
-            set((s) => ({
-              messages: items.map((m) => ({
+
+            const processedMessages = items.map((m) => {
+              const messageType: 'group' | 'dm' = m.recipientId ? 'dm' : 'group';
+              const dmPeerId = messageType === 'dm' && currentId ?
+                getDMPeerForMessage({ senderSid: m.sender.id, recipientSid: m.recipientId || undefined }, currentId) : undefined;
+
+              return {
                 id: m.id,
                 text: m.text,
                 ts: new Date(m.ts).getTime(),
                 senderSid: m.sender.id,
                 senderName: m.sender.name,
+                recipientSid: m.recipientId ?? undefined,
                 isLocal: currentId ? String(m.sender.id) === String(currentId) : false,
-                status: 'success',
-              })),
+                status: 'success' as const,
+                messageType,
+                dmPeerId,
+              };
+            });
+
+            set((s) => ({
+              messages: peerIdentity ?
+                // Replace DM messages for specific peer
+                [...s.messages.filter(msg => msg.messageType !== 'dm' || msg.dmPeerId !== peerIdentity), ...processedMessages] :
+                // Replace all messages (initial load)
+                processedMessages,
               unreadCount: s.chatOpen ? 0 : s.unreadCount,
             }));
           }
         } catch {/* ignore */ }
+      },
+
+      loadDMThreads: async () => {
+        try {
+          const { activeWorkspaceId } = useWorkspaceStore.getState();
+          if (!activeWorkspaceId) return;
+          const { data } = await api.get(`/workspace/${activeWorkspaceId}/chat/threads`, { withCredentials: true });
+          if ((data as any)?.success && Array.isArray((data as any).data)) {
+            const rows: Array<{ peer: { id: string; name: string }; last?: { text: string; ts: string }, unread?: number }> = (data as any).data;
+            set(() => ({
+              dmThreads: rows.map((r) => ({
+                peerId: r.peer.id,
+                peerName: r.peer.name,
+                text: r.last?.text,
+                ts: r.last ? new Date(r.last.ts).getTime() : undefined,
+                unread: r.unread || 0,
+              })),
+            }));
+          }
+        } catch { /* ignore */ }
+      },
+
+      markDMRead: async (peerIdentity: string) => {
+        try {
+          const { activeWorkspaceId } = useWorkspaceStore.getState();
+          if (!activeWorkspaceId) return;
+          await api.post(`/workspace/${activeWorkspaceId}/chat/threads/${peerIdentity}/read`, {}, { withCredentials: true });
+          set((s) => ({ dmThreads: (s.dmThreads || []).map((t) => (t.peerId === peerIdentity ? { ...t, unread: 0 } : t)) }));
+        } catch { /* ignore */ }
+      },
+
+      // New helper methods for filtering messages
+      setActiveDMPeer: (peerId: string | null) => {
+        set({ activeDMPeer: peerId });
+        // Load DM history when switching to a conversation
+        if (peerId) {
+          get().loadChatHistory?.(100, peerId);
+        }
+      },
+
+      getGroupMessages: () => {
+        return get().messages.filter(msg => msg.messageType === 'group');
+      },
+
+      getDMMessages: (peerId: string) => {
+        return get().messages.filter(msg => msg.messageType === 'dm' && msg.dmPeerId === peerId);
       },
 
       toggleScreenShare: async () => {

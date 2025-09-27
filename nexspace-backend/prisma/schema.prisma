@@ -33,14 +33,23 @@ model User {
   workspacesCreated Workspace[]       @relation("UserCreatedWorkspaces")
   memberships       WorkspaceMember[]
   invitesSent       Invitation[]      @relation("UserInvites")
-  chatMessages      ChatMessage[]
+
+  // Chat relations (named -> must have both sides!)
+  chatMessages     ChatMessage[] @relation("ChatMessageSender") // messages I sent
+  receivedMessages ChatMessage[] @relation("ChatMessageRecipient") // messages I received (DMs)
+
+  // Thread read relations (named -> must have both sides!)
+  chatThreadRead   ChatThreadRead[] @relation("ChatThreadReadReader") // I'm the reader
+  chatThreadAsPeer ChatThreadRead[] @relation("ChatThreadReadPeer") // I'm the peer being read
+
+  @@index([email])
 }
 
 model AuthIdentity {
   id          BigInt       @id @default(autoincrement())
   userId      BigInt
   provider    AuthProvider
-  providerId  String // email for local login and sub for google or microsoft
+  providerId  String // email for local login and sub for google/microsoft
   createdAt   DateTime     @default(now())
   lastLoginAt DateTime?
 
@@ -75,9 +84,10 @@ model Workspace {
   createdById BigInt
   createdBy   User   @relation("UserCreatedWorkspaces", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
-  members      WorkspaceMember[]
-  invitations  Invitation[]
-  chatMessages ChatMessage[]
+  members        WorkspaceMember[]
+  invitations    Invitation[]
+  chatMessages   ChatMessage[]
+  chatThreadRead ChatThreadRead[]
 
   @@index([createdById])
 }
@@ -123,10 +133,9 @@ model Invitation {
 }
 
 // Email templates
-
 model EmailTemplate {
   id        String   @id @default(uuid())
-  name      String   @unique // e.g. "invite_workspace", "reset_password"
+  name      String   @unique
   subject   String
   mailBody  String
   createdAt DateTime @default(now())
@@ -138,14 +147,43 @@ model ChatMessage {
   id           BigInt    @id @default(autoincrement())
   workspaceUid String
   senderId     BigInt
-  roomUid      String // LiveKit room id (we use Workspace.uid)
+  /// when set, message is a private DM visible only to sender and this recipient
+  recipientId  BigInt?
+  /// LiveKit room id (can equal Workspace.uid)
+  roomUid      String
   content      String
   createdAt    DateTime  @default(now())
   deletedAt    DateTime?
 
+  // relations
   workspace Workspace @relation(fields: [workspaceUid], references: [uid], onDelete: Cascade, onUpdate: Cascade)
-  sender    User      @relation(fields: [senderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  sender    User      @relation("ChatMessageSender", fields: [senderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  recipient User?     @relation("ChatMessageRecipient", fields: [recipientId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
+  // indexes tuned for unread counts + typical inbox queries
   @@index([workspaceUid, createdAt])
   @@index([senderId, createdAt])
+  @@index([workspaceUid, recipientId, createdAt]) // fetch my DMs by recency
+  @@index([workspaceUid, recipientId, senderId, createdAt]) // unread groupBy(senderId) with cutoff
+  @@index([workspaceUid, senderId, deletedAt]) // soft-deletion-aware scans
+}
+
+// Per-user DM read state for each peer inside a workspace
+model ChatThreadRead {
+  workspaceUid String
+  userId       BigInt
+  peerId       BigInt
+  lastReadAt   DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceUid], references: [uid], onDelete: Cascade, onUpdate: Cascade)
+
+  // Reader (me)
+  user User @relation("ChatThreadReadReader", fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  // Peer (the other user)
+  peer User @relation("ChatThreadReadPeer", fields: [peerId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@id([workspaceUid, userId, peerId])
+  @@index([workspaceUid, userId])
+  @@index([workspaceUid, userId, updatedAt])
 }

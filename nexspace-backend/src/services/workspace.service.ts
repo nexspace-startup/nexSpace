@@ -1,43 +1,34 @@
-import { prisma, WorkspaceRole } from "../prisma.js";
+import { findWorkspaceByUid, isWorkspaceMember, listWorkspaceMembers as repoListMembers } from "../repositories/workspace.repository.js";
+import { prisma } from "../prisma.js";
+
+export async function listMembers(workspaceUid: string, userId: string, q?: string) {
+  const ws = await findWorkspaceByUid(workspaceUid);
+  if (!ws) throw new Error("WORKSPACE_NOT_FOUND");
+  const membership = await isWorkspaceMember(ws.uid, BigInt(userId));
+  if (!membership) throw new Error("FORBIDDEN");
+  return repoListMembers(ws.uid, q);
+}
 
 export async function createWorkspaceForUser(userId: string, name: string) {
-  const uid = BigInt(userId);
-  const result = await prisma.$transaction(async (tx) => {
-    const duplicate = await tx.workspace.findFirst({
-      where: { name, createdById: uid },
-      select: { uid: true },
+  // ensure unique name per user (simple heuristic)
+  const exists = await prisma.workspace.findFirst({ where: { name, createdById: BigInt(userId) }, select: { uid: true } });
+  if (exists) throw new Error("WORKSPACE_CONFLICT");
+  const ws = await prisma.$transaction(async (tx) => {
+    const created = await tx.workspace.create({
+      data: { name, createdById: BigInt(userId) },
+      select: { uid: true, name: true },
     });
-    if (duplicate) throw new Error("WORKSPACE_CONFLICT");
-
-    const workspace = await tx.workspace.create({
-      data: { name, createdById: uid },
-    });
-
     await tx.workspaceMember.create({
-      data: { workspaceUid: workspace.uid, userId: uid, role: WorkspaceRole.OWNER },
+      data: { workspaceUid: created.uid, userId: BigInt(userId), role: "OWNER" as any },
     });
-
-    return { id: workspace.uid, name: workspace.name } as const;
+    return created;
   });
-
-  return result;
+  return { id: ws.uid, name: ws.name };
 }
 
 export async function deleteWorkspaceForUser(userId: string, workspaceUid: string) {
-  const uid = BigInt(userId);
-  return prisma.$transaction(async (tx) => {
-    // verify membership and role
-    const membership = await tx.workspaceMember.findFirst({
-      where: { userId: uid, workspaceUid },
-      select: { role: true },
-    });
-    if (!membership) throw new Error("FORBIDDEN");
-    if (membership.role !== WorkspaceRole.OWNER) throw new Error("FORBIDDEN");
-
-    const exists = await tx.workspace.findUnique({ where: { uid: workspaceUid }, select: { uid: true } });
-    if (!exists) throw new Error("NOT_FOUND");
-
-    await tx.workspace.delete({ where: { uid: workspaceUid } });
-    return { id: workspaceUid } as const;
-  });
+  const ws = await prisma.workspace.findUnique({ where: { uid: workspaceUid }, select: { uid: true, createdById: true } });
+  if (!ws) throw new Error("NOT_FOUND");
+  if (String(ws.createdById) !== String(userId)) throw new Error("FORBIDDEN");
+  await prisma.workspace.delete({ where: { uid: workspaceUid } });
 }

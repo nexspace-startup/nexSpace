@@ -4,8 +4,9 @@ import { api } from "../services/httpService";
 import { toast } from "./toastStore";
 import type { WorkSpaceRole } from "../constants/enums";
 
-
 export type Workspace = { id: string; name: string; role: WorkSpaceRole };
+export type WorkspaceMember = { id: string; workspaceId?: string; name: string, role?: WorkSpaceRole };
+
 
 type ApiOk = { success: true; data: Workspace[]; errors: [] };
 type ApiErr = { success: false; data: null; errors: Array<{ message: string; code?: string }> };
@@ -14,7 +15,7 @@ type ApiRes = ApiOk | ApiErr;
 type WorkspaceState = {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
-
+  activeWorkspaceMembers: WorkspaceMember[] | null;
   loading: boolean;
   error: string | null;
 
@@ -46,9 +47,28 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // keep current selection if still valid; otherwise pick first
           const current = get().activeWorkspaceId;
           const stillValid = current ? list.some(w => w.id === current) : false;
+          const newActiveWorkspaceId = stillValid ? current : (list[0]?.id ?? null);
+
+          // Fetch members for the active workspace if we have one
+          let activeWorkspaceMembers = [];
+          if (newActiveWorkspaceId) {
+            try {
+              const workspaceMembersRes = await api.get(
+                `/workspace/${newActiveWorkspaceId}/members`,
+                { params: { q: "%" }, withCredentials: true }
+              );
+              activeWorkspaceMembers = workspaceMembersRes.data?.data || [];
+            } catch (membersError: any) {
+              console.error("Failed to fetch workspace members:", membersError);
+              // Don't fail the entire operation if member fetching fails
+              toast.error("Failed to load workspace members");
+            }
+          }
+
           set({
             workspaces: list,
-            activeWorkspaceId: stillValid ? current : (list[0]?.id ?? null),
+            activeWorkspaceId: newActiveWorkspaceId,
+            activeWorkspaceMembers: activeWorkspaceMembers,
             loading: false,
             error: null,
           });
@@ -56,6 +76,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set({
             workspaces: [],
             activeWorkspaceId: null,
+            activeWorkspaceMembers: [],
             loading: false,
             error: res.data?.errors?.[0]?.message ?? "Failed to load workspaces",
           });
@@ -65,6 +86,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set({
           workspaces: [],
           activeWorkspaceId: null,
+          activeWorkspaceMembers: [],
           loading: false,
           error: e?.message ?? "Network error",
         });
@@ -72,7 +94,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       }
     },
 
-    setActiveWorkspace: (id) => set({ activeWorkspaceId: id }),
+    setActiveWorkspace: async (id) => {
+      //fetch active workspace members
+      const workspaceMembers = await api.get(`/workspace/${get().activeWorkspaceId}/members`, { params: { q: "%" }, withCredentials: true });
+      set({ activeWorkspaceId: id, activeWorkspaceMembers: workspaceMembers.data.data });
+    },
 
     upsertWorkspace: (w) => {
       const existing = get().workspaces;

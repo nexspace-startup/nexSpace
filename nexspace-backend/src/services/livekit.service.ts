@@ -14,11 +14,37 @@ function getClient(): RoomServiceClient {
   return client;
 }
 
-export async function sendDataToRoom(room: string, payload: any, topic = 'chat', reliable = true) {
+export async function sendDataToRoom(
+  room: string,
+  payload: any,
+  topic = 'chat',
+  reliable = true,
+  destinationIdentities?: string[]
+) {
   const c = getClient();
   const data = Buffer.from(JSON.stringify(payload));
   const kind = reliable ? DataPacket_Kind.RELIABLE : DataPacket_Kind.LOSSY;
-  // Use positional signature which is supported across server-sdk versions
-  // sendData(room, data, kind, destinationSids?, topic?)
-  await (c as any).sendData(room, data, kind, undefined, topic);
+
+  if (destinationIdentities && destinationIdentities.length > 0) {
+    // Map identities -> participant SIDs
+    try {
+      const parts = await (c as any).listParticipants(room);
+      const byIdentity = new Map<string, string>();
+      for (const p of parts ?? []) {
+        if (p?.identity && p?.sid) byIdentity.set(String(p.identity), String(p.sid));
+      }
+      const sids = destinationIdentities
+        .map((id) => byIdentity.get(String(id)))
+        .filter((sid): sid is string => !!sid);
+      if (sids.length === 0) return;
+      await (c as any).sendData(room, data, kind, sids, topic);
+      return;
+    } catch {
+      // fall through to broadcast
+      return;
+    }
+  }
+  // Broadcast
+  if (!destinationIdentities || destinationIdentities.length === 0)
+    await (c as any).sendData(room, data, kind, undefined, topic);
 }

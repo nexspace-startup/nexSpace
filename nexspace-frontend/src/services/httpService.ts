@@ -3,7 +3,8 @@ import { ENDPOINTS } from '../constants/endpoints'
 
 export const api = axios.create({
   baseURL: ENDPOINTS.BASE_URL,
-  withCredentials: true
+  withCredentials: true,
+  timeout: 10000
 })
 
 
