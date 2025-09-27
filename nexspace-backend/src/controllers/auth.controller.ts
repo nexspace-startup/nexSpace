@@ -4,7 +4,7 @@ import { AppError } from "../middleware/error.js";
 import { GoogleCallbackSchema, SigninSchema, CheckEmailSchema } from "../validators/authValidators.js";
 import type { z } from "zod";
 import { googleExchangeAndVerify, googleVerifyIdToken, signInWithEmailPassword, ensureOAuthUser } from "../services/auth.service.js";
-import { findUserByEmail } from "../repositories/user.repository.js";
+import { findUserByEmail, seachByUsernameEmail } from "../repositories/user.repository.js";
 
 export async function googleCallback(req: Request, res: Response) {
   // Coerce input to support both code and id token shapes; allow body or query
@@ -123,15 +123,42 @@ export async function logout(req: Request, res: Response) {
   try {
     const sid: string | undefined = (req as any)?.auth?.sid || (req.cookies && (req.cookies as any).sid);
     if (sid) {
-      try { await revokeSession(sid); } catch {}
+      try { await revokeSession(sid); } catch { }
     }
     clearSessionCookie(res as any);
     return res.success?.({ isAuthenticated: false }, 200);
   } catch {
     // Best-effort: clear cookie and return 200
-    try { clearSessionCookie(res as any); } catch {}
+    try { clearSessionCookie(res as any); } catch { }
     return res.success?.({ isAuthenticated: false }, 200);
   }
 }
 
+export async function searchUsers(req: Request, res: Response) {
+  try {
+    const q = (req.query?.q as string | undefined) ?? (req.body as any)?.q ?? "";
+    const trimmed = String(q || "").trim();
+    if (!trimmed) {
+      return res.fail?.(
+        [{ message: "Search term is required", code: "VALIDATION_ERROR" }],
+        400
+      );
+    }
 
+    const users = await seachByUsernameEmail(trimmed);
+    // console.log(users, "")
+    // console.log(res)
+    const userList = users?.map(user => ({
+      id: String(user.id),
+      name: user.displayName,
+      email: user.email
+    }))
+    console.log(userList)
+    return res.success?.({ userList }, 200);
+  } catch (e: any) {
+    return res.fail?.(
+      [{ message: "Failed to search users", code: "SEARCH_USERS_ERROR", details: e?.message }],
+      500
+    );
+  }
+}

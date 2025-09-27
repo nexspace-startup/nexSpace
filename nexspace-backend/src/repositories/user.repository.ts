@@ -38,3 +38,20 @@ export async function getUserWithMemberships(userId: bigint) {
     },
   });
 }
+
+export async function seachByUsernameEmail(ch: string) {
+  try {
+    return prisma.user.findMany({
+      where: {
+        OR: [{ email: { contains: ch, mode: "insensitive" } }, { displayName: { contains: ch, mode: "insensitive" } },],
+      },
+      select: {
+        id: true, email: true, displayName: true,
+      },
+    });
+  } catch (err) {
+    console.log(err)
+  }
+}
+
+

@@ -2,9 +2,10 @@ import { create } from "zustand";
 import { devtools } from "zustand/middleware";
 import { api } from "../services/httpService";
 import { toast } from "./toastStore";
+import type { WorkSpaceRole } from "../constants/enums";
 
 
-export type Workspace = { id: string; name: string };
+export type Workspace = { id: string; name: string; role: WorkSpaceRole };
 
 type ApiOk = { success: true; data: Workspace[]; errors: [] };
 type ApiErr = { success: false; data: null; errors: Array<{ message: string; code?: string }> };
@@ -21,7 +22,7 @@ type WorkspaceState = {
   setActiveWorkspace: (id: string | null) => void;
   upsertWorkspace: (w: Workspace) => void; // handy for “Create workspace” flow
   deleteWorkspace: (uid: string) => Promise<void>;
-  createWorkspace: (name: string) => Promise<Workspace | null>;
+  createWorkspace: (name: string) => Promise<Workspace>;
 };
 
 export const useWorkspaceStore = create<WorkspaceState>()(

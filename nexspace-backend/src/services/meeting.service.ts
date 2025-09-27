@@ -28,6 +28,6 @@ export async function buildMeetingJoinToken(userId: string, workspaceUid: string
 
 export async function listWorkspacesForUser(userId: string) {
   const rows = await findWorkspacesForUser(BigInt(userId));
-  return rows.map((ws) => ({ id: ws.uid, name: ws.name }));
+  return rows.map((ws) => ({ id: ws.workspace?.uid, name: ws.workspace?.name, role: ws.role }));
 }
 

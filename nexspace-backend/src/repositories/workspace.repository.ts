@@ -12,8 +12,16 @@ export async function isWorkspaceMember(workspaceUid: string, userId: bigint) {
 }
 
 export async function findWorkspacesForUser(userId: bigint) {
-  return prisma.workspace.findMany({
-    where: { members: { some: { userId } } },
-    select: { uid: true, name: true },
+  return await prisma.workspaceMember.findMany({
+    where: { userId: userId },
+    select: {
+      role: true,
+      workspace: {
+        select: {
+          uid: true,
+          name: true
+        }
+      }
+    }
   });
 }
