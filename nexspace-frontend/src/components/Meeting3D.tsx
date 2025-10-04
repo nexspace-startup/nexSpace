@@ -1622,7 +1622,8 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         -(((e.clientY - rect.top) / rect.height) * 2 - 1),
       );
       const ray = new THREE.Raycaster();
-      const cam = cameraRef.current!;
+      const cam = cameraRef.current;
+      if (!cam) return;
       ray.setFromCamera(ndc, cam);
       const labels = roomLabelsRef.current;
       const hovering = labels.length > 0 && ray.intersectObjects(labels).length > 0;
@@ -1637,7 +1638,8 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         -(((e.clientY - rect.top) / rect.height) * 2 - 1),
       );
       const ray = new THREE.Raycaster();
-      const cam = cameraRef.current!;
+      const cam = cameraRef.current;
+      if (!cam) return;
       ray.setFromCamera(ndc, cam);
       const screen = stageScreenRef.current;
       if (!screen) return;
@@ -1695,8 +1697,13 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     let lastT = performance.now();
     let lastFrameAt = lastT;
     const animate = () => {
-      // Don't run animation if WebGL failed
-      if (!renderer || !scene || !camera) {
+      const renderer = rendererRef.current;
+      const scene = sceneRef.current;
+      const cam = cameraRef.current;
+
+      // Don't run animation if WebGL failed or the scene has been torn down
+      if (!renderer || !scene || !cam) {
+        rafRef.current = requestAnimationFrame(animate);
         return;
       }
 
@@ -1712,7 +1719,6 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       const you = avatarRef.current;
       // Cold-start safety to ensure a valid third-person view
       applyColdStartSafety();
-      const cam = cameraRef.current!;
 
       // Ensure avatar ref exists after rehydrate
       if (!you) {
@@ -1722,8 +1728,6 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
       if (avatarRef.current) {
         const you = avatarRef.current;
-      // Cold-start safety to ensure a valid third-person view
-      applyColdStartSafety();
         // Update conference-room membership for LOCAL
         const confRect = getConferenceRect();
         const nowInConf = isInsideRect({ x: you.position.x, z: you.position.z }, confRect, insideConferenceRef.current);
@@ -2036,19 +2040,18 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         }
       } else {
         // No local avatar yet; still advance any pending camera transition
-        const cam = cameraRef.current!;
         const trans = camTransitionRef.current;
         if (trans) {
           const now = performance.now();
           const k = Math.min(1, (now - trans.t0) / trans.dur);
-          const s = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
-          cam.position.lerpVectors(trans.startPos, trans.endPos, s);
-          cam.quaternion.slerpQuaternions(trans.startQuat, trans.endQuat, s);
-          if (k >= 1) {
-            camTransitionRef.current = null;
+            const s = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+            cam.position.lerpVectors(trans.startPos, trans.endPos, s);
+            cam.quaternion.slerpQuaternions(trans.startQuat, trans.endQuat, s);
+            if (k >= 1) {
+              camTransitionRef.current = null;
+            }
           }
         }
-      }
 
       // Ease remotes
       avatarBySidRef.current.forEach((g, sid) => {
@@ -2086,11 +2089,11 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
 
       // Render + minimap
-      deskMgrRef.current?.updateLOD(cameraRef.current!.position, lodPropsDistRef.current);
+      deskMgrRef.current?.updateLOD(cam.position, lodPropsDistRef.current);
       // Avatar billboard LOD (throttled)
       if (now >= avatarLodNextAtRef.current) {
         avatarBySidRef.current.forEach((g) => {
-          const cam = cameraRef.current!; if (!cam || !g) { return; }
+          if (!g) return;
           const d = g.position.distanceTo(cam.position);
           const far = d > lodAvatarDistRef.current;
           let bb = g.getObjectByName('AV_BB') as THREE.Sprite | null;
@@ -2116,7 +2119,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         debugStateRef.current.avatar.position.set(you.position.x, 0.85, you.position.z);
       }
 
-      renderer!.render(scene!, cameraRef.current!);
+      renderer.render(scene, cam);
       // Throttle minimap redraw to reduce CPU during heavy load
       minimapHitsRef.current = [];
       if (now >= minimapNextAtRef.current) {

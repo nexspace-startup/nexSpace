@@ -46,8 +46,6 @@ const MeetingControls: React.FC = () => {
   const [moreOpen, setMoreOpen] = useState(false);
   const [deskOpen, setDeskOpen] = useState(false);
 
-  if (!connected) return null;
-
   // When chat is open, visually center controls in remaining width by shifting left ~ half chat width
   const shouldOffset = chatOpen && isDesktopWide;
   const centerShift = shouldOffset ? "translateX(calc(-50% - 204px))" : "translateX(-50%)";
@@ -56,10 +54,12 @@ const MeetingControls: React.FC = () => {
     transform: centerShift,
     paddingBottom: isMobile ? "env(safe-area-inset-bottom, 0px)" : undefined,
   }), [centerShift, isMobile]);
-  if (!isWorkspaceControlsOpen) {
+
+  if (!connected || !isWorkspaceControlsOpen) {
     return null;
-  } else
-    return (
+  }
+
+  return (
       <div
         className="absolute left-1/2 control-bar z-40 w-[calc(100%-1.5rem)] sm:w-auto max-w-[min(760px,calc(100%-1.5rem))] bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] sm:bottom-6 min-h-[72px] sm:h-[60px] px-3 sm:px-4 py-3 sm:py-1 flex-wrap"
         style={containerStyle}

@@ -4,9 +4,10 @@ import { MODE_PALETTE, type Mode, type ModePalette } from './themeConfig';
 
 // --- Util: set texture to sRGB across three versions
 function setSRGB(tex: THREE.Texture) {
-    (tex as any).colorSpace !== undefined
-        ? ((tex as any).colorSpace = (THREE as any).SRGBColorSpace)
-        : ((tex as any).encoding = (THREE as any).sRGBEncoding);
+    const anyTex = tex as any;
+    if ('colorSpace' in anyTex && anyTex.colorSpace !== undefined) {
+        anyTex.colorSpace = (THREE as any).SRGBColorSpace ?? anyTex.colorSpace;
+    }
 }
 
 // Runtime guard for SSR environments (no window/document)
