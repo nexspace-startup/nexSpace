@@ -6,6 +6,7 @@ import { useUIStore } from "../stores/uiStore";
 import { fmtHMS } from "../utils/util";
 import { useTick } from "../hooks/useTick";
 import call_end from "../assets/call_end.svg"
+import { useViewportSize } from "../hooks/useViewportSize";
 
 const MeetingControls: React.FC = () => {
   const {
@@ -31,6 +32,9 @@ const MeetingControls: React.FC = () => {
   );
 
   const tick = useTick(connected);
+  const { width: viewportWidth } = useViewportSize();
+  const isMobile = viewportWidth <= 640;
+  const isDesktopWide = viewportWidth >= 1280;
   const isWorkspaceOpen = useUIStore((s) => s.isWorkspacePanelOpen);
   const isWorkspaceControlsOpen = useUIStore((s) => s.isWorkspaceControlsOpen);
 
@@ -45,15 +49,20 @@ const MeetingControls: React.FC = () => {
   if (!connected) return null;
 
   // When chat is open, visually center controls in remaining width by shifting left ~ half chat width
-  const centerShift = chatOpen ? "translateX(calc(-50% - 204px))" : "translateX(-50%)";
-  const bothOpen = chatOpen && isWorkspaceOpen;
+  const shouldOffset = chatOpen && isDesktopWide;
+  const centerShift = shouldOffset ? "translateX(calc(-50% - 204px))" : "translateX(-50%)";
+  const bothOpen = chatOpen && isWorkspaceOpen && viewportWidth >= 1024;
+  const containerStyle = useMemo<React.CSSProperties>(() => ({
+    transform: centerShift,
+    paddingBottom: isMobile ? "env(safe-area-inset-bottom, 0px)" : undefined,
+  }), [centerShift, isMobile]);
   if (!isWorkspaceControlsOpen) {
     return null;
   } else
     return (
       <div
-        className="absolute left-1/2 control-bar w-auto bottom-3 sm:bottom-6 min-h-[72px] sm:h-[60px] px-3 sm:px-4 py-3 sm:py-1"
-        style={{ transform: centerShift }}
+        className="absolute left-1/2 control-bar z-40 w-[calc(100%-1.5rem)] sm:w-auto max-w-[min(760px,calc(100%-1.5rem))] bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] sm:bottom-6 min-h-[72px] sm:h-[60px] px-3 sm:px-4 py-3 sm:py-1 flex-wrap"
+        style={containerStyle}
         role="region"
         aria-label="Meeting controls"
       >
@@ -196,7 +205,11 @@ const MeetingControls: React.FC = () => {
 
         {/* Mobile overflow menu */}
         {moreOpen && (
-          <div className="absolute right-2 bottom-[104px] sm:bottom-[72px] bg-[#202024] border border-[#26272B] rounded-xl shadow-lg w-52 py-1" role="menu">
+          <div
+            className="absolute right-2 bottom-[104px] sm:bottom-[72px] bg-[#202024] border border-[#26272B] rounded-xl shadow-lg w-52 py-1"
+            role="menu"
+            style={{ bottom: isMobile ? "calc(env(safe-area-inset-bottom, 0px) + 96px)" : undefined }}
+          >
             <button className="w-full text-left px-3 py-2 text-sm text-white/90 hover:bg-white/5 flex items-center gap-2" onClick={() => { toggleScreenShare(); setMoreOpen(false); }}>
               {screenShareEnabled ? 'Stop presenting' : 'Present screen'}
             </button>
@@ -207,7 +220,11 @@ const MeetingControls: React.FC = () => {
         )}
 
         {deskOpen && (
-          <div className="absolute right-2 bottom-[72px] hidden sm:block bg-[#202024] border border-[#26272B] rounded-xl shadow-lg w-56 py-1" role="menu">
+          <div
+            className="absolute right-2 bottom-[72px] hidden sm:block bg-[#202024] border border-[#26272B] rounded-xl shadow-lg w-56 py-1"
+            role="menu"
+            style={{ bottom: !isMobile ? "calc(env(safe-area-inset-bottom, 0px) + 72px)" : undefined }}
+          >
             <button className="w-full text-left px-3 py-2 text-sm text-white/90 hover:bg-white/5">
               Placeholder
             </button>
