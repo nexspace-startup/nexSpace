@@ -39,6 +39,6 @@ export async function getMe(req: Request, res: Response) {
     }
   }
 
-  const dto = toMeDTO(user, sessEmail, sessProvider);
+  const dto = toMeDTO(user, sessEmail, sessProvider, (req.auth?.session as any)?.avatar);
   return res.success<MeResponse>(dto);
 }

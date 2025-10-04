@@ -66,7 +66,7 @@ export const useUserStore = create<UserState>((set, get) => ({
 
       set({
         status: "authed",
-        user: me?.user ? { id: me.user.id, name, email: me.user.email } : null,
+        user: me?.user ? { id: me.user.id, name, email: me.user.email, avatar: (me.user as any)?.avatar } : null,
         _inflight: null,
       });
     })();

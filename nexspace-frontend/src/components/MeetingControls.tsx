@@ -208,21 +208,8 @@ const MeetingControls: React.FC = () => {
 
         {deskOpen && (
           <div className="absolute right-2 bottom-[72px] hidden sm:block bg-[#202024] border border-[#26272B] rounded-xl shadow-lg w-56 py-1" role="menu">
-            <button className="w-full text-left px-3 py-2 text-sm text-white/90 hover:bg-white/5" onClick={() => { toggleMic(); setDeskOpen(false); }}>
-              {micEnabled ? 'Mute microphone' : 'Unmute microphone'}
-            </button>
-            <button className="w-full text-left px-3 py-2 text-sm text-white/90 hover:bg-white/5" onClick={() => { toggleCam(); setDeskOpen(false); }}>
-              {camEnabled ? 'Turn camera off' : 'Turn camera on'}
-            </button>
-            <button className="w-full text-left px-3 py-2 text-sm text-white/90 hover:bg-white/5" onClick={() => { toggleScreenShare(); setDeskOpen(false); }}>
-              {screenShareEnabled ? 'Stop presenting' : 'Present screen'}
-            </button>
-            <button className="w-full text-left px-3 py-2 text-sm text-white/90 hover:bg-white/5" onClick={() => { toggleChat(); setDeskOpen(false); }}>
-              {chatOpen ? 'Close chat' : 'Open chat'}
-            </button>
-            <div className="h-px bg-[#26272B] my-1" />
-            <button className="w-full text-left px-3 py-2 text-sm text-[#ED5C5B] hover:bg-white/5" onClick={() => { leave(); setDeskOpen(false); }}>
-              End call
+            <button className="w-full text-left px-3 py-2 text-sm text-white/90 hover:bg-white/5">
+              Placeholder
             </button>
           </div>
         )}

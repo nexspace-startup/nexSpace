@@ -102,15 +102,13 @@ const WorkspacePanel: React.FC = () => {
 
   // Actions
   const handleInvite = (id: string, name: string) => {
-    console.log("Invite members for workspace:", id, name);
     setPanelInvite({ id, name })
     setCreateOpen(true)
     setCreateStep(2)
     setInviteType(2)
   };
 
-  const handleEdit = (id: string) => {
-    console.log("Edit workspace:", id);
+  const handleEdit = (_id: string) => {
     setOptionsFor(null);
   };
 
@@ -150,14 +148,10 @@ const WorkspacePanel: React.FC = () => {
   };
 
   const handleInviteMember = async () => {
-    debugger
-    console.log(panelInvite)
-    console.log(createdWorkSpaceId)
     if (!inviteInput.trim() || !isValidEmail) return;
     const matchedUser =
       searchResults.find((u: any) => u.email === inviteInput.trim()) ||
       invited.find((u: any) => u.email === inviteInput.trim());
-    console.log(matchedUser)
     if (matchedUser && !invited.find((u: any) => u.email === matchedUser.email)) {
       const res = await inviteUser({ email: inviteInput, workspaceUid: InviteType == 1 ? panelInvite?.id : InviteType == 2 ? createdWorkSpaceId?.id : null })
       res ? setInvited((prev) => [...prev, matchedUser]) : null

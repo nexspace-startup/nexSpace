@@ -21,6 +21,12 @@ export async function buildMeetingJoinToken(userId: string, workspaceUid: string
   const displayName = [sess?.firstName, sess?.lastName].filter(Boolean).join(" ") || (sess as any)?.email || `user-${identity}`;
 
   const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, { identity, name: displayName, ttl: "2h" });
+  try {
+    const avatar = (sess as any)?.avatar as string | undefined;
+    const presence = { status: 'IN_MEETING', ts: Date.now() };
+    const meta = JSON.stringify({ profile: { name: displayName, avatar }, presence });
+    (at as any).metadata = meta;
+  } catch { /* ignore */ }
   at.addGrant({ room: ws.uid, roomJoin: true, canSubscribe: true, canPublish: true, canPublishData: true });
   const token = await at.toJwt();
   return { url: LIVEKIT_URL, token, identity, room: ws.uid };

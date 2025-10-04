@@ -15,6 +15,7 @@ export type UserDTO = {
   last_name?: string;
   email?: string;
   provider?: "google" | "microsoft";
+  avatar?: string;
 };
 
 export type MeResponse = {
@@ -38,7 +39,7 @@ export async function loadUserWithMemberships(userId: string) {
   return getUserWithMemberships(BigInt(userId));
 }
 
-export function toMeDTO(user: any, sessionEmail?: string, sessProvider?: string): MeResponse {
+export function toMeDTO(user: any, sessionEmail?: string, sessProvider?: string, sessionAvatar?: string): MeResponse {
   if (!user) {
     return { isAuthenticated: true, user: { email: sessionEmail }, workspaces: [] };
   }
@@ -57,6 +58,7 @@ export function toMeDTO(user: any, sessionEmail?: string, sessProvider?: string)
       last_name: user.last_name ?? undefined,
       email: user.email ?? sessionEmail,
       provider: sessProvider as "google" | "microsoft" | undefined,
+      avatar: sessionAvatar,
     },
     workspaces,
   };

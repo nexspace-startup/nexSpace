@@ -144,7 +144,6 @@ const ChatPanel: React.FC = () => {
 
     // Send DM if in private mode with selected thread
     const recipientId = mode === "private" && selectedThread ? selectedThread.peerId : undefined;
-    console.log(selectedThread);
     await sendMessage(t, recipientId);
     setTimeout(() => {
       const el = listRef.current;

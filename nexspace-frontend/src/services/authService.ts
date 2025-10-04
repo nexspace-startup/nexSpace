@@ -39,7 +39,7 @@ export async function checkSession(): Promise<"authed" | "guest"> {
 
 export type MeResponse = {
   isAuthenticated: boolean;
-  user?: { id?: string; first_name?: string; last_name?: string; email?: string };
+  user?: { id?: string; first_name?: string; last_name?: string; email?: string; avatar?: string };
   workspaces?: Array<{ id: string; uid: string; name: string; memberCount: number; role: any }>;
 };
 

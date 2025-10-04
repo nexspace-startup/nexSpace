@@ -1,6 +1,6 @@
 import React from "react";
 import { useUIStore } from "../stores/uiStore";
-import { NAV_ITEMS } from "../constants/nav";
+import { NAV_ITEMS } from "../constants/constants";
 
 const MobileNavbarDrawer: React.FC = () => {
   const isOpen = useUIStore((s) => s.isNavbarOpen);
@@ -18,7 +18,7 @@ const MobileNavbarDrawer: React.FC = () => {
         <div className="h-14 flex items-center justify-between px-3 border-b border-[#26272B]">
           <span className="text-white/90 font-semibold">Menu</span>
           <button onClick={() => toggle(false)} className="w-8 h-8 grid place-items-center text-white/70" aria-label="Close menu">
-            <svg viewBox="0 0 24 24" className="w-5 h-5"><path d="M6 6l12 12M18 6l-12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+            <svg viewBox="0 0 24 24" className="w-5 h-5"><path d="M6 6l12 12M18 6l-12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
           </button>
         </div>
         <div className="p-3 flex flex-col gap-2">

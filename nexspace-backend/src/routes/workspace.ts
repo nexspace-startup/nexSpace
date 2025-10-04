@@ -3,6 +3,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { joinMeeting, listMyWorkspaces, createWorkspace, deleteWorkspace, listWorkspaceMembersCtrl } from "../controllers/workspace.controller.js";
 import { createMessage, getMessages, removeMyMessage, adminRemoveAny, eraseMe, getDMThreads, markThreadReadCtrl } from "../controllers/chat.controller.js";
 import { requireUser } from "../middleware/auth.js";
+import { setPresence } from "../controllers/presence.controller.js";
 
 const router = Router();
 
@@ -29,5 +30,8 @@ router.delete("/:workspaceUid/chat/admin/messages/:messageId", asyncHandler(admi
 router.delete("/:workspaceUid/chat/erase/me", asyncHandler(eraseMe));
 router.get("/:workspaceUid/chat/threads", asyncHandler(getDMThreads));
 router.post("/:workspaceUid/chat/threads/:peerId/read", asyncHandler(markThreadReadCtrl));
+
+// Presence endpoints
+router.post("/:workspaceUid/presence", asyncHandler(setPresence));
 
 export default router;

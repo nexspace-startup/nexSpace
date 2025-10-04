@@ -4,7 +4,7 @@ import NavbarPanel from "../../components/NavbarPanel";
 import WorkspacePanel from "../../components/WorkspacePanel";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { useUIStore } from "../../stores/uiStore";
-import { NAV_ITEMS } from "../../constants/nav";
+import { NAV_ITEMS } from "../../constants/constants";
 import { useMeetingStore } from "../../stores/meetingStore";
 import { useMediaQuery } from "../../hooks/useMedia";
 import MobileWorkspaceList from "../../components/MobileWorkspaceList";

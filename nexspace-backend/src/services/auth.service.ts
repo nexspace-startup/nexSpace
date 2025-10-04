@@ -25,7 +25,8 @@ export async function googleExchangeAndVerify(code: string, redirectUri?: string
     email: (payload.email || "").toLowerCase(),
     given_name: payload.given_name || "",
     family_name: payload.family_name || "",
-  };
+    picture: payload.picture || undefined,
+  } as any;
 }
 
 export async function signInWithEmailPassword(email: string, password: string) {
@@ -57,7 +58,8 @@ export async function googleVerifyIdToken(idToken: string) {
     email: (payload.email || "").toLowerCase(),
     given_name: payload.given_name || "",
     family_name: payload.family_name || "",
-  };
+    picture: payload.picture || undefined,
+  } as any;
 }
 
 /** Ensure a DB user exists and is linked to the OAuth identity. Returns the userId. */

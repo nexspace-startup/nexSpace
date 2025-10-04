@@ -10,11 +10,14 @@ import { responseWrapper } from './middleware/response.js';
 import { attachSession } from './middleware/auth.js';
 import { errorHandler, notFound } from './middleware/error.js';
 import { closePrisma } from './prisma.js';
+import livekitWebhook from './routes/livekit.webhook.js';
 
 const app = express();
 app.disable('x-powered-by');
 // trust proxy when deployed behind a reverse proxy (for secure cookies/IP)
 if (config.nodeEnv === 'production') app.set('trust proxy', 1);
+// Mount LiveKit webhook BEFORE json() to preserve raw body for signature verification
+app.use('/livekit/webhook', livekitWebhook);
 app.use(json());
 app.use(cookieParser());
 app.use(responseWrapper);

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { DMThreadPreview } from '../../stores/meetingStore';
+import { useMeetingStore } from '../../stores/meetingStore';
 import { getDayLabel } from '../../utils/util';
 import { useWorkspaceStore, type WorkspaceMember } from '../../stores/workspaceStore';
 
@@ -24,6 +25,7 @@ const PrivateChat: React.FC<PrivateChatProps> = ({
     onThreadSelect,
 }) => {
     const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+    const avatarById = useMeetingStore((s) => s.avatarById);
     const activeWorkspaceMembers = useWorkspaceStore((s) => s.activeWorkspaceMembers);
     const [query, setQuery] = useState('');
     const [searching, setSearching] = useState(false);
@@ -94,6 +96,7 @@ const PrivateChat: React.FC<PrivateChatProps> = ({
                             const accent = colorForParticipant(u.id, u.name);
                             const textOnAccent = isLight(accent) ? '#0F1216' : '#FFFFFF';
                             const nameInitials = initialsFrom(u.name);
+                            const avatar = avatarById[String(u.id)];
                             return (
                                 <button
                                     key={u.id}
@@ -108,7 +111,11 @@ const PrivateChat: React.FC<PrivateChatProps> = ({
                                 >
                                     <div className="flex items-start gap-3">
                                         <div className="w-12 h-12 rounded-full overflow-hidden grid place-items-center flex-shrink-0 mt-1" style={{ backgroundColor: accent }}>
-                                            <span className="text-sm font-semibold" style={{ color: textOnAccent }}>{nameInitials}</span>
+                                            {avatar ? (
+                                                <img src={avatar} alt={u.name} className="w-full h-full object-cover" />
+                                            ) : (
+                                                <span className="text-sm font-semibold" style={{ color: textOnAccent }}>{nameInitials}</span>
+                                            )}
                                         </div>
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center justify-between mb-1">
@@ -127,6 +134,7 @@ const PrivateChat: React.FC<PrivateChatProps> = ({
                             const accent = colorForParticipant(thread.peerId, thread.peerName);
                             const textOnAccent = isLight(accent) ? '#0F1216' : '#FFFFFF';
                             const nameInitials = initialsFrom(thread.peerName);
+                            const threadAvatar = thread.peerAvatar || avatarById[thread.peerId];
 
                             return (
                                 <button
@@ -141,9 +149,9 @@ const PrivateChat: React.FC<PrivateChatProps> = ({
                                             className="w-12 h-12 rounded-full overflow-hidden grid place-items-center flex-shrink-0 mt-1"
                                             style={{ backgroundColor: accent }}
                                         >
-                                            {thread.peerAvatar ? (
+                                            {threadAvatar ? (
                                                 <img
-                                                    src={thread.peerAvatar}
+                                                    src={threadAvatar}
                                                     alt={thread.peerName}
                                                     className="w-full h-full object-cover"
                                                 />
