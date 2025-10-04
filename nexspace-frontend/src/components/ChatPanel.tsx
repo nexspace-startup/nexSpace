@@ -219,45 +219,43 @@ const ChatPanel: React.FC = () => {
         ) : (
           <div className="flex items-center gap-2">
             <div className="font-medium">Chat</div>
-            <div className="ml-2 flex items-center gap-1 bg-[#1F2126] rounded-full p-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setMode("group");
-                  setSelectedThread(null);
-                }}
-                className={[
-                  "px-3 py-1 text-sm rounded-full flex items-center gap-1",
-                  mode === "group"
-                    ? "bg-[#2B2E34] text-white"
-                    : "text-[#9AA3B2] hover:text-white",
-                ].join(" ")}
-                aria-pressed={mode === "group"}
-              >
-                Group
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMode("private");
-                  setSelectedThread(null);
-                }}
-                className={[
-                  "px-3 py-1 text-sm rounded-full flex items-center gap-1",
-                  mode === "private"
-                    ? "bg-[#2B2E34] text-white"
-                    : "text-[#9AA3B2] hover:text-white",
-                ].join(" ")}
-                aria-pressed={mode === "private"}
-              >
-                Private
-                {dmUnreadTotal > 0 && (
-                  <span className="bg-[#3D93F8] text-white text-xs font-semibold rounded-full min-w-[16px] h-4 flex items-center justify-center px-1 ml-1">
-                    {dmUnreadTotal > 99 ? '99+' : dmUnreadTotal}
-                  </span>
-                )}
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setMode("group");
+                setSelectedThread(null);
+              }}
+              className={[
+                "px-3 py-1 text-sm rounded-full flex items-center gap-1",
+                mode === "group"
+                  ? "bg-[#2B2E34] text-white"
+                  : "text-[#9AA3B2] hover:text-white",
+              ].join(" ")}
+              aria-pressed={mode === "group"}
+            >
+              Group
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode("private");
+                setSelectedThread(null);
+              }}
+              className={[
+                "px-3 py-1 text-sm rounded-full flex items-center gap-1",
+                mode === "private"
+                  ? "bg-[#2B2E34] text-white"
+                  : "text-[#9AA3B2] hover:text-white",
+              ].join(" ")}
+              aria-pressed={mode === "private"}
+            >
+              Private
+              {dmUnreadTotal > 0 && (
+                <span className="bg-[#3D93F8] text-white text-xs font-semibold rounded-full min-w-[16px] h-4 flex items-center justify-center px-1 ml-1">
+                  {dmUnreadTotal > 99 ? '99+' : dmUnreadTotal}
+                </span>
+              )}
+            </button>
           </div>
         )}
 
