@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useTracks, isTrackReference } from '@livekit/components-react';
 import { RoomEvent, Track } from 'livekit-client';
@@ -15,18 +15,55 @@ import { COLLIDER_BLOCKLIST } from './3DRoom/colliderBlocklist';
 
 type Props = { bottomSafeAreaPx?: number; topSafeAreaPx?: number; };
 
-  const DEG2RAD = Math.PI / 180;
-  // Collision box half-extent for avatar (slightly slimmer to avoid snagging on thin walls)
-  const AVATAR_HALF = 0.32;
+const DEG2RAD = Math.PI / 180;
+const AVATAR_HALF = 0.32;
 
-  const isBlocked = (box: THREE.Box3) => {
-    const c = box.getCenter(new THREE.Vector3());
-    const s = box.getSize(new THREE.Vector3());
-    const tol = 0.08; // ~8cm tolerance for matching
-    const arrEq = (a: [number,number,number], b: THREE.Vector3) => Math.abs(a[0]-b.x) < tol && Math.abs(a[1]-b.y) < tol && Math.abs(a[2]-b.z) < tol;
-    for (const it of COLLIDER_BLOCKLIST) { if (arrEq(it.center, c) && arrEq(it.size, s)) return true; }
-    return false;
-  };
+const CONTROL_KEY_SET = new Set([
+  'KeyW',
+  'KeyA',
+  'KeyS',
+  'KeyD',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'ShiftLeft',
+  'ShiftRight',
+  'KeyQ',
+  'KeyE',
+  'Equal',
+  'Minus',
+  'NumpadAdd',
+  'NumpadSubtract',
+  'KeyV',
+  'BracketLeft',
+  'BracketRight',
+  'KeyH',
+  'KeyN',
+]);
+
+const TMP_VEC3_A = new THREE.Vector3();
+const TMP_VEC3_B = new THREE.Vector3();
+const TMP_VEC3_C = new THREE.Vector3();
+const TMP_VEC3_D = new THREE.Vector3();
+const TMP_VEC2_A = new THREE.Vector2();
+const TMP_VEC2_B = new THREE.Vector2();
+const TMP_BOX3_A = new THREE.Box3();
+
+const isBlocked = (box: THREE.Box3) => {
+  const center = box.getCenter(TMP_VEC3_A);
+  const size = box.getSize(TMP_VEC3_B);
+  const tol = 0.08;
+  const arrEq = (a: [number, number, number], b: THREE.Vector3) =>
+    Math.abs(a[0] - b.x) < tol && Math.abs(a[1] - b.y) < tol && Math.abs(a[2] - b.z) < tol;
+  for (const item of COLLIDER_BLOCKLIST) {
+    if (arrEq(item.center, center) && arrEq(item.size, size)) {
+      return true;
+    }
+  }
+  return false;
+};
+
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const norm = (v: any) => String(v ?? '');
 
@@ -122,6 +159,84 @@ function makeVideoBadge(tex: THREE.VideoTexture): THREE.Mesh {
   m.name = 'VID_BADGE';
   return m;
 }
+
+type ParticipantRow = { id: string; name?: string };
+
+const buildParticipantRows = (
+  participants: any[] | undefined,
+  room: unknown,
+  localSid: string,
+): ParticipantRow[] => {
+  const arr = participants ?? [];
+  const localParticipant = (room as any)?.localParticipant;
+  const localSidNorm = norm(localSid);
+  const localIdentityNorm = norm(localParticipant?.identity);
+  const localNameNorm = norm(localParticipant?.name).toLowerCase();
+
+  type Row = {
+    id: string;
+    name?: string;
+    sid?: string;
+    identity?: string;
+    isLocal: boolean;
+    score: number;
+  };
+
+  const rows: Row[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const participant of arr) {
+    const sid = norm(participant?.sid ?? participant?.id);
+    const identity = norm(participant?.identity);
+    const name = norm(participant?.name);
+    const nameLower = name.toLowerCase();
+
+    const isLocal = Boolean(
+      (sid && sid === localSidNorm) ||
+        (identity && identity === localIdentityNorm) ||
+        (name && (nameLower === localNameNorm || nameLower === 'you')),
+    );
+
+    const fallbackId = identity || sid || name || `unknown_${rows.length}`;
+    const key = isLocal ? '__LOCAL__' : fallbackId;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+
+    const score =
+      (isLocal ? 1000 : 0) +
+      (identity ? 100 : 0) +
+      (sid ? 50 : 0) +
+      (name && nameLower !== 'you' ? 10 : 0);
+
+    rows.push({
+      id: key,
+      name: isLocal ? 'You' : name || 'User',
+      sid,
+      identity,
+      isLocal,
+      score,
+    });
+  }
+
+  if (!rows.some((row) => row.isLocal)) {
+    rows.unshift({
+      id: '__LOCAL__',
+      name: 'You',
+      sid: localSidNorm,
+      identity: localIdentityNorm,
+      isLocal: true,
+      score: 9999,
+    });
+  }
+
+  rows.sort((a, b) => {
+    if (a.isLocal && !b.isLocal) return -1;
+    if (!a.isLocal && b.isLocal) return 1;
+    return b.score - a.score;
+  });
+
+  return rows.map((row) => ({ id: row.id, name: row.name }));
+};
 
 // ——— A* helpers ———
 type NavNode = { id: string; x: number; z: number };
@@ -263,6 +378,11 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     } catch { return ''; }
   }, [room]);
 
+  const uniqueParticipants = useMemo<ParticipantRow[]>(
+    () => buildParticipantRows(participants as any[] | undefined, room, localSid),
+    [participants, room, localSid],
+  );
+
   // LiveKit
   const cameraRefs = useTracks([{ source: Track.Source.Camera, withPlaceholder: false }], { onlySubscribed: false });
   const screenRefs = useTracks([{ source: Track.Source.ScreenShare, withPlaceholder: false }], { onlySubscribed: false });
@@ -340,11 +460,27 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const obstaclesRef = useRef<THREE.Box3[]>([]);
   const roomBoundsRef = useRef<{ minX: number; maxX: number; minZ: number; maxZ: number }>({ minX: -ROOM_W / 2 + 0.3, maxX: ROOM_W / 2 - 0.3, minZ: -ROOM_D / 2 + 0.3, maxZ: ROOM_D / 2 - 0.3 });
 
+  const isPointClear = useCallback(
+    (x: number, z: number) => {
+      const center = TMP_VEC3_C.set(x, 0.85, z);
+      const size = TMP_VEC3_D.set(0.42, 1.6, 0.42);
+      const box = TMP_BOX3_A.setFromCenterAndSize(center, size);
+      for (const obstacle of obstaclesRef.current) {
+        if (obstacle.intersectsBox(box)) {
+          return false;
+        }
+      }
+      return true;
+    },
+    [],
+  );
+
   // Desks / seating
   const deskPrefabRef = useRef<DeskPrefab | null>(null);
   const deskMgrRef = useRef<DeskGridManager | null>(null);
   const seatTransformsRef = useRef<SeatTransform[]>([]);
   const participantSeatMapRef = useRef<Map<string, number>>(new Map());
+  const participantSignatureRef = useRef<string>('');
   const monitorPlanesRef = useRef<Map<number, THREE.Mesh>>(new Map());
   const avatarsGroupRef = useRef<THREE.Group | null>(null);
   const avatarBySidRef = useRef<Map<string, THREE.Group>>(new Map());
@@ -354,6 +490,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const navNodesRef = useRef<NavNode[]>([]);
   const navGraphRef = useRef<NavGraph | null>(null);
   const minimapHitsRef = useRef<Array<{ x: number; y: number; w: number; h: number; target?: THREE.Vector3; allowGhost?: boolean; roomName?: string }>>([]);
+  const minimapSeatDotsRef = useRef<Array<{ x: number; z: number; name?: string; sid: string }>>([]);
   const roomLabelsRef = useRef<THREE.Sprite[]>([]);
   // Conference room audio isolation state
   const insideConferenceRef = useRef<boolean>(false);
@@ -819,17 +956,6 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         if (rr) targetRect = rr.rect;
       }
 
-      const isPointClear = (x: number, z: number) => {
-        const box = new THREE.Box3().setFromCenterAndSize(
-          new THREE.Vector3(x, 0.85, z),
-          new THREE.Vector3(0.42, 1.6, 0.42)
-        );
-        for (const ob of obstaclesRef.current) {
-          if (ob.intersectsBox(box)) return false;
-        }
-        return true;
-      };
-
       let bestInsideSafeId: string | null = null; let bestInsideSafeD = Infinity;
       let bestInsideAnyId: string | null = null; let bestInsideAnyD = Infinity;
       let bestOverallSafeId: string | null = null; let bestOverallSafeD = Infinity;
@@ -1056,8 +1182,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     const onKey = (e: KeyboardEvent) => {
       const code = e.code;
-      const keys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyQ', 'KeyE', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', 'KeyV', 'BracketLeft', 'BracketRight', 'KeyH', 'KeyN'];
-      if (keys.includes(code)) {
+      if (CONTROL_KEY_SET.has(code)) {
         keyState.current[code] = e.type === 'keydown';
         e.preventDefault();
       }
@@ -1352,8 +1477,8 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         const yaw = yawRef.current;
 
         let vx = 0, vz = 0;
-        const fwd = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw));
-        const rgt = new THREE.Vector2(-fwd.y, fwd.x);
+        const fwd = TMP_VEC2_A.set(-Math.sin(yaw), -Math.cos(yaw));
+        const rgt = TMP_VEC2_B.set(-fwd.y, fwd.x);
         const viewMode = viewModeRef.current;
         const manualKeyMove = (
           keyState.current['KeyW'] || keyState.current['ArrowUp'] ||
@@ -1928,100 +2053,10 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     };
   }, [room, localSid]);
 
-  // —— FIXED: Robust de-dupe so you don't get "You" + duplicate participants —— 
-  function getUniqueParticipants() {
-    const arr = (participants || []) as any[];
-
-    // Get local participant info more reliably
-    const localParticipant = (room as any)?.localParticipant;
-    const localSidNorm = norm(localSid);
-    const localIdentityNorm = norm(localParticipant?.identity);
-    const localNameNorm = norm(localParticipant?.name).toLowerCase();
-
-    type Row = {
-      id: string;
-      name?: string;
-      sid?: string;
-      identity?: string;
-      isLocal: boolean;
-      score: number;
-    };
-
-    const rows: Row[] = [];
-    const seenKeys = new Set<string>();
-
-    // Process each participant
-    for (const p of arr) {
-      const sid = norm(p?.sid ?? p?.id);
-      const identity = norm(p?.identity);
-      const name = norm(p?.name);
-      const nameLower = name.toLowerCase();
-
-      // Determine if this is the local participant
-      const isLocal = Boolean(
-        (sid && sid === localSidNorm) ||
-        (identity && identity === localIdentityNorm) ||
-        (name && (nameLower === localNameNorm || nameLower === 'you'))
-      );
-
-      // Create unique key - prioritize identity over sid for stability
-      const key = isLocal
-        ? '__LOCAL__'
-        : (identity || sid || name || `unknown_${Math.random()}`);
-
-      // Skip if we've already processed this participant
-      if (seenKeys.has(key)) continue;
-      seenKeys.add(key);
-
-      // Calculate score for deduplication priority
-      const score =
-        (isLocal ? 1000 : 0) +
-        (identity ? 100 : 0) +
-        (sid ? 50 : 0) +
-        (name && nameLower !== 'you' ? 10 : 0);
-
-      rows.push({
-        id: key,
-        name: isLocal ? 'You' : (name || 'User'),
-        sid,
-        identity,
-        isLocal,
-        score
-      });
-    }
-
-    // Ensure we always have a local participant
-    const hasLocal = rows.some(r => r.isLocal);
-    if (!hasLocal) {
-      rows.unshift({
-        id: '__LOCAL__',
-        name: 'You',
-        sid: localSidNorm,
-        identity: localIdentityNorm,
-        isLocal: true,
-        score: 9999
-      });
-    }
-
-    // Sort: local first, then by score (highest first)
-    rows.sort((a, b) => {
-      if (a.isLocal && !b.isLocal) return -1;
-      if (!a.isLocal && b.isLocal) return 1;
-      return b.score - a.score;
-    });
-
-    return rows.map(r => ({ id: r.id, name: r.name }));
-  }
-
-  function getSeatDotsForMinimap() {
-    const uniq = getUniqueParticipants();
-    return uniq.map((p) => {
-      const idx = participantSeatMapRef.current.get(p.id);
-      if (idx == null) return null;
-      const s = seatTransformsRef.current[idx];
-      return { x: s.position.x, z: s.position.z, name: p.name, sid: p.id };
-    }).filter(Boolean) as Array<{ x: number; z: number; name?: string; sid: string }>;
-  }
+  const getSeatDotsForMinimap = useCallback(
+    () => minimapSeatDotsRef.current,
+    [],
+  );
 
   // Participants → desks/avatars/video (includes LOCAL only once)
   useEffect(() => {
@@ -2031,7 +2066,12 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     const prefab = deskPrefabRef.current;
     if (!scene || !avatars || !mgr || !prefab) return;
 
-    const uniq = getUniqueParticipants();
+    const uniq = uniqueParticipants;
+    const signature = uniq.map((p) => `${p.id}:${p.name ?? ''}`).join('|');
+    if (signature === participantSignatureRef.current) {
+      return;
+    }
+    participantSignatureRef.current = signature;
 
     const targetDeskCount = Math.max(10, uniq.length + 8);
     seatTransformsRef.current = mgr.ensureDeskCount(targetDeskCount);
@@ -2065,6 +2105,20 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       participantSeatMapRef.current,
       seatTransformsRef.current.length
     );
+
+    minimapSeatDotsRef.current = uniq
+      .map((participantRow) => {
+        const idx = participantSeatMapRef.current.get(participantRow.id);
+        if (idx == null) return null;
+        const transform = seatTransformsRef.current[idx];
+        return {
+          x: transform.position.x,
+          z: transform.position.z,
+          name: participantRow.name,
+          sid: participantRow.id,
+        };
+      })
+      .filter(Boolean) as Array<{ x: number; z: number; name?: string; sid: string }>;
 
     // Track existing avatars to avoid recreating them
     const existingAvatars = new Set(avatarBySidRef.current.keys());
@@ -2198,7 +2252,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         localAvatarSet = true;
       }
     }
-  }, [participants, localSid, room]);
+  }, [uniqueParticipants]);
 
   // Video textures: stage + local desk + seat monitors + head badges
   useEffect(() => {
@@ -2257,7 +2311,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     // Apply to monitors + head badges
     const seatMap = participantSeatMapRef.current;
     const monitors = monitorPlanesRef.current;
-    const uniq = getUniqueParticipants();
+    const uniq = uniqueParticipants;
     for (const p0 of uniq) {
       const sid = p0.id;
       const idx = seatMap.get(sid);
@@ -2302,7 +2356,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         } catch { }
       }
     };
-  }, [cameraRefs, screenRefs, participants, localSid]);
+  }, [cameraRefs, screenRefs, uniqueParticipants, localSid]);
 
   // Dice button action
   const rollDice = () => {

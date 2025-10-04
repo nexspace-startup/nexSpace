@@ -1,7 +1,7 @@
-import { OAuth2Client } from "google-auth-library";
+import { OAuth2Client, type TokenPayload } from "google-auth-library";
 import { config } from "../config/env.js";
 import { verifyAndUpgrade } from "../utils/password.js";
-import { prisma } from "../prisma.js";
+import { prisma, Prisma } from "../prisma.js";
 import { findAuthIdentity } from "../repositories/auth.repository.js";
 import {
   findUserByEmail,
@@ -10,7 +10,30 @@ import {
   upsertLocalAuthIdentity,
 } from "../repositories/user.repository.js";
 
-export async function googleExchangeAndVerify(code: string, redirectUri?: string) {
+type OAuthProfile = {
+  sub: string;
+  email: string;
+  given_name: string;
+  family_name: string;
+  picture?: string;
+};
+
+function normalizeGooglePayload(payload: TokenPayload | null | undefined): OAuthProfile {
+  if (!payload?.sub || typeof payload.sub !== "string") {
+    throw new Error("MISSING_SUB");
+  }
+
+  const email = typeof payload.email === "string" ? payload.email.toLowerCase() : "";
+  return {
+    sub: payload.sub,
+    email,
+    given_name: typeof payload.given_name === "string" ? payload.given_name : "",
+    family_name: typeof payload.family_name === "string" ? payload.family_name : "",
+    picture: typeof payload.picture === "string" ? payload.picture : undefined,
+  };
+}
+
+export async function googleExchangeAndVerify(code: string, redirectUri?: string): Promise<OAuthProfile> {
   const gClient = new OAuth2Client(config.google.clientId, config.google.clientSecret);
   const { tokens } = await gClient.getToken({ code, redirect_uri: redirectUri || "postmessage" });
   const idToken = tokens.id_token ?? undefined;
@@ -18,15 +41,8 @@ export async function googleExchangeAndVerify(code: string, redirectUri?: string
 
   const ticket = await gClient.verifyIdToken({ idToken, audience: config.google.clientId });
   const payload = ticket.getPayload();
-  if (!payload?.sub) throw new Error("MISSING_SUB");
 
-  return {
-    sub: payload.sub,
-    email: (payload.email || "").toLowerCase(),
-    given_name: payload.given_name || "",
-    family_name: payload.family_name || "",
-    picture: payload.picture || undefined,
-  } as any;
+  return normalizeGooglePayload(payload);
 }
 
 export async function signInWithEmailPassword(email: string, password: string) {
@@ -48,18 +64,11 @@ export async function signInWithEmailPassword(email: string, password: string) {
   };
 }
 
-export async function googleVerifyIdToken(idToken: string) {
+export async function googleVerifyIdToken(idToken: string): Promise<OAuthProfile> {
   const gClient = new OAuth2Client(config.google.clientId, config.google.clientSecret);
   const ticket = await gClient.verifyIdToken({ idToken, audience: config.google.clientId });
   const payload = ticket.getPayload();
-  if (!payload?.sub) throw new Error("MISSING_SUB");
-  return {
-    sub: payload.sub,
-    email: (payload.email || "").toLowerCase(),
-    given_name: payload.given_name || "",
-    family_name: payload.family_name || "",
-    picture: payload.picture || undefined,
-  } as any;
+  return normalizeGooglePayload(payload);
 }
 
 /** Ensure a DB user exists and is linked to the OAuth identity. Returns the userId. */
@@ -84,7 +93,7 @@ export async function ensureOAuthUser(args: {
   const existing = await prisma.user.findUnique({ where: { email: emailLc }, select: { id: true } });
   if (existing) {
     const userId = existing.id;
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.authIdentity.upsert({
         where: { provider_providerId: { provider, providerId: sub } },
         update: { lastLoginAt: new Date() },
@@ -96,7 +105,7 @@ export async function ensureOAuthUser(args: {
   }
 
   // 3) Create a brand-new user and bind identity
-  const created = await prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const user = await tx.user.create({ data: { first_name: first || "", last_name: last || "", displayName: [first, last].filter(Boolean).join(" ") || null, email: emailLc, emailVerifiedAt: new Date() } });
     await tx.authIdentity.create({ data: { userId: user.id, provider, providerId: sub, lastLoginAt: new Date() } });
     return user;

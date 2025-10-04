@@ -7,9 +7,24 @@ export async function createChatMessage(
   content: string,
   recipientId?: bigint
 ) {
-  return (prisma as any).chatMessage.create({
-    data: { workspaceUid, senderId, roomUid, content, ...(recipientId ? { recipientId } : {}) },
-    select: { id: true, workspaceUid: true, senderId: true, recipientId: true, roomUid: true, content: true, createdAt: true, deletedAt: true },
+  return prisma.chatMessage.create({
+    data: {
+      workspaceUid,
+      senderId,
+      roomUid,
+      content,
+      ...(recipientId ? { recipientId } : {}),
+    },
+    select: {
+      id: true,
+      workspaceUid: true,
+      senderId: true,
+      recipientId: true,
+      roomUid: true,
+      content: true,
+      createdAt: true,
+      deletedAt: true,
+    },
   });
 }
 
@@ -20,11 +35,13 @@ export async function listChatMessages(
   peerId?: bigint,
   meId?: bigint
 ) {
-  const where: any = {
+  const where: Prisma.ChatMessageWhereInput = {
     workspaceUid,
     deletedAt: null,
-    ...(before ? { createdAt: { lt: before } } : {}),
   };
+  if (before) {
+    where.createdAt = { lt: before };
+  }
   if (peerId && meId) {
     // DM thread between two users
     where.OR = [
@@ -35,7 +52,7 @@ export async function listChatMessages(
     // group chat only
     where.recipientId = null;
   }
-  return (prisma as any).chatMessage.findMany({
+  return prisma.chatMessage.findMany({
     where,
     orderBy: { createdAt: "desc" },
     take: Math.max(1, Math.min(limit, 200)),
@@ -52,7 +69,7 @@ export async function listChatMessages(
 }
 
 export async function softDeleteMessage(id: bigint, workspaceUid: string, byUserId: bigint, allowAny = false) {
-  const where: any = { id, workspaceUid };
+  const where: Prisma.ChatMessageWhereInput = { id, workspaceUid };
   if (!allowAny) where.senderId = byUserId;
   return prisma.chatMessage.updateMany({
     where,
@@ -78,7 +95,7 @@ export async function listRecentPrivateMessagesForUser(
   meId: bigint,
   take: number = 500
 ) {
-  return (prisma as any).chatMessage.findMany({
+  return prisma.chatMessage.findMany({
     where: {
       workspaceUid,
       deletedAt: null,
@@ -161,7 +178,7 @@ export async function markDMThreadRead(
   at?: Date
 ) {
   const when = at ?? new Date();
-  await (prisma as any).chatThreadRead.upsert({
+  await prisma.chatThreadRead.upsert({
     where: { workspaceUid_userId_peerId: { workspaceUid, userId: meId, peerId } },
     update: { lastReadAt: when },
     create: { workspaceUid, userId: meId, peerId, lastReadAt: when },
