@@ -2730,13 +2730,15 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           paddingRight: containerPaddingRight,
         }}
       />
-      <canvas
-        ref={minimapRef}
-        width={minimapSize}
-        height={minimapSize}
-        className="absolute rounded-lg border pointer-events-auto"
-        style={minimapStyle}
-      />
+      {!isMobile && (
+        <canvas
+          ref={minimapRef}
+          width={minimapSize}
+          height={minimapSize}
+          className="absolute rounded-lg border pointer-events-auto"
+          style={minimapStyle}
+        />
+      )}
 
       {/* Controls Panel */}
       <div
