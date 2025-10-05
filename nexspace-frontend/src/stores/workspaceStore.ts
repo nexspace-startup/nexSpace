@@ -51,13 +51,6 @@ const fetchWorkspaceMembers = async (workspaceId: string): Promise<WorkspaceMemb
 
   return isApiSuccess(data) ? data.data : []
 }
-fetchWorkspaces: () => Promise<void>;
-setActiveWorkspace: (id: string | null) => void;
-upsertWorkspace: (w: Workspace) => void; // handy for “Create workspace” flow
-deleteWorkspace: (uid: string) => Promise<void>;
-createWorkspace: (name: string) => Promise<Workspace>;
-updateWorkspace: (id: string, name: string | null) => Promise<Workspace>
-};
 
 export const useWorkspaceStore = create<WorkspaceState>()(
   devtools((set, get) => ({
