@@ -1,5 +1,5 @@
-import { prisma, Prisma } from "../prisma.js";
-import { WorkspaceRole, InvitationStatus, type AuthProvider } from "@prisma/client";
+import { prisma, Prisma, WorkspaceRole, InvitationStatus } from "../prisma.js";
+import type { AuthProvider } from "@prisma/client";
 import type { OnboardingInput, InvitationInput } from "../validators/setup.validators.js";
 import { hashPassword } from "../utils/password.js";
 import { config } from "../config/env.js";
@@ -28,36 +28,67 @@ export async function onboardingLocal(input: OnboardingInput): Promise<{ payload
     const existingPwd = await prisma.userLogin.findUnique({ where: { userId: user.id } });
     if (existingPwd) throw new Error("EMAIL_TAKEN");
     const phc = await hashPassword(input.password || "");
-    await prisma.$transaction(async (tx) => {
-      await tx.user.update({ where: { id: user!.id }, data: { first_name: input.firstName, last_name: input.lastName, displayName: `${input.firstName} ${input.lastName}`.trim(), email } });
-      await tx.userLogin.upsert({ where: { userId: user!.id }, update: { hash: phc, alg: "argon2id" }, create: { userId: user!.id, hash: phc, alg: "argon2id" } });
-      await tx.authIdentity.upsert({ where: { provider_providerId: { provider: "local", providerId: `local:${email}` } }, update: {}, create: { userId: user!.id, provider: "local", providerId: `local:${email}` } });
+    const existingUserId = user.id;
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.user.update({
+        where: { id: existingUserId },
+        data: {
+          first_name: input.firstName,
+          last_name: input.lastName,
+          displayName: `${input.firstName} ${input.lastName}`.trim(),
+          email,
+        },
+      });
+      await tx.userLogin.upsert({
+        where: { userId: existingUserId },
+        update: { hash: phc, alg: "argon2id" },
+        create: { userId: existingUserId, hash: phc, alg: "argon2id" },
+      });
+      await tx.authIdentity.upsert({
+        where: { provider_providerId: { provider: "local", providerId: `local:${email}` } },
+        update: { lastLoginAt: new Date() },
+        create: { userId: existingUserId, provider: "local", providerId: `local:${email}`, lastLoginAt: new Date() },
+      });
     });
   } else {
     const phc = await hashPassword(input.password || "");
-    user = await prisma.$transaction(async (tx) => {
-      const u = await tx.user.create({ data: { first_name: input.firstName, last_name: input.lastName, displayName: `${input.firstName} ${input.lastName}`.trim(), email, emailVerifiedAt: null } });
-      await tx.userLogin.create({ data: { userId: u.id, hash: phc, alg: "argon2id" } });
-      await tx.authIdentity.create({ data: { userId: u.id, provider: "local", providerId: `local:${email}` } });
-      return u;
+    user = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const createdUser = await tx.user.create({
+        data: {
+          first_name: input.firstName,
+          last_name: input.lastName,
+          displayName: `${input.firstName} ${input.lastName}`.trim(),
+          email,
+          emailVerifiedAt: null,
+        },
+      });
+      await tx.userLogin.create({ data: { userId: createdUser.id, hash: phc, alg: "argon2id" } });
+      await tx.authIdentity.create({ data: { userId: createdUser.id, provider: "local", providerId: `local:${email}` } });
+      return createdUser;
     });
   }
 
+  if (!user) {
+    throw new Error("USER_NOT_CREATED");
+  }
+
+  const userId = user.id;
+
   const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    const dup = await tx.workspace.findFirst({ where: { name: input.workspaceName, createdById: (user as any).id }, select: { uid: true } });
+    const dup = await tx.workspace.findFirst({ where: { name: input.workspaceName, createdById: userId }, select: { uid: true } });
     if (dup) throw new Error("WORKSPACE_CONFLICT");
 
-    const workspace = await tx.workspace.create({ data: { name: input.workspaceName, createdById: (user as any).id } });
-    const membership = await tx.workspaceMember.create({ data: { workspaceUid: workspace.uid, userId: (user as any).id, role: input.role } });
+    const workspace = await tx.workspace.create({ data: { name: input.workspaceName, createdById: userId } });
+    const membership = await tx.workspaceMember.create({ data: { workspaceUid: workspace.uid, userId, role: input.role } });
     const payload: OnboardingResult = {
-      user: { id: String((user as any).id), firstName: input.firstName, lastName: input.lastName, email },
+      user: { id: String(userId), firstName: input.firstName, lastName: input.lastName, email },
       workspace: { uid: workspace.uid, name: workspace.name },
       membership: { role: membership.role },
     };
     return payload;
   });
 
-  return { payload: result, userId: (user as any).id as bigint };
+  return { payload: result, userId };
 }
 
 export async function onboardingOAuth(input: OnboardingInput, sub: string, hinted?: AuthProvider | string | null): Promise<OnboardingResult> {
@@ -114,14 +145,28 @@ export async function createInvitationForWorkspace(inviterUserId: string, input:
     orderBy: { createdAt: "desc" },
   });
 
-  const invitation = existing ?? (await prisma.invitation.create({
-    data: { invitedEmail: emailNorm, workspaceUid: input.workspaceUid, invitedBy: inviter.id, status: InvitationStatus.PENDING, expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000), role: WorkspaceRole.MEMBER },
-    include: { workspace: { select: { name: true } } },
-  }));
+  const invitation =
+    existing ??
+    (await prisma.invitation.create({
+      data: {
+        invitedEmail: emailNorm,
+        workspaceUid: input.workspaceUid,
+        invitedBy: inviter.id,
+        status: InvitationStatus.PENDING,
+        expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+        role: WorkspaceRole.MEMBER,
+      },
+      include: { workspace: { select: { name: true } } },
+    }));
 
   let emailSent = true;
   try {
-    await sendInviteEmail({ to: invitation.invitedEmail, invitationId: invitation.id as any, workspaceName: invitation.workspace?.name ?? "", inviterName: [inviter.first_name, inviter.last_name].filter(Boolean).join(" ") || undefined });
+    await sendInviteEmail({
+      to: invitation.invitedEmail,
+      invitationId: invitation.id,
+      workspaceName: invitation.workspace?.name ?? "",
+      inviterName: [inviter.first_name, inviter.last_name].filter(Boolean).join(" ") || undefined,
+    });
   } catch {
     emailSent = false;
     // Log the root cause from SendGrid if available
@@ -130,9 +175,9 @@ export async function createInvitationForWorkspace(inviterUserId: string, input:
     console.error('[Invite] Failed to send invitation email. Check SENDGRID config and verified sender.');
   }
 
-  const origin = (config as any)?.webOrigin ?? (config as any)?.appOrigin ?? "http://localhost:5173";
-  const invitationurl = `${origin}/invite/${invitation.id}`;
-  return { invitationurl, emailSent, reused: !!existing } as const;
+  const origin = config.webOrigin ?? config.appOrigin ?? "http://localhost:5173";
+  const invitationUrl = `${origin}/invite/${invitation.id}`;
+  return { invitationUrl, emailSent, reused: !!existing } as const;
 }
 
 export async function acceptInvitation(token: string, userId: string, email: string) {
@@ -145,7 +190,7 @@ export async function acceptInvitation(token: string, userId: string, email: str
   }
   if (invite.invitedEmail.toLowerCase() !== email.toLowerCase()) throw new Error("EMAIL_MISMATCH");
 
-  const outcome = await prisma.$transaction(async (tx) => {
+  const outcome = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const claimed = await tx.invitation.updateMany({ where: { id: invite.id, status: InvitationStatus.PENDING }, data: { status: InvitationStatus.ACCEPTED, updatedAt: new Date() } });
     if (claimed.count !== 1) throw new Error("ALREADY_USED");
 
@@ -159,8 +204,8 @@ export async function acceptInvitation(token: string, userId: string, email: str
   return {
     accepted: true,
     alreadyMember: outcome.alreadyMember,
-    workspaceUid: invite.workspace!.uid,
-    workspaceName: invite.workspace!.name,
+    workspaceUid: invite.workspace?.uid ?? invite.workspaceUid,
+    workspaceName: invite.workspace?.name ?? "",
   } as const;
 }
 

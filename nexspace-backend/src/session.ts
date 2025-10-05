@@ -22,6 +22,7 @@ export type SessionData = {
   firstName?: string;
   lastName?: string;
   provider?: Provider;
+  avatar?: string; // optional URL for user avatar (e.g., Google picture)
 
   createdAt: string;      // ISO
   lastSeenAt: string;     // ISO
@@ -88,6 +89,7 @@ function toSessionDataFromPayload(p: any): SessionData {
     firstName: p.firstName,
     lastName: p.lastName,
     provider: p.provider,
+    avatar: p.avatar,
     createdAt: new Date((p.iat || Math.floor(Date.now()/1000)) * 1000).toISOString(),
     lastSeenAt: nowIso,
   };
@@ -102,6 +104,7 @@ function buildPayloadFromUser(user: any, ttlSeconds: number) {
     firstName: user.firstName,
     lastName: user.lastName,
     provider: user.provider,
+    avatar: (user as any).avatar,
     iat: now,
     exp: now + Math.max(1, ttlSeconds),
   };
@@ -150,6 +153,7 @@ export async function createSession(
     firstName?: string;
     lastName?: string;
     provider?: Provider;
+    avatar?: string;
   },
   ttlSeconds = DEFAULT_TTL
 ): Promise<SessionData> {
@@ -176,6 +180,7 @@ export async function createSession(
     firstName: user.firstName,
     lastName: user.lastName,
     provider: user.provider,
+    avatar: user.avatar,
     createdAt: now,
     lastSeenAt: now,
   };

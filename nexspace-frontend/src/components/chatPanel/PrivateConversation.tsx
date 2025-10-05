@@ -3,6 +3,7 @@ import DaySeparator from '../DateSeperator';
 import { shouldShowDaySeparator, getDayLabel, isMessageMine } from '../../utils/util';
 import MessageItem from './MessageItem';
 import type { ChatMessage, DMThreadPreview } from '../../stores/meetingStore';
+import { useMeetingStore } from '../../stores/meetingStore';
 
 interface PrivateConversationProps {
     selectedThread: DMThreadPreview;
@@ -29,6 +30,7 @@ const PrivateConversation = forwardRef<HTMLDivElement, PrivateConversationProps>
     retryMessage,
     loadChatHistory,
 }, ref) => {
+    const avatarById = useMeetingStore((s) => s.avatarById);
     const scrollTimer = useRef<number | null>(null);
     const [scrolling, setScrolling] = useState(false);
     const [loading, setLoading] = useState(true);
@@ -119,7 +121,7 @@ const PrivateConversation = forwardRef<HTMLDivElement, PrivateConversationProps>
                     const previousMessage = index > 0 ? dmMessages[index - 1] : undefined;
                     const showDaySeparator = shouldShowDaySeparator(message, previousMessage);
                     const isMine = isMessageMine({ message, myLivekitId, myUserId });
-                    const avatarUrl = isMine ? selfAvatar : selectedThread.peerAvatar;
+                    const avatarUrl = isMine ? selfAvatar : (selectedThread.peerAvatar || avatarById[selectedThread.peerId]);
                     return (
                         <React.Fragment key={message.id}>
                             {showDaySeparator && (

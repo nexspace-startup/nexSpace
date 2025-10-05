@@ -29,6 +29,7 @@ interface liveKitConfig {
 
 export interface Config {
   webOrigin?: string;
+  appOrigin?: string;
   port: number;
   nodeEnv: string;
   sessionSecret: string;
@@ -47,6 +48,7 @@ export const config: Config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   sessionSecret: process.env.SESSION_SECRET || 'dev-secret',
   webOrigin: process.env.WEB_ORIGIN || 'http://localhost:5173',
+  appOrigin: process.env.APP_ORIGIN,
   mail: {
     from: process.env.MAIL_FROM || "Nexspace <no-reply@nexspace.local>",
     smtp: {

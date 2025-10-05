@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useUserStore } from "../stores/userStore";
 import settingsIcon from "../assets/settings_icon.svg";
 import { initialsFrom } from "../utils/util";
+import { useMeetingStore } from "../stores/meetingStore";
 
 export type ProfileFlyoutProps = {
   open: boolean;
@@ -23,6 +24,8 @@ const ProfileFlyout: React.FC<ProfileFlyoutProps> = ({
   const navigate = useNavigate();
   const user = useUserStore((s) => s.user);
   const logout = useUserStore((s) => s.logout);
+  const getAvatarFor = useMeetingStore((s) => s.getAvatarFor);
+  const localSid = useMeetingStore((s) => (s.room as any)?.localParticipant?.sid ?? (s.room as any)?.localParticipant?.identity);
 
   // outside click + Escape to close
   useEffect(() => {
@@ -52,7 +55,11 @@ const ProfileFlyout: React.FC<ProfileFlyoutProps> = ({
     return n || "User";
   }, [user]);
   const email = user?.email ?? "";
-  const avatarUrl = (user as any)?.avatar ?? undefined;
+  // Prefer in-room avatar if available (from LiveKit metadata), fallback to userStore avatar
+  const avatarUrl = useMemo(() => {
+    const fromMeeting = localSid ? getAvatarFor(localSid as string) : undefined;
+    return fromMeeting || (user as any)?.avatar || undefined;
+  }, [getAvatarFor, localSid, user]);
 
   if (!open) return null;
 

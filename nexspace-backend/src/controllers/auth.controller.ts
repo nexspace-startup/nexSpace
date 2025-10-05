@@ -4,7 +4,7 @@ import { AppError } from "../middleware/error.js";
 import { GoogleCallbackSchema, SigninSchema, CheckEmailSchema } from "../validators/authValidators.js";
 import type { z } from "zod";
 import { googleExchangeAndVerify, googleVerifyIdToken, signInWithEmailPassword, ensureOAuthUser } from "../services/auth.service.js";
-import { findUserByEmail, seachByUsernameEmail } from "../repositories/user.repository.js";
+import { findUserByEmail, seachByUsernameEmail, type UserSearchResult } from "../repositories/user.repository.js";
 
 export async function googleCallback(req: Request, res: Response) {
   // Coerce input to support both code and id token shapes; allow body or query
@@ -23,7 +23,7 @@ export async function googleCallback(req: Request, res: Response) {
 
   const data = parsed.data as any;
   try {
-    let profile: { sub: string; email: string; given_name: string; family_name: string };
+    let profile: { sub: string; email: string; given_name: string; family_name: string; picture?: string };
     if (data.idToken || data.credential) {
       const idTok = data.idToken ?? data.credential;
       profile = await googleVerifyIdToken(idTok);
@@ -38,16 +38,25 @@ export async function googleCallback(req: Request, res: Response) {
     let sess;
     if (isInviteFlow) {
       const userIdBn = await ensureOAuthUser({ provider: "google", sub, email, firstName: given_name, lastName: family_name });
-      sess = await createSession(
-        { userId: String(userIdBn), sub, email, firstName: given_name, lastName: family_name, provider: "google" },
-        DEFAULT_TTL
-      );
+      sess = await createSession({
+        userId: String(userIdBn),
+        sub,
+        email,
+        firstName: given_name,
+        lastName: family_name,
+        provider: "google",
+        avatar: profile.picture,
+      }, DEFAULT_TTL);
     } else {
       // OAuth-first session, no DB user yet
-      sess = await createSession(
-        { sub, email, firstName: given_name, lastName: family_name, provider: "google" },
-        DEFAULT_TTL
-      );
+      sess = await createSession({
+        sub,
+        email,
+        firstName: given_name,
+        lastName: family_name,
+        provider: "google",
+        avatar: profile.picture,
+      }, DEFAULT_TTL);
     }
     setSessionCookie(res as any, sess.sid);
     return res.success?.({ isAuthenticated: true }, 200);
@@ -146,14 +155,11 @@ export async function searchUsers(req: Request, res: Response) {
     }
 
     const users = await seachByUsernameEmail(trimmed);
-    // console.log(users, "")
-    // console.log(res)
-    const userList = users?.map(user => ({
+    const userList = users.map((user: UserSearchResult) => ({
       id: String(user.id),
-      name: user.displayName,
-      email: user.email
-    }))
-    console.log(userList)
+      name: user.displayName?.trim() || user.email,
+      email: user.email,
+    }));
     return res.success?.({ userList }, 200);
   } catch (e: any) {
     return res.fail?.(

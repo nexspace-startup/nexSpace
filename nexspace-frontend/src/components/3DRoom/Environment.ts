@@ -4,9 +4,10 @@ import { MODE_PALETTE, type Mode, type ModePalette } from './themeConfig';
 
 // --- Util: set texture to sRGB across three versions
 function setSRGB(tex: THREE.Texture) {
-    (tex as any).colorSpace !== undefined
-        ? ((tex as any).colorSpace = (THREE as any).SRGBColorSpace)
-        : ((tex as any).encoding = (THREE as any).sRGBEncoding);
+    const anyTex = tex as any;
+    if ('colorSpace' in anyTex && anyTex.colorSpace !== undefined) {
+        anyTex.colorSpace = (THREE as any).SRGBColorSpace ?? anyTex.colorSpace;
+    }
 }
 
 // Runtime guard for SSR environments (no window/document)
@@ -63,7 +64,7 @@ function getWallTexture(mode: 'light' | 'dark') {
         if (!WALL_TEX_LIGHT) WALL_TEX_LIGHT = makeWallTexture('#F6F8FB', '#D8DEE9');
         return WALL_TEX_LIGHT;
     }
-    if (!WALL_TEX_DARK) WALL_TEX_DARK = makeWallTexture('#2F3441', '#444B5A');
+    if (!WALL_TEX_DARK) WALL_TEX_DARK = makeWallTexture('#1f2633', '#2d3544');
     return WALL_TEX_DARK;
 }
 

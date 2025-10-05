@@ -11,4 +11,7 @@ export const ENDPOINTS = {
   ONBOARDING: '/onboarding',
   INVITEUSER: '/invite',
   ACCEPTINVITATION: (token: string) => `/invitations/${token}/accept`,
+  WORKSPACES: '/workspace',
+  WORKSPACE_DETAIL: (workspaceUid: string) => `/workspace/${workspaceUid}`,
+  WORKSPACE_MEMBERS: (workspaceId: string) => `/workspace/${workspaceId}/members`,
 } as const;

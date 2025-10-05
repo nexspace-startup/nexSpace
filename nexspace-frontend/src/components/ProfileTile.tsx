@@ -13,6 +13,7 @@ import {
 import { initialsFrom } from "../utils/util";
 import whisperIcon from "../assets/whisper_icon.svg";
 import { useMeetingStore } from "../stores/meetingStore";
+import { useUserStore } from "../stores/userStore";
 import { useShallow } from "zustand/react/shallow";
 
 // Define the type for the component's props
@@ -39,6 +40,9 @@ const ProfileTileComponent: React.FC<Props> = ({ participant }) => {
     }))
   );
   const whisperOn = whisperActive && whisperTargetSid === sid;
+  const avatarById = useMeetingStore((s) => s.avatarById);
+  const userAvatar = useUserStore((s) => s.user?.avatar);
+  const avatarUrl = avatarById[sid] || (isSelf ? userAvatar : undefined);
 
   // Memoize track subscription args to avoid re-subscribing every render
   const trackArgs = useMemo(
@@ -158,9 +162,13 @@ const ProfileTileComponent: React.FC<Props> = ({ participant }) => {
           {showVideo && camRef ? (
             <VideoTrack trackRef={camRef} className="!w-full !h-full object-cover" data-lk-object-fit="cover" />
           ) : (
-            <div className="w-full h-full bg-[#1F1F23] grid place-items-center">
-              <span className="text-base font-semibold text-white">{initialsFrom(name)}</span>
-            </div>
+            avatarUrl ? (
+              <img src={avatarUrl} alt={name} className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full bg-[#1F1F23] grid place-items-center">
+                <span className="text-base font-semibold text-white">{initialsFrom(name)}</span>
+              </div>
+            )
           )}
         </div>
 
