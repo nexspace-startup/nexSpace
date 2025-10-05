@@ -2,17 +2,17 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three';
 import { useTracks, isTrackReference } from '@livekit/components-react';
 import { RoomEvent, Track } from 'livekit-client';
-import { useMeetingStore } from '../stores/meetingStore';
-import { useUIStore } from '../stores/uiStore';
+import { useMeetingStore } from '../../stores/meetingStore';
+import { useUIStore } from '../../stores/uiStore';
 import { useShallow } from 'zustand/react/shallow';
-import { useViewportSize } from '../hooks/useViewportSize';
-import { DeskGridManager, type SeatTransform } from './3DRoom/DeskGridManager';
-import { assignParticipantsToDesks } from './3DRoom/Participants';
-import { type DeskPrefab, createDeskModule } from './3DRoom/Desks';
-import { buildEnvironment, applyEnvironmentTheme, animateEnvironmentTheme } from './3DRoom/Environment';
-import { MODE_PALETTE } from './3DRoom/themeConfig';
-import { type BuiltZonesInfo, buildZones, applyZoneTheme, animateZoneTheme } from './3DRoom/Zone';
-import { COLLIDER_BLOCKLIST } from './3DRoom/colliderBlocklist';
+import { useViewportSize } from '../../hooks/useViewportSize';
+import { DeskGridManager, type SeatTransform } from './lib3d/DeskGridManager';
+import { assignParticipantsToDesks } from './lib3d/Participants';
+import { type DeskPrefab, createDeskModule } from './lib3d/Desks';
+import { buildEnvironment, applyEnvironmentTheme, animateEnvironmentTheme } from './lib3d/Environment';
+import { MODE_PALETTE } from './lib3d/themeConfig';
+import { type BuiltZonesInfo, buildZones, applyZoneTheme, animateZoneTheme } from './lib3d/Zone';
+import { COLLIDER_BLOCKLIST } from './lib3d/colliderBlocklist';
 
 type Props = { bottomSafeAreaPx?: number; topSafeAreaPx?: number; };
 
@@ -425,7 +425,7 @@ function createPathLine(points: THREE.Vector3[]): THREE.Line {
   return new THREE.Line(geometry, material);
 }
 
-const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96 }) => {
+const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96 }) => {
   const { participants, room } = useMeetingStore(useShallow((s) => ({ participants: s.participants, room: s.room })));
   const chatOpen = useMeetingStore((s) => s.chatOpen);
   const theme = useUIStore((s) => s.theme);
@@ -3204,18 +3204,4 @@ function drawMinimap(
   ctx.shadowOffsetY = 0;
 }
 
-export default Meeting3D;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+export default SceneRoot;

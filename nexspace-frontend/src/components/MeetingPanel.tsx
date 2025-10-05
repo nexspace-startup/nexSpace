@@ -5,7 +5,7 @@ import "@livekit/components-styles";
 import { useShallow } from "zustand/react/shallow";
 import MeetingControls from "./MeetingControls";
 import MeetingGrid from "./MeetingGrid";
-import Meeting3D from "./Meeting3D";
+import Meeting3D from "../features/meeting3d";
 import TopWidget from "./TopWidget";
 import ChatPanel from "./ChatPanel";
 import { useMeetingStore } from "../stores/meetingStore";
