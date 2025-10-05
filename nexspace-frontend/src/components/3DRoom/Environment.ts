@@ -64,7 +64,7 @@ function getWallTexture(mode: 'light' | 'dark') {
         if (!WALL_TEX_LIGHT) WALL_TEX_LIGHT = makeWallTexture('#F6F8FB', '#D8DEE9');
         return WALL_TEX_LIGHT;
     }
-    if (!WALL_TEX_DARK) WALL_TEX_DARK = makeWallTexture('#2F3441', '#444B5A');
+    if (!WALL_TEX_DARK) WALL_TEX_DARK = makeWallTexture('#1f2633', '#2d3544');
     return WALL_TEX_DARK;
 }
 
