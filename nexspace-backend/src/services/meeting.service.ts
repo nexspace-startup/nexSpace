@@ -33,9 +33,12 @@ export async function buildMeetingJoinToken(userId: string, workspaceUid: string
   const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, { identity, name: displayName, ttl: "2h" });
   try {
     const avatar = sess?.avatar ?? undefined;
-    const presence = { status: "IN_MEETING", ts: Date.now() };
-    const meta = JSON.stringify({ profile: { name: displayName, avatar }, presence });
+    const meta = JSON.stringify({ profile: { name: displayName, avatar } });
     (at as unknown as { metadata?: string }).metadata = meta;
+    (at as unknown as { attributes?: Record<string, string> }).attributes = {
+      presence_status: "IN_MEETING",
+      presence_ts: Date.now().toString(),
+    };
   } catch { /* ignore */ }
   at.addGrant({ room: ws.uid, roomJoin: true, canSubscribe: true, canPublish: true, canPublishData: true });
   const token = await at.toJwt();

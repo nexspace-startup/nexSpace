@@ -9,11 +9,18 @@ function presenceKey(roomUid: string, identity: string) {
   return `presence:room:${roomUid}:identity:${identity}`;
 }
 
-export async function updateParticipantPresenceMetadata(roomUid: string, identity: string, status: PresenceStatusAPI) {
+const PRESENCE_STATUS_ATTRIBUTE = 'presence_status';
+const PRESENCE_TS_ATTRIBUTE = 'presence_ts';
+
+export async function updateParticipantPresenceAttributes(roomUid: string, identity: string, status: PresenceStatusAPI) {
   try {
     const svc = new RoomServiceClient(config.liveKit.url, config.liveKit.apiKey, config.liveKit.apiSecret);
-    const payload = JSON.stringify({ presence: { status: status.toLowerCase(), ts: Date.now() } });
-    await svc.updateParticipant(roomUid, identity, { metadata: payload });
+    await svc.updateParticipant(roomUid, identity, {
+      attributes: {
+        [PRESENCE_STATUS_ATTRIBUTE]: status,
+        [PRESENCE_TS_ATTRIBUTE]: Date.now().toString(),
+      },
+    });
   } catch (e) {
     // Ignore if participant is not currently in the room
   }
@@ -33,7 +40,7 @@ export async function upsertPresenceOnJoin(args: { roomUid: string; identity: st
   try {
     await writeJson(presenceKey(roomUid, identity), { status: 'in_meeting', ts: Date.now(), sid: participantSid });
   } catch {}
-  await updateParticipantPresenceMetadata(roomUid, identity, 'IN_MEETING');
+  await updateParticipantPresenceAttributes(roomUid, identity, 'IN_MEETING');
 }
 
 export async function clearPresenceOnLeave(args: { roomUid: string; identity: string; participantSid?: string }) {
@@ -73,6 +80,6 @@ export async function setUserPresenceStatus(args: { roomUid: string; identity: s
   } catch {}
 
   // Update LiveKit metadata (best-effort)
-  await updateParticipantPresenceMetadata(roomUid, identity, status);
+  await updateParticipantPresenceAttributes(roomUid, identity, status);
 }
 

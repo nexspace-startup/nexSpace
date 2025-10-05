@@ -6,7 +6,7 @@ import { useWorkspaceStore } from "./workspaceStore";
 import { useUserStore } from "./userStore";
 import { api } from "../services/httpService";
 import { toast } from "./toastStore";
-import type { PresenceStatus } from "../constants/enums";
+import { PresenceStatusConstants, type PresenceStatus } from "../constants/enums";
 
 // ============================================================================
 // Types
@@ -114,6 +114,44 @@ export type MeetingState = {
 // Helper Functions
 // ============================================================================
 
+const PRESENCE_STATUS_KEY = "presence_status";
+const PRESENCE_TS_KEY = "presence_ts";
+const VALID_PRESENCE_STATUSES = new Set<PresenceStatus>(Object.values(PresenceStatusConstants));
+
+const normalizePresenceStatus = (value?: unknown): PresenceStatus | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.toUpperCase() as PresenceStatus;
+  return VALID_PRESENCE_STATUSES.has(normalized) ? normalized : null;
+};
+
+const parsePresenceRecord = (
+  participant: any,
+  metadata?: { presence?: { status?: string; ts?: unknown } }
+): PresenceRecord | null => {
+  if (!participant) return null;
+  const attrs = (participant as any)?.attributes as Record<string, string> | undefined;
+  const statusValue =
+    attrs?.[PRESENCE_STATUS_KEY] ??
+    attrs?.["presence.status"] ??
+    metadata?.presence?.status;
+
+  const status = normalizePresenceStatus(statusValue);
+  if (!status) return null;
+
+  const tsValue =
+    attrs?.[PRESENCE_TS_KEY] ??
+    attrs?.["presence.ts"] ??
+    metadata?.presence?.ts;
+
+  const tsNumber =
+    typeof tsValue === "number"
+      ? tsValue
+      : Number.parseInt(typeof tsValue === "string" ? tsValue : "", 10);
+
+  const ts = Number.isFinite(tsNumber) ? tsNumber : Date.now();
+  return { status, ts };
+};
+
 const computeParticipants = (room: Room | null): MeetingAvatar[] => {
   if (!room) return [];
 
@@ -122,12 +160,12 @@ const computeParticipants = (room: Room | null): MeetingAvatar[] => {
   return list.map((p) => {
     const json = parseParticipantMetadata((p as any)?.metadata);
     const avatarUrl = json?.profile?.avatar;
-    const status = json?.presence?.status;
+    const presence = parsePresenceRecord(p, json ?? undefined);
     return {
       id: (p as any)?.sid ?? p.identity,
       name: (p as any)?.name ?? p.identity,
       avatar: avatarUrl,
-      status: status,
+      status: presence?.status,
     };
   })
 };
@@ -221,22 +259,16 @@ export const useMeetingStore = create<MeetingState>()(
         for (const p of all) {
           const pid = getParticipantId(p);
           const ident = (p as any)?.identity;
-          const json = parseParticipantMetadata((p as any)?.metadata);
+          if (!pid) continue;
 
-          if (!pid || !json) continue;
-
-          // Extract presence
-          if (json.presence?.status) {
-            const record: PresenceRecord = {
-              status: json.presence.status,
-              ts: Number(json.presence.ts) || Date.now(),
-            };
-            presencePatch[pid] = record;
-            if (ident && ident !== pid) presencePatch[ident] = record;
+          const metadata = parseParticipantMetadata((p as any)?.metadata);
+          const presence = parsePresenceRecord(p, metadata ?? undefined);
+          if (presence) {
+            presencePatch[pid] = presence;
+            if (ident && ident !== pid) presencePatch[ident] = presence;
           }
 
-          // Extract avatar
-          const avatar = json.profile?.avatar;
+          const avatar = metadata?.profile?.avatar;
           if (avatar !== undefined) {
             avatarPatch[pid] = avatar;
             if (ident && ident !== pid) avatarPatch[ident] = avatar;
@@ -254,49 +286,58 @@ export const useMeetingStore = create<MeetingState>()(
       }
     };
 
-    const updatePresenceFromMetadata = (
-      previousMetadata: string | undefined,
-      participant: any
+    const syncParticipantSnapshot = (
+      participant: any,
+      previousMetadata?: string
     ) => {
       const pid = getParticipantId(participant);
       const ident = participant?.identity;
 
       if (!pid) return;
-      if (previousMetadata == participant?.metadata) return;
-      const json = parseParticipantMetadata(participant?.metadata);
-      if (!json) return;
+      if (previousMetadata !== undefined && previousMetadata === participant?.metadata) return;
+
+      const metadata = parseParticipantMetadata(participant?.metadata);
+      const presence = parsePresenceRecord(participant, metadata ?? undefined);
 
       set((s) => {
         let changed = false;
         const next: Partial<MeetingState> = {};
 
-        // Update presence
-        if (json.presence?.status) {
-          const ts = Number(json.presence.ts) || Date.now();
+        if (presence) {
           const prev = s.presenceById[pid];
-
-          if (!prev || prev.ts <= ts) {
-            const record: PresenceRecord = { status: json.presence.status, ts };
-            next.presenceById = { ...s.presenceById, [pid]: record };
-            changed = true;
+          if (!prev || prev.ts <= presence.ts) {
+            const merged: Record<string, PresenceRecord> = {
+              ...s.presenceById,
+              [pid]: presence,
+            };
 
             if (ident && ident !== pid) {
-              const prev2 = s.presenceById[ident];
-              if (!prev2 || prev2.ts <= ts) {
-                next.presenceById = { ...next.presenceById, [ident]: record };
+              const prevAlias = s.presenceById[ident];
+              if (!prevAlias || prevAlias.ts <= presence.ts) {
+                merged[ident] = presence;
               }
             }
+
+            next.presenceById = merged;
+            changed = true;
           }
         }
 
-        // Update avatar
-        const avatar = json.profile?.avatar;
-        if (avatar !== undefined && s.avatarById[pid] !== avatar) {
-          next.avatarById = { ...s.avatarById, [pid]: avatar };
-          changed = true;
+        const avatar = metadata?.profile?.avatar;
+        if (avatar !== undefined) {
+          const currentAvatar = s.avatarById[pid];
+          if (currentAvatar !== avatar) {
+            const mergedAvatars: Record<string, string | undefined> = {
+              ...s.avatarById,
+              [pid]: avatar,
+            };
 
-          if (ident && ident !== pid && s.avatarById[ident] !== avatar) {
-            next.avatarById = { ...next.avatarById, [ident]: avatar };
+            if (ident && ident !== pid && s.avatarById[ident] !== avatar) {
+              mergedAvatars[ident] = avatar;
+            }
+
+            next.avatarById = mergedAvatars;
+            changed = true;
           }
         }
 
@@ -653,7 +694,7 @@ export const useMeetingStore = create<MeetingState>()(
 
       const onParticipantConnected = (p: Participant) => {
         updateParticipants();
-        updatePresenceFromMetadata((p as any)?.metadata, p);
+        syncParticipantSnapshot(p);
 
         const destSid = getParticipantId(p);
         if (destSid) {
@@ -691,10 +732,20 @@ export const useMeetingStore = create<MeetingState>()(
         }
       };
 
-      const onMetadataChanged = (metadata: string | undefined, participant: any) => {
-        // Update presence/avatars maps
-        updatePresenceFromMetadata(metadata, participant);
+      const onMetadataChanged = (
+        previousMetadata: string | undefined,
+        participant: any
+      ) => {
+        syncParticipantSnapshot(participant, previousMetadata);
         // Also refresh participant snapshots so computed status/avatar reflect latest metadata
+        set({ participants: computeParticipants(room) });
+      };
+
+      const onAttributesChanged = (
+        _changed: Record<string, string>,
+        participant: any
+      ) => {
+        syncParticipantSnapshot(participant);
         set({ participants: computeParticipants(room) });
       };
 
@@ -719,7 +770,8 @@ export const useMeetingStore = create<MeetingState>()(
         .on?.(RoomEvent.LocalTrackUnpublished, onAnyTrackChange as any)
         .on?.(RoomEvent.ConnectionStateChanged, onConn)
         .on?.(RoomEvent.DataReceived as any, onData as any)
-        .on?.(RoomEvent.ParticipantMetadataChanged as any, onMetadataChanged);
+        .on?.(RoomEvent.ParticipantMetadataChanged as any, onMetadataChanged)
+        .on?.(RoomEvent.ParticipantAttributesChanged as any, onAttributesChanged);
 
       // Cleanup function
       detachEvents = () => {
@@ -736,7 +788,8 @@ export const useMeetingStore = create<MeetingState>()(
           .off?.(RoomEvent.LocalTrackUnpublished, onAnyTrackChange as any)
           .off?.(RoomEvent.ConnectionStateChanged, onConn)
           .off?.(RoomEvent.DataReceived as any, onData as any)
-          .off?.(RoomEvent.ParticipantMetadataChanged as any, onMetadataChanged);
+          .off?.(RoomEvent.ParticipantMetadataChanged as any, onMetadataChanged)
+          .off?.(RoomEvent.ParticipantAttributesChanged as any, onAttributesChanged);
       };
     };
 
@@ -1262,29 +1315,28 @@ export const useMeetingStore = create<MeetingState>()(
         try {
           const room: any = get().room;
           const pid = getParticipantId(room?.localParticipant);
+          const ident = room?.localParticipant?.identity;
 
           if (pid) {
+            const ts = Date.now();
+            const record: PresenceRecord = { status, ts };
             set((s) => ({
               localPresence: status,
               presenceById: {
                 ...s.presenceById,
-                [pid]: { status, ts: Date.now() },
+                [pid]: record,
+                ...(ident && ident !== pid ? { [ident]: record } : {}),
               },
             }));
 
-            // Also write presence into LiveKit metadata so others receive updates
             try {
               const lp: any = room?.localParticipant;
-              const currentMd = lp?.metadata;
-              let json: any = {};
-              if (currentMd) {
-                try { json = JSON.parse(currentMd); } catch { json = {}; }
-              }
-              const ts = Date.now();
-              json.presence = { ...(json.presence || {}), status, ts };
-              await lp?.setMetadata?.(JSON.stringify(json));
+              await lp?.setAttributes?.({
+                [PRESENCE_STATUS_KEY]: status,
+                [PRESENCE_TS_KEY]: ts.toString(),
+              });
             } catch {
-              // Ignore metadata errors
+              // Ignore attribute errors
             }
           }
         } catch {
