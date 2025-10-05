@@ -77,6 +77,21 @@ const STATUS_COLORS: Partial<Record<PresenceStatus, number>> = {
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const norm = (v: any) => String(v ?? '');
 
+const FPS_BUDGET = 55;
+const DRAW_CALL_BUDGET = 150;
+const JS_HEAP_BUDGET_MB = 500;
+
+type PerfSnapshot = {
+  fps: number;
+  frameMs: number;
+  draws: number;
+  triangles: number;
+  geometries: number;
+  textures: number;
+  jsHeapMB: number | null;
+  totalHeapMB: number | null;
+};
+
 // Bigger canvas; main room will be managed by zones
 const ROOM_W = 48;
 const ROOM_D = 34;
@@ -681,6 +696,27 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const minFrameMsRef = useRef<number>(0); // adaptive render throttle
+  const isTabVisibleRef = useRef<boolean>(true);
+  const initialPerfNow =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : 0;
+  const perfSampleRef = useRef<{ sampleStart: number; frameCount: number; frameTimeTotal: number }>({
+    sampleStart: initialPerfNow,
+    frameCount: 0,
+    frameTimeTotal: 0,
+  });
+  const [perfSnapshot, setPerfSnapshot] = useState<PerfSnapshot>({
+    fps: 0,
+    frameMs: 0,
+    draws: 0,
+    triangles: 0,
+    geometries: 0,
+    textures: 0,
+    jsHeapMB: null,
+    totalHeapMB: null,
+  });
+  const [perfPanelExpanded, setPerfPanelExpanded] = useState<boolean>(() => meeting3dFeatures.showPerformanceOverlay);
   const minimapNextAtRef = useRef<number>(0); // minimap throttle timestamp
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -1142,6 +1178,9 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       sceneRef.current = scene;
       rendererRef.current = renderer;
       cameraRef.current = camera;
+      if (renderer) {
+        renderer.info.autoReset = true;
+      }
     }
 
     if (!scene && !GLOBAL_SCENE_CACHE) {
@@ -1164,6 +1203,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
         renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.info.autoReset = true;
         rendererRef.current = renderer;
         container.appendChild(renderer.domElement);
       } catch (webglError) {
@@ -1513,6 +1553,10 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     queuePathToRef.current = queuePathTo;
 
     // INPUT
+    let disposed = false;
+    let lastT = performance.now();
+    let lastFrameAt = lastT;
+
     const onResize = () => {
       if (!container || !renderer || !camera) return;
       const w = container.clientWidth;
@@ -1523,9 +1567,20 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     };
     window.addEventListener('resize', onResize);
     const onVis = () => {
-      if (document.hidden) {
+      const hidden = document.hidden;
+      const nowTs =
+        typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
+      isTabVisibleRef.current = !hidden;
+      perfSampleRef.current.sampleStart = nowTs;
+      perfSampleRef.current.frameCount = 0;
+      perfSampleRef.current.frameTimeTotal = 0;
+      if (hidden) {
         if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
       } else {
+        lastT = nowTs;
+        lastFrameAt = nowTs;
         // Restore focus and restart render loop after tab switch
         try { container.focus(); } catch {}
         if (!rafRef.current) {
@@ -2037,8 +2092,6 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     minimapRef.current?.addEventListener('mousemove', onMinimapMove);
 
     // Animation loop
-    let lastT = performance.now();
-    let lastFrameAt = lastT;
     const animate = () => {
       const renderer = rendererRef.current;
       const scene = sceneRef.current;
@@ -2046,14 +2099,27 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
       // Don't run animation if WebGL failed or the scene has been torn down
       if (!renderer || !scene || !cam) {
-        rafRef.current = requestAnimationFrame(animate);
+        if (!disposed && isTabVisibleRef.current) {
+          rafRef.current = requestAnimationFrame(animate);
+        } else {
+          rafRef.current = null;
+        }
+        return;
+      }
+
+      if (!isTabVisibleRef.current) {
+        rafRef.current = null;
         return;
       }
 
       const now = performance.now();
       const minDtMs = minFrameMsRef.current;
       if (minDtMs > 0 && now - lastFrameAt < minDtMs) {
-        rafRef.current = requestAnimationFrame(animate);
+        if (!disposed && isTabVisibleRef.current) {
+          rafRef.current = requestAnimationFrame(animate);
+        } else {
+          rafRef.current = null;
+        }
         return;
       }
       lastFrameAt = now;
@@ -2530,11 +2596,68 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         minimapNextAtRef.current = now + budgetMs;
       }
 
-      rafRef.current = requestAnimationFrame(animate);
+      const perfSample = perfSampleRef.current;
+      perfSample.frameCount += 1;
+      perfSample.frameTimeTotal += dt * 1000;
+      const sampleElapsed = now - perfSample.sampleStart;
+      if (sampleElapsed >= 1000) {
+        const fps = perfSample.frameCount ? (perfSample.frameCount * 1000) / sampleElapsed : 0;
+        const avgFrameMs = perfSample.frameCount ? perfSample.frameTimeTotal / perfSample.frameCount : 0;
+        const info = renderer.info;
+        const perfMemory =
+          typeof performance !== 'undefined' && (performance as any)?.memory
+            ? (performance as any).memory
+            : null;
+        const jsHeapValue =
+          perfMemory && typeof perfMemory.usedJSHeapSize === 'number'
+            ? perfMemory.usedJSHeapSize / 1048576
+            : null;
+        const totalHeapValue =
+          perfMemory && typeof perfMemory.totalJSHeapSize === 'number'
+            ? perfMemory.totalJSHeapSize / 1048576
+            : null;
+        const nextSnapshot: PerfSnapshot = {
+          fps: Number.isFinite(fps) ? Math.round(fps * 10) / 10 : 0,
+          frameMs: Number.isFinite(avgFrameMs) ? Math.round(avgFrameMs * 10) / 10 : 0,
+          draws: info?.render?.calls ?? 0,
+          triangles: info?.render?.triangles ?? 0,
+          geometries: info?.memory?.geometries ?? 0,
+          textures: info?.memory?.textures ?? 0,
+          jsHeapMB: jsHeapValue != null ? Math.round(jsHeapValue * 10) / 10 : null,
+          totalHeapMB: totalHeapValue != null ? Math.round(totalHeapValue * 10) / 10 : null,
+        };
+        if (!disposed) {
+          setPerfSnapshot((prev) => {
+            if (
+              prev.fps === nextSnapshot.fps &&
+              prev.frameMs === nextSnapshot.frameMs &&
+              prev.draws === nextSnapshot.draws &&
+              prev.triangles === nextSnapshot.triangles &&
+              prev.geometries === nextSnapshot.geometries &&
+              prev.textures === nextSnapshot.textures &&
+              prev.jsHeapMB === nextSnapshot.jsHeapMB &&
+              prev.totalHeapMB === nextSnapshot.totalHeapMB
+            ) {
+              return prev;
+            }
+            return nextSnapshot;
+          });
+        }
+        perfSample.sampleStart = now;
+        perfSample.frameCount = 0;
+        perfSample.frameTimeTotal = 0;
+      }
+
+      if (!disposed && isTabVisibleRef.current) {
+        rafRef.current = requestAnimationFrame(animate);
+      } else {
+        rafRef.current = null;
+      }
     };
     animate();
 
     return () => {
+      disposed = true;
       queuePathToRef.current = () => {};
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onKey, { capture: true } as any);
@@ -2552,6 +2675,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       targetEl.removeEventListener('click', onClick as any);
       targetEl.removeEventListener('dblclick', onDblClick as any);
       window.removeEventListener('blur', onBlur as any);
+      document.removeEventListener('visibilitychange', onVis);
       minimapRef.current?.removeEventListener('click', onMinimapClick);
       minimapRef.current?.removeEventListener('mousemove', onMinimapMove);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -3348,10 +3472,91 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     queuePathToRef.current(spawn.x, spawn.z, false, targetRoom.title);
   }, []);
 
+  const hasPerfSample = perfSnapshot.fps > 0 || perfSnapshot.draws > 0 || perfSnapshot.triangles > 0;
+  const fpsOk = !hasPerfSample || perfSnapshot.fps >= FPS_BUDGET;
+  const drawOk = !hasPerfSample || perfSnapshot.draws <= DRAW_CALL_BUDGET;
+  const memoryOk = perfSnapshot.jsHeapMB == null || perfSnapshot.jsHeapMB <= JS_HEAP_BUDGET_MB;
+  const fpsDisplay = hasPerfSample ? perfSnapshot.fps.toFixed(1) : '—';
+  const frameDisplay = hasPerfSample ? perfSnapshot.frameMs.toFixed(1) : '—';
+  const drawDisplay = hasPerfSample ? perfSnapshot.draws.toLocaleString() : '—';
+  const triangleDisplay = hasPerfSample ? perfSnapshot.triangles.toLocaleString() : '—';
+  const geometryDisplay = hasPerfSample ? perfSnapshot.geometries.toLocaleString() : '—';
+  const textureDisplay = hasPerfSample ? perfSnapshot.textures.toLocaleString() : '—';
+  const jsHeapDisplay = perfSnapshot.jsHeapMB != null ? Math.round(perfSnapshot.jsHeapMB).toString() : '—';
+  const totalHeapDisplay = perfSnapshot.totalHeapMB != null ? Math.round(perfSnapshot.totalHeapMB).toString() : '';
+
   const themeClass = theme === 'light' ? 'theme-light' : 'theme-dark';
   const localParticipantId = localParticipantIdRef.current || norm(localSid);
   return (
     <div className={`relative h-full w-full overflow-hidden ns-meeting3d ${themeClass}`}>
+      {meeting3dFeatures.showPerformanceOverlay && (
+        <div
+          className="pointer-events-auto absolute left-4 z-40 w-[240px] rounded-lg border px-3 py-2 text-[11px] shadow-lg backdrop-blur"
+          style={{
+            top: (topSafeAreaPx ?? 0) + 16,
+            background: 'var(--surface-1)',
+            borderColor: 'var(--panel-border)',
+            color: 'var(--text-2)',
+          }}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[12px] font-semibold" style={{ color: 'var(--text-1)' }}>Performance</span>
+            <div className="flex items-center gap-2">
+              <span className={`${fpsOk ? 'text-emerald-400' : 'text-amber-400'} font-semibold`}>{fpsDisplay}{fpsDisplay !== '—' ? ' fps' : ''}</span>
+              <button
+                type="button"
+                onClick={() => setPerfPanelExpanded((prev) => !prev)}
+                className="rounded border px-2 py-0.5 text-[10px]"
+                style={{ borderColor: 'var(--panel-border)', color: 'var(--text-2)' }}
+                aria-expanded={perfPanelExpanded}
+              >
+                {perfPanelExpanded ? 'Hide' : 'Show'}
+              </button>
+            </div>
+          </div>
+          {perfPanelExpanded && (
+            <div className="mt-2 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="opacity-70">Frame time</span>
+                <span>{frameDisplay}{frameDisplay !== '—' ? ' ms' : ''}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="opacity-70">Draw calls</span>
+                <span className={`${drawOk ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {drawDisplay}
+                  <span className="opacity-50"> / {DRAW_CALL_BUDGET}</span>
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="opacity-70">Triangles</span>
+                <span>{triangleDisplay}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="opacity-70">Geometries</span>
+                <span>{geometryDisplay}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="opacity-70">Textures</span>
+                <span>{textureDisplay}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="opacity-70">JS Heap</span>
+                <span className={`${memoryOk ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {jsHeapDisplay}
+                  {jsHeapDisplay !== '—' && ' MB'}
+                  <span className="opacity-50"> / {JS_HEAP_BUDGET_MB} MB</span>
+                </span>
+              </div>
+              {totalHeapDisplay && (
+                <div className="flex items-center justify-between">
+                  <span className="opacity-70">Heap cap</span>
+                  <span>{totalHeapDisplay} MB</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div
         ref={containerRef}
         className="relative mx-auto h-full w-full touch-none focus:outline-none"

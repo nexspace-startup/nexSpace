@@ -23,9 +23,15 @@ Measurements captured on an M2 Air @ 1440×900 using Chrome 130.
 - Draco + Meshopt compressed GLBs for furniture modules.
 - Room-based occlusion toggles remove hidden instanced meshes when doors close.
 
+## Instrumentation HUD
+
+- The in-scene diagnostics panel (top-left) samples FPS, average frame time, draw calls, triangles, and memory usage once per second.
+- Budgets are displayed inline (≥55 FPS, ≤150 draw calls, ≤500 MB JS heap) and highlight amber when exceeded.
+- Collapse the panel for screenshots or disable it globally by setting `showPerformanceOverlay` to `false` in `config.ts`.
+- Sampling automatically pauses when the tab is hidden so background tabs do not skew metrics.
+
 ## Debug commands
 
-- Press `Shift + P` to print render stats in dev mode.
 - Append `?perf=low` to the URL to force battery saver quality mode.
 - Use `localStorage.setItem("meeting3d.theme", "light")` or `"dark"` to persist the chosen lighting environment.
 

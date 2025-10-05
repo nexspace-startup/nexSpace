@@ -9,6 +9,8 @@ export const meeting3dFeatures = {
   enableHdriEnvironment: true,
   /** Toggle GLB-backed room modules. */
   useRoomModules: true,
+  /** Show the in-scene performance diagnostics HUD. */
+  showPerformanceOverlay: true,
 } as const;
 
 export type Meeting3DFeatureFlags = typeof meeting3dFeatures;

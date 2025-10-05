@@ -38,6 +38,7 @@ Only `SceneRoot` currently renders the full scene while we finish migrating logi
 ## Feature flags & navigation
 
 - Flip toggles in `config.ts` to roll out pieces of the revamp (`showMinimapOverlay`, `enforceNavVolumes`, etc.).
+- Toggle `showPerformanceOverlay` when you want to hide the in-scene diagnostics HUD for client demos.
 - Navigation helpers live in `rooms/navigation.ts` and expose sorted nav volumes, adjacency lookups, and portal metadata.
 - `SceneRoot` enforces the nav volumes when the flag is on and uses the room definitions to calculate quick jumps + presence counts.
 
@@ -65,6 +66,13 @@ Meeting3D ships with day and night palettes that update materials and environmen
 ## Lazy loading & code splitting
 
 `index.tsx` is imported via `React.lazy` from `MeetingPanel`. The heavy three.js tree (≈500 KB gz) now sits in its own chunk and only loads when the user switches to the 3D view. Ancillary overlays (mini-map, whiteboard) will follow the same pattern as they are migrated to dedicated components.
+
+## Performance diagnostics HUD
+
+- The performance overlay (top-left) samples FPS, frame time, draw calls, triangles, geometry/texture counts, and JavaScript heap usage every second.
+- Budgets are inlined next to each metric (55 FPS, ≤150 draw calls, ≤500 MB heap) so QA can spot regressions at a glance.
+- Collapse the panel via the `Hide` button or disable it entirely with the `showPerformanceOverlay` feature flag.
+- Metrics pause automatically when the tab is hidden so background tabs do not skew the sampling window.
 
 ## Future work
 
