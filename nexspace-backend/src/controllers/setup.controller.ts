@@ -62,8 +62,8 @@ export async function invite(req: Request, res: Response) {
   const sessUserId = req.auth!.userId! as string;
 
   try {
-    const { invitationurl, emailSent, reused } = await createInvitationForWorkspace(sessUserId, parsed.data);
-    return res.success?.({ invitationurl, emailSent }, reused ? 200 : 201);
+    const { invitationUrl, emailSent, reused } = await createInvitationForWorkspace(sessUserId, parsed.data);
+    return res.success?.({ invitationUrl, emailSent }, reused ? 200 : 201);
   } catch (e: any) {
     const code = e?.message;
     if (code === "INVITER_NOT_FOUND") return res.fail?.([{ message: "Inviter not found", code: "INVITER_NOT_FOUND" }], 403);

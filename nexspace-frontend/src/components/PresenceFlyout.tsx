@@ -287,7 +287,7 @@ const ParticipantItem: React.FC<{
             {displayName}
           </div>
           <div className="text-[#80889B] text-[12px] font-manrope mt-1">
-            {participant.id}
+            {participant.email}
           </div>
         </div>
       </div>

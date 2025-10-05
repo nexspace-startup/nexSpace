@@ -53,7 +53,10 @@ const MobileWorkspaceList: React.FC = () => {
               </div>
               <button
                 className={`h-9 px-3 rounded-xl text-sm font-semibold ${joining && isActive ? 'opacity-70 cursor-wait' : ''} ${isActive ? 'bg-[#3D93F8] text-white' : 'bg-white/10 text-white'} `}
-                onClick={async () => { setActiveWorkspace(ws.id); await joinActiveWorkspace(); }}
+                onClick={async () => {
+                  await setActiveWorkspace(ws.id);
+                  await joinActiveWorkspace();
+                }}
                 disabled={joining && isActive}
               >
                 {joining && isActive ? 'Joining…' : 'Join'}

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { createSofa } from './sofa';
 import { createOfficeChair } from './officeChair';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { MODE_PALETTE, type ModePalette } from './themeConfig';
+import { MODE_PALETTE, type ModePalette, type FurniturePalette } from './themeConfig';
 
 function createRealisticTiledFloor(
     scene: THREE.Scene,
@@ -454,6 +454,8 @@ export function buildZones(
     { ROOM_W, ROOM_D, palette, mode }: { ROOM_W: number; ROOM_D: number; palette?: import('./themeConfig').ModePalette; mode?: 'light' | 'dark' }
 ): BuiltZonesInfo {
     const activePalette: import('./themeConfig').ModePalette = palette ?? MODE_PALETTE[mode || 'dark'];
+    const furniture = activePalette.furniture;
+    const toHex = (value: number) => `#${value.toString(16).padStart(6, '0')}`;
     const colliders: THREE.Box3[] = [];
 
     // Enhanced big screen (north) with modern look
@@ -518,12 +520,12 @@ export function buildZones(
         'focus'
     );
     doorways.push({ x: huddleA.maxX, z: -2.0 });
-    addWarmLighting(scene, (huddleA.minX + huddleA.maxX) / 2, 2.2, (huddleA.minZ + huddleA.maxZ) / 2, 0x4a90e2);
+    addWarmLighting(scene, (huddleA.minX + huddleA.maxX) / 2, 2.2, (huddleA.minZ + huddleA.maxZ) / 2, activePalette.rooms.focus.accent);
 
     // Conference Room — glass walls with open glass door and beige roof
     const confGlass = addGlassRoomWithOpenDoor(scene, colliders, confRoom, 5.2, 0.06, { wall: 'W', width: 2.2, centerZ: -2.0 });
     doorways.push({ x: confRoom.minX, z: -2.0 });
-    addWarmLighting(scene, (confRoom.minX + confRoom.maxX) / 2, 2.7, (confRoom.minZ + confRoom.maxZ) / 2, 0xffd8a8);
+    addWarmLighting(scene, (confRoom.minX + confRoom.maxX) / 2, 2.7, (confRoom.minZ + confRoom.maxZ) / 2, activePalette.rooms.conference?.accent ?? activePalette.accent);
 
     // Lounge - warm peach
     addRoomWithDoor(
@@ -538,7 +540,7 @@ export function buildZones(
         'lounge'
     );
     doorways.push({ x: (loungeRect.minX + loungeRect.maxX) / 2, z: loungeRect.minZ });
-    addWarmLighting(scene, (loungeRect.minX + loungeRect.maxX) / 2, 2.2, (loungeRect.minZ + loungeRect.maxZ) / 2, 0xffa500);
+    addWarmLighting(scene, (loungeRect.minX + loungeRect.maxX) / 2, 2.2, (loungeRect.minZ + loungeRect.maxZ) / 2, activePalette.rooms.lounge.accent);
 
     // Game Room - soft lavender
     addRoomWithDoor(
@@ -553,7 +555,7 @@ export function buildZones(
         'game'
     );
     doorways.push({ x: (gameRect.minX + gameRect.maxX) / 2, z: gameRect.minZ });
-    addWarmLighting(scene, (gameRect.minX + gameRect.maxX) / 2, 2.2, (gameRect.minZ + gameRect.maxZ) / 2, 0xda70d6);
+    addWarmLighting(scene, (gameRect.minX + gameRect.maxX) / 2, 2.2, (gameRect.minZ + gameRect.maxZ) / 2, activePalette.rooms.game.accent);
 
     // Kitchen - pale mint
     addRoomWithDoor(
@@ -568,7 +570,7 @@ export function buildZones(
         'kitchen'
     );
     doorways.push({ x: pantryRect.minX, z: (pantryRect.minZ + pantryRect.maxZ) / 2 });
-    addWarmLighting(scene, (pantryRect.minX + pantryRect.maxX) / 2, 2.2, (pantryRect.minZ + pantryRect.maxZ) / 2, 0xffd700);
+    addWarmLighting(scene, (pantryRect.minX + pantryRect.maxX) / 2, 2.2, (pantryRect.minZ + pantryRect.maxZ) / 2, activePalette.rooms.kitchen.accent);
 
     // 1) Compute center once
     const confCenter = {
@@ -588,9 +590,11 @@ export function buildZones(
     const tableLen = Math.min((confRoom.maxX - confRoom.minX) * 0.72, 8.0);
     const tableDepth = Math.min((confRoom.maxZ - confRoom.minZ) * 0.48, 3.2);
 
+    const confTopMat = createWoodMaterial(furniture.conferenceTableTop, 0.35);
+    confTopMat.userData.furnitureKey = 'conferenceTableTop';
     const confTableTop = new THREE.Mesh(
         new THREE.BoxGeometry(tableLen, 0.08, tableDepth),
-        createWoodMaterial(0xd0b089, 0.35)
+        confTopMat
     );
     confTableTop.position.set(confCenter.x, 0.82, confCenter.z);
     confTableTop.castShadow = confTableTop.receiveShadow = true;
@@ -598,7 +602,8 @@ export function buildZones(
     created.push(confTableTop);
 
     // legs
-    const legMat = new THREE.MeshStandardMaterial({ color: 0x8a8e94, metalness: 0.75, roughness: 0.25 });
+    const legMat = new THREE.MeshStandardMaterial({ color: furniture.conferenceTableLegs, metalness: 0.75, roughness: 0.25 });
+    legMat.userData.furnitureKey = 'conferenceTableLegs';
     const legGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.78, 16);
     const legOffsetX = (tableLen / 2) - 0.25;
     const legOffsetZ = (tableDepth / 2) - 0.25;
@@ -616,19 +621,20 @@ export function buildZones(
     const sideCount = 4;
     const gap = tableLen / (sideCount + 1);
     const chairDist = tableDepth / 2 + 0.55;
-    const chairColor = '#3d3f45';
-    const frameColor = '#d7cdb8';
+    const chairSeatColor = furniture.chairSeat;
+    const chairFrameColor = furniture.chairFrame;
+    const chairPlasticColor = furniture.chairPlastic;
 
     for (let i = 1; i <= sideCount; i++) {
         const offsetX = -tableLen / 2 + i * gap;
 
-        const c1 = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
+        const c1 = createOfficeChair({ seatColor: chairSeatColor, frameColor: chairFrameColor, plasticColor: chairPlasticColor, wheelCount: 5 });
         c1.group.position.set(confCenter.x + offsetX, 0, confCenter.z + chairDist);
         c1.group.rotation.y = Math.PI;
         scene.add(c1.group);
         created.push(c1.group);
 
-        const c2 = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
+        const c2 = createOfficeChair({ seatColor: chairSeatColor, frameColor: chairFrameColor, plasticColor: chairPlasticColor, wheelCount: 5 });
         c2.group.position.set(confCenter.x + offsetX, 0, confCenter.z - chairDist);
         c2.group.rotation.y = 0;
         scene.add(c2.group);
@@ -637,13 +643,13 @@ export function buildZones(
 
     const headDist = tableLen / 2 + 0.6;
 
-    const cWest = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
+    const cWest = createOfficeChair({ seatColor: chairSeatColor, frameColor: chairFrameColor, plasticColor: chairPlasticColor, wheelCount: 5 });
     cWest.group.position.set(confCenter.x - headDist, 0, confCenter.z);
     cWest.group.rotation.y = Math.PI / 2;
     scene.add(cWest.group);
     created.push(cWest.group);
 
-    const cEast = createOfficeChair({ seatColor: chairColor, frameColor, wheelCount: 5 });
+    const cEast = createOfficeChair({ seatColor: chairSeatColor, frameColor: chairFrameColor, plasticColor: chairPlasticColor, wheelCount: 5 });
     cEast.group.position.set(confCenter.x + headDist, 0, confCenter.z);
     cEast.group.rotation.y = -Math.PI / 2;
     scene.add(cEast.group);
@@ -699,18 +705,22 @@ export function buildZones(
 
     // Enhanced Game Room with modern table and detailed dice
     const gameCenter = { x: (gameRect.minX + gameRect.maxX) / 2, z: (gameRect.minZ + gameRect.maxZ) / 2 };
+    const gameTopMat = createWoodMaterial(furniture.gameTableTop, 0.3);
+    gameTopMat.userData.furnitureKey = 'gameTableTop';
     const tableTop = new THREE.Mesh(
         new THREE.BoxGeometry(2.4, 0.1, 1.4),
-        createWoodMaterial(0x654321, 0.3)
+        gameTopMat
     );
     tableTop.position.set(gameCenter.x, 0.88, gameCenter.z);
     tableTop.castShadow = true;
     tableTop.receiveShadow = true;
     scene.add(tableTop);
 
+    const gameLegMat = new THREE.MeshStandardMaterial({ color: furniture.gameTableLeg, metalness: 0.7, roughness: 0.3 });
+    gameLegMat.userData.furnitureKey = 'gameTableLeg';
     const tableLeg = new THREE.Mesh(
         new THREE.CylinderGeometry(0.08, 0.08, 0.82, 16),
-        new THREE.MeshStandardMaterial({ color: 0x2f2f2f, metalness: 0.7, roughness: 0.3 })
+        gameLegMat
     );
     tableLeg.position.set(gameCenter.x, 0.46, gameCenter.z);
     tableLeg.castShadow = true;
@@ -727,7 +737,7 @@ export function buildZones(
     // Enhanced Labels with click data
     const roomLabelSprites: THREE.Sprite[] = [];
 
-    const lblA = labelSprite('Focus Pod A', 3.2, '#87ceeb');
+    const lblA = labelSprite('Focus Pod A', 3.2, toHex(activePalette.rooms.focus.accent));
     lblA.position.set((huddleA.minX + huddleA.maxX) / 2, 2.8, (huddleA.minZ + huddleA.maxZ) / 2);
     (lblA as any).userData = {
         roomName: 'Focus Pod A',
@@ -737,7 +747,7 @@ export function buildZones(
     scene.add(lblA);
     roomLabelSprites.push(lblA);
 
-    const lblC = labelSprite('Conference', 3.2, '#b0e0e6');
+    const lblC = labelSprite('Conference', 3.2, toHex(activePalette.rooms.conference?.accent ?? activePalette.accent));
     lblC.position.set((confRoom.minX + confRoom.maxX) / 2, 2.9, (confRoom.minZ + confRoom.maxZ) / 2);
     (lblC as any).userData = {
         roomName: 'Conference',
@@ -747,7 +757,7 @@ export function buildZones(
     scene.add(lblC);
     roomLabelSprites.push(lblC);
 
-    const lblL = labelSprite('Lounge', 3.2, '#ffa500');
+    const lblL = labelSprite('Lounge', 3.2, toHex(activePalette.rooms.lounge.accent));
     lblL.position.set((loungeRect.minX + loungeRect.maxX) / 2, 2.8, (loungeRect.minZ + loungeRect.maxZ) / 2);
     (lblL as any).userData = {
         roomName: 'Lounge',
@@ -757,7 +767,7 @@ export function buildZones(
     scene.add(lblL);
     roomLabelSprites.push(lblL);
 
-    const lblG = labelSprite('Game Room', 3.0, '#da70d6');
+    const lblG = labelSprite('Game Room', 3.0, toHex(activePalette.rooms.game.accent));
     lblG.position.set((gameRect.minX + gameRect.maxX) / 2, 2.8, (gameRect.minZ + gameRect.maxZ) / 2);
     (lblG as any).userData = {
         roomName: 'Game Room',
@@ -767,7 +777,7 @@ export function buildZones(
     scene.add(lblG);
     roomLabelSprites.push(lblG);
 
-    const lblKitchen = labelSprite('Kitchen', 3.0, '#ffd700');
+    const lblKitchen = labelSprite('Kitchen', 3.0, toHex(activePalette.rooms.kitchen.accent));
     lblKitchen.position.set((pantryRect.minX + pantryRect.maxX) / 2, 2.2, (pantryRect.minZ + pantryRect.maxZ) / 2);
     (lblKitchen as any).userData = {
         roomName: 'Kitchen',
@@ -812,29 +822,33 @@ export function buildZones(
         scene.add(glowRing);
     }
 
-    pebble('Stage', 0, -ROOM_D / 2 + 3.0, 0x87ceeb);
-    pebble('Conference Table', confCenter.x, confCenter.z, 0x9bf6ff);
-    pebble('Lounge', (loungeRect.minX + loungeRect.maxX) / 2, (loungeRect.minZ + loungeRect.maxZ) / 2, 0xffa500);
-    pebble('Game Table', gameCenter.x, gameCenter.z, 0xda70d6);
-    pebble('Kitchen', (pantryRect.minX + pantryRect.maxX) / 2, (pantryRect.minZ + pantryRect.maxZ) / 2, 0xffd700);
+    pebble('Stage', 0, -ROOM_D / 2 + 3.0, activePalette.accent);
+    pebble('Conference Table', confCenter.x, confCenter.z, activePalette.rooms.conference?.accent ?? activePalette.accent);
+    pebble('Lounge', (loungeRect.minX + loungeRect.maxX) / 2, (loungeRect.minZ + loungeRect.maxZ) / 2, activePalette.rooms.lounge.accent);
+    pebble('Game Table', gameCenter.x, gameCenter.z, activePalette.rooms.game.accent);
+    pebble('Kitchen', (pantryRect.minX + pantryRect.maxX) / 2, (pantryRect.minZ + pantryRect.maxZ) / 2, activePalette.rooms.kitchen.accent);
 
     // Add some decorative plants in the open area
     const plantPositions = [
         { x: -5, z: 5 }, { x: 8, z: 3 }, { x: 2, z: 8 }, { x: -8, z: 6 }
     ];
     plantPositions.forEach((pos) => {
+        const potMaterial = new THREE.MeshStandardMaterial({ color: furniture.plantPot, roughness: 0.8 });
+        potMaterial.userData.furnitureKey = 'plantPot';
         const pot = new THREE.Mesh(
             new THREE.CylinderGeometry(0.4, 0.35, 0.6, 12),
-            new THREE.MeshStandardMaterial({ color: 0x8b4513, roughness: 0.8 })
+            potMaterial
         );
         pot.position.set(pos.x, 0.3, pos.z);
         pot.castShadow = true;
         pot.receiveShadow = true;
         scene.add(pot);
 
+        const plantMaterial = new THREE.MeshStandardMaterial({ color: furniture.plantLeaf, roughness: 0.9 });
+        plantMaterial.userData.furnitureKey = 'plantLeaf';
         const plant = new THREE.Mesh(
             new THREE.SphereGeometry(0.5, 8, 6),
-            new THREE.MeshStandardMaterial({ color: 0x228b22, roughness: 0.9 })
+            plantMaterial
         );
         plant.position.set(pos.x, 0.8, pos.z);
         plant.scale.set(1, 1.2, 1);
@@ -923,9 +937,11 @@ export function buildZones(
         z: (openRect.minZ + openRect.maxZ) / 2 + 7
     };
 
+    const counterMat = createWoodMaterial(furniture.coffeeCounter, 0.4);
+    counterMat.userData.furnitureKey = 'coffeeCounter';
     const coffeeCounter = new THREE.Mesh(
         new THREE.BoxGeometry(2.0, 0.9, 0.9),
-        createWoodMaterial(0x8b4513, 0.4)
+        counterMat
     );
     coffeeCounter.position.set(coffeeStation.x, 0.45, coffeeStation.z);
 
@@ -936,13 +952,33 @@ export function buildZones(
     colliders.push(new THREE.Box3().setFromObject(coffeeCounter));
 
     // Add coffee machine
+    const coffeeMachineMat = new THREE.MeshStandardMaterial({
+        color: furniture.coffeeMachineBody,
+        metalness: 0.7,
+        roughness: 0.3,
+        emissive: new THREE.Color(furniture.coffeeMachineAccent).multiplyScalar(0.12),
+        emissiveIntensity: 0.5,
+    });
+    coffeeMachineMat.userData.furnitureKey = 'coffeeMachineBody';
     const coffeeMachine = new THREE.Mesh(
         new THREE.BoxGeometry(0.6, 0.7, 0.5),
-        new THREE.MeshStandardMaterial({ color: 0x2c2c2c, metalness: 0.7, roughness: 0.3 })
+        coffeeMachineMat
     );
     coffeeMachine.position.set(coffeeStation.x, 1.15, coffeeStation.z);
 
     scene.add(coffeeMachine);
+
+    const coffeeAccentMat = new THREE.MeshStandardMaterial({
+        color: furniture.coffeeMachineAccent,
+        emissive: furniture.coffeeMachineAccent,
+        emissiveIntensity: 0.25,
+        metalness: 0.4,
+        roughness: 0.35,
+    });
+    coffeeAccentMat.userData.furnitureKey = 'coffeeMachineAccent';
+    const coffeeAccent = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.12, 0.05), coffeeAccentMat);
+    coffeeAccent.position.set(coffeeStation.x, 1.26, coffeeStation.z + 0.28);
+    scene.add(coffeeAccent);
 
     // Add some seating in open area
     const casualSeats = [
@@ -950,7 +986,7 @@ export function buildZones(
     ];
 
     casualSeats.forEach(seat => {
-        const sofa = createSofa({ fabricColor: "#7f7f83" }); // grey sofa
+        const sofa = createSofa({ fabricColor: furniture.sofaFabric, legColor: furniture.sofaLegs });
         sofa.position.set(seat.x, 0, seat.z);
         sofa.rotation.y = seat.rotation
         scene.add(sofa);
@@ -997,6 +1033,26 @@ export function buildZones(
 }
 
 
+function applyFurnitureTheme(scene: THREE.Scene, palette: ModePalette) {
+    const seenMaterials = new Set<THREE.Material>();
+    scene.traverse((obj: any) => {
+        if (!obj?.isMesh) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const mat of mats) {
+            if (!mat || seenMaterials.has(mat)) continue;
+            seenMaterials.add(mat);
+            const key = (mat.userData?.furnitureKey ?? obj.userData?.furnitureKey) as keyof FurniturePalette | undefined;
+            if (!key) continue;
+            const color = palette.furniture?.[key];
+            if (typeof color === 'number' && mat.color) {
+                mat.color.set(color);
+                mat.needsUpdate = true;
+            }
+        }
+    });
+}
+
+
 export function applyZoneTheme(scene: THREE.Scene, palette: ModePalette) {
     try {
         // Floor base
@@ -1040,6 +1096,8 @@ export function applyZoneTheme(scene: THREE.Scene, palette: ModePalette) {
                 applyColorTo(o, col);
             }
         });
+
+        applyFurnitureTheme(scene, palette);
     } catch { /* ignore */ }
 }
 
@@ -1071,6 +1129,8 @@ export function animateZoneTheme(scene: THREE.Scene, from: ModePalette, to: Mode
             roomMeshes.push({ m: mesh.material, from: new THREE.Color(source), to: new THREE.Color(target) });
         }
     });
+
+    applyFurnitureTheme(scene, to);
 
     const step = () => {
         const k = Math.min(1, (performance.now() - t0) / durationMs);

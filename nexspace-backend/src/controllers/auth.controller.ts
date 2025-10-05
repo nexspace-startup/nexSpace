@@ -4,7 +4,7 @@ import { AppError } from "../middleware/error.js";
 import { GoogleCallbackSchema, SigninSchema, CheckEmailSchema } from "../validators/authValidators.js";
 import type { z } from "zod";
 import { googleExchangeAndVerify, googleVerifyIdToken, signInWithEmailPassword, ensureOAuthUser } from "../services/auth.service.js";
-import { findUserByEmail, seachByUsernameEmail } from "../repositories/user.repository.js";
+import { findUserByEmail, seachByUsernameEmail, type UserSearchResult } from "../repositories/user.repository.js";
 
 export async function googleCallback(req: Request, res: Response) {
   // Coerce input to support both code and id token shapes; allow body or query
@@ -155,11 +155,11 @@ export async function searchUsers(req: Request, res: Response) {
     }
 
     const users = await seachByUsernameEmail(trimmed);
-    const userList = users?.map(user => ({
+    const userList = users.map((user: UserSearchResult) => ({
       id: String(user.id),
-      name: user.displayName,
-      email: user.email
-    }))
+      name: user.displayName?.trim() || user.email,
+      email: user.email,
+    }));
     return res.success?.({ userList }, 200);
   } catch (e: any) {
     return res.fail?.(

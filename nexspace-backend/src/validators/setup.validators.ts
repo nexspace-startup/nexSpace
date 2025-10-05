@@ -1,6 +1,6 @@
-import { z } from 'zod';
-import { WorkspaceRole } from '@prisma/client';
-import { nameSchemaWithoutSpaces, passwordSchema } from '../utils/common.js';
+import { z } from "zod";
+import { WorkspaceRole } from "@prisma/client";
+import { nameSchemaWithoutSpaces, passwordSchema } from "../utils/common.js";
 
 export const OnboardingSchema = z.object({
   firstName: nameSchemaWithoutSpaces,
@@ -16,7 +16,7 @@ export const OnboardingSchema = z.object({
 export type OnboardingInput = z.infer<typeof OnboardingSchema>;
 
 export const InvitationSchema = z.object({
-  email: z.email(),
+  email: z.string().email(),
   workspaceUid: z.string().min(1),
 });
 export type InvitationInput = z.infer<typeof InvitationSchema>;

@@ -8,6 +8,7 @@ export type ChairOptions = {
     seatDepth?: number;          // front-back
     seatColor?: string | number; // fabric color
     frameColor?: string | number;// metal/plastic frame
+    plasticColor?: string | number;// neutral plastic pieces
     hasArms?: boolean;           // toggle armrests
     wheelCount?: number;         // 5 by default (star base)
     castShadows?: boolean;
@@ -60,6 +61,7 @@ export function createOfficeChair(opts: ChairOptions = {}) {
         seatDepth = 0.50,
         seatColor = "#3c3f46",
         frameColor = "#b8bcc2",
+        plasticColor = "#1b1e22",
         hasArms = true,
         wheelCount = 0,
         castShadows = true,
@@ -78,12 +80,15 @@ export function createOfficeChair(opts: ChairOptions = {}) {
     const fabricMat = new THREE.MeshStandardMaterial({
         color: seatColor, roughness: 0.9, metalness: 0.0,
     });
+    fabricMat.userData.furnitureKey = 'chairSeat';
     const frameMat = new THREE.MeshStandardMaterial({
         color: frameColor, roughness: 0.35, metalness: 0.8,
     });
+    frameMat.userData.furnitureKey = 'chairFrame';
     const plasticMat = new THREE.MeshStandardMaterial({
-        color: "#1b1e22", roughness: 0.6, metalness: 0.1,
+        color: plasticColor, roughness: 0.6, metalness: 0.1,
     });
+    plasticMat.userData.furnitureKey = 'chairPlastic';
 
     // ===== Seat cushion =====
     const seatH = 0.08; // cushion thickness

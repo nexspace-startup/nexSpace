@@ -1,4 +1,4 @@
-import { prisma } from "../prisma.js";
+import { prisma, Prisma, type User } from "../prisma.js";
 
 export async function findUserByEmail(emailLc: string) {
   return prisma.user.findUnique({
@@ -22,7 +22,7 @@ export async function upsertLocalAuthIdentity(userId: bigint, emailLc: string) {
   await prisma.authIdentity.upsert({
     where: { provider_providerId: { provider: "local", providerId: `local:${emailLc}` } },
     update: { lastLoginAt: new Date() },
-    create: { userId, provider: "local" as any, providerId: `local:${emailLc}`, lastLoginAt: new Date() },
+    create: { userId, provider: "local", providerId: `local:${emailLc}`, lastLoginAt: new Date() },
   });
 }
 
@@ -39,19 +39,25 @@ export async function getUserWithMemberships(userId: bigint) {
   });
 }
 
-export async function seachByUsernameEmail(ch: string) {
-  try {
-    return prisma.user.findMany({
-      where: {
-        OR: [{ email: { contains: ch, mode: "insensitive" } }, { displayName: { contains: ch, mode: "insensitive" } },],
-      },
-      select: {
-        id: true, email: true, displayName: true,
-      },
-    });
-  } catch (err) {
-    console.log(err)
+export type UserSearchResult = Pick<User, "id" | "email" | "displayName">;
+
+export async function seachByUsernameEmail(ch: string): Promise<UserSearchResult[]> {
+  const query = ch.trim();
+  if (!query) {
+    return [];
   }
+
+  const where: Prisma.UserWhereInput = {
+    OR: [
+      { email: { contains: query, mode: "insensitive" } },
+      { displayName: { contains: query, mode: "insensitive" } },
+    ],
+  };
+
+  return prisma.user.findMany({
+    where,
+    select: { id: true, email: true, displayName: true },
+  });
 }
 
 

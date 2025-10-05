@@ -7,21 +7,24 @@ export function createSofa(opts: {
     depth?: number;
     height?: number;
     fabricColor?: number | string;
+    legColor?: number | string;
 } = {}) {
     const {
         width = 2.6,
         depth = 1.5,
         height = 1.5,
         fabricColor = "#7f7f83",
+        legColor = "#b8bcc2",
     } = opts;
 
     const sofa = new THREE.Group();
-
+    
     const fabric = new THREE.MeshStandardMaterial({
         color: fabricColor,
         roughness: 0.9,
         metalness: 0.0,
     });
+    fabric.userData.furnitureKey = 'sofaFabric';
 
     // base
     const baseH = 0.15;
@@ -72,7 +75,8 @@ export function createSofa(opts: {
     });
 
     // legs
-    const metal = new THREE.MeshStandardMaterial({ color: "#b8bcc2", metalness: 0.85, roughness: 0.35 });
+    const metal = new THREE.MeshStandardMaterial({ color: legColor, metalness: 0.85, roughness: 0.35 });
+    metal.userData.furnitureKey = 'sofaLegs';
     const legGeo = new THREE.CylinderGeometry(0.012, 0.012, legH, 16);
     const legOffsetX = width / 2 - 0.08;
     const legOffsetZ = depth / 2 - 0.08;
