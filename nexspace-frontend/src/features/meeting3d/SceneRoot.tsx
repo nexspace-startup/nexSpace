@@ -2,7 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three';
 import { useTracks, isTrackReference } from '@livekit/components-react';
 import { RoomEvent, Track } from 'livekit-client';
+import type {
+  LocalParticipant,
+  Participant,
+  RemoteParticipant,
+  RemoteTrackPublication,
+  Room as LiveKitRoom,
+  TrackPublication,
+} from 'livekit-client';
 import { useMeetingStore } from '../../stores/meetingStore';
+import type { MeetingAvatar } from '../../stores/meetingStore';
 import { useUIStore } from '../../stores/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useViewportSize } from '../../hooks/useViewportSize';
@@ -14,9 +23,13 @@ import { MODE_PALETTE } from './lib3d/themeConfig';
 import { type BuiltZonesInfo, buildZones, applyZoneTheme, animateZoneTheme } from './lib3d/Zone';
 import { meeting3dFeatures } from './config';
 import MinimapOverlay, { type MinimapRoomSummary } from './ui/MinimapOverlay';
+import { useSeatInteractionStore, type SeatClaimUpdate } from './interaction/seatStore';
+import { useRoomNote } from './hooks/useRoomNotes';
+import RoomWhiteboard from './ui/RoomWhiteboard';
 import { ROOM_DEFINITIONS, ROOM_NAV_GLOBAL_BOUNDS, ROOM_PORTALS, getRoomById, getRoomCenter } from './rooms/definitions';
 import type { RoomBounds, RoomId, RoomPortal } from './rooms/types';
 import { createRoomPresenceRecord, DEFAULT_SORTED_NAV_VOLUMES, getAdjacentRooms, isPointInsideNavVolumes, resolveRoomForPosition, type NavVolumeRuntime } from './rooms/navigation';
+import type { PresenceStatus } from '../../constants/enums';
 
 type Props = { bottomSafeAreaPx?: number; topSafeAreaPx?: number; };
 
@@ -52,6 +65,14 @@ const TMP_VEC3_D = new THREE.Vector3();
 const TMP_VEC2_A = new THREE.Vector2();
 const TMP_VEC2_B = new THREE.Vector2();
 const TMP_BOX3_A = new THREE.Box3();
+const FLOOR_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const STATUS_COLORS: Partial<Record<PresenceStatus, number>> = {
+  AVAILABLE: 0x34d399,
+  IN_MEETING: 0x60a5fa,
+  DO_NOT_DISTURB: 0xef4444,
+  AWAY: 0xfbbf24,
+  BUSY: 0xf97316,
+};
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const norm = (v: any) => String(v ?? '');
@@ -169,63 +190,119 @@ function makeVideoBadge(tex: THREE.VideoTexture): THREE.Mesh {
   return m;
 }
 
-type ParticipantRow = { id: string; name?: string };
+function applyStatusBadge(group: THREE.Group, status?: PresenceStatus | null) {
+  const badgeName = 'STATUS_BADGE';
+  let badge = group.getObjectByName(badgeName) as THREE.Mesh | undefined;
+  if (!status) {
+    if (badge) {
+      group.remove(badge);
+    }
+    return;
+  }
+  const color = STATUS_COLORS[status] ?? 0x60a5fa;
+  if (!badge) {
+    badge = new THREE.Mesh(
+      new THREE.CircleGeometry(0.14, 24),
+      new THREE.MeshBasicMaterial({ color, toneMapped: false }),
+    );
+    badge.name = badgeName;
+    badge.position.set(0, 2.12, 0);
+    badge.renderOrder = 3;
+    group.add(badge);
+  } else {
+    const mat = badge.material as THREE.MeshBasicMaterial;
+    mat.color.setHex(color);
+  }
+}
+
+type ParticipantRow = {
+  id: string;
+  name?: string;
+  isLocal: boolean;
+  aliasIds: string[];
+};
 
 type AggregatedParticipant = {
   sid: string;
   identity: string;
   name: string;
-  raw: any;
+  raw: Participant | MeetingAvatar | null;
 };
 
-const collectRoomParticipants = (room: unknown): any[] => {
-  try {
-    const lkRoom = room as { localParticipant?: any; remoteParticipants?: Map<string, any> | { values?: () => Iterable<any> } };
-    const remotes = Array.from(lkRoom?.remoteParticipants?.values?.() ?? []);
-    return [lkRoom?.localParticipant, ...remotes].filter(Boolean);
-  } catch {
-    return [];
+type KnownParticipant = Participant | MeetingAvatar | null | undefined;
+
+const getCandidateSid = (candidate: KnownParticipant): string => {
+  if (!candidate) return '';
+  if ('sid' in candidate && typeof candidate.sid === 'string') {
+    return norm(candidate.sid);
   }
+  if ('id' in candidate && typeof candidate.id === 'string') {
+    return norm(candidate.id);
+  }
+  return '';
+};
+
+const getCandidateIdentity = (candidate: KnownParticipant): string => {
+  if (!candidate) return '';
+  if ('identity' in candidate && typeof candidate.identity === 'string') {
+    return norm(candidate.identity);
+  }
+  if ('id' in candidate && typeof candidate.id === 'string') {
+    return norm(candidate.id);
+  }
+  return '';
+};
+
+const getCandidateName = (candidate: KnownParticipant): string => {
+  if (!candidate) return '';
+  if ('name' in candidate && typeof candidate.name === 'string' && candidate.name) {
+    return norm(candidate.name);
+  }
+  if ('identity' in candidate && typeof candidate.identity === 'string' && candidate.identity) {
+    return norm(candidate.identity);
+  }
+  return '';
+};
+
+const collectRoomParticipants = (room: LiveKitRoom | null | undefined): Participant[] => {
+  if (!room) return [];
+  const remotes = Array.from(room.remoteParticipants?.values?.() ?? []);
+  return [room.localParticipant, ...remotes].filter(Boolean) as Participant[];
 };
 
 const mergeParticipant = (
   bucket: Map<string, AggregatedParticipant>,
-  candidate: any,
+  candidate: KnownParticipant,
   options: { preferName?: boolean } = {},
 ) => {
   if (!candidate) return;
 
-  const sid = norm(candidate?.sid ?? candidate?.id);
-  const identity = norm(candidate?.identity);
-  const name = norm(candidate?.name);
-  const fallback = sid || identity || name || `anon_${bucket.size}`;
+  const sid = getCandidateSid(candidate);
+  const identity = getCandidateIdentity(candidate);
+  const candidateName = getCandidateName(candidate);
+  const fallback = sid || identity || candidateName || `anon_${bucket.size}`;
 
   const existing = bucket.get(fallback);
-  if (existing) {
-    bucket.set(fallback, {
-      sid: sid || existing.sid,
-      identity: identity || existing.identity,
-      name:
-        options.preferName && existing.name
-          ? existing.name
-          : options.preferName && name
-            ? name
-            : existing.name || name,
-      raw: { ...existing.raw, ...candidate },
-    });
-  } else {
-    bucket.set(fallback, {
-      sid,
-      identity,
-      name,
-      raw: candidate,
-    });
-  }
+  const preferName = Boolean(options.preferName);
+  const mergedName = existing
+    ? preferName && existing.name
+      ? existing.name
+      : preferName && candidateName
+        ? candidateName
+        : existing.name || candidateName
+    : candidateName;
+
+  bucket.set(fallback, {
+    sid: sid || existing?.sid || '',
+    identity: identity || existing?.identity || '',
+    name: mergedName,
+    raw: candidate ?? existing?.raw ?? null,
+  });
 };
 
 const buildParticipantRows = (
-  participants: any[] | undefined,
-  room: unknown,
+  participants: MeetingAvatar[] | undefined,
+  room: LiveKitRoom | null,
   localSid: string,
 ): ParticipantRow[] => {
   const aggregated = new Map<string, AggregatedParticipant>();
@@ -238,11 +315,11 @@ const buildParticipantRows = (
     mergeParticipant(aggregated, candidate);
   }
 
-  if (aggregated.size === 0 && (room as any)?.localParticipant) {
-    mergeParticipant(aggregated, (room as any)?.localParticipant, { preferName: true });
+  if (aggregated.size === 0 && room?.localParticipant) {
+    mergeParticipant(aggregated, room.localParticipant, { preferName: true });
   }
 
-  const localParticipant = (room as any)?.localParticipant;
+  const localParticipant: LocalParticipant | RemoteParticipant | null = room?.localParticipant ?? null;
   const localSidNorm = norm(localSid);
   const localIdentityNorm = norm(localParticipant?.identity);
   const localNameNorm = norm(localParticipant?.name).toLowerCase();
@@ -250,8 +327,7 @@ const buildParticipantRows = (
   type Row = {
     id: string;
     name?: string;
-    sid?: string;
-    identity?: string;
+    aliasIds: string[];
     isLocal: boolean;
     score: number;
   };
@@ -264,17 +340,25 @@ const buildParticipantRows = (
     const identity = norm(value.identity);
     const name = norm(value.name);
     const nameLower = name.toLowerCase();
+    const aliasSet = new Set<string>();
+    if (sid) aliasSet.add(sid);
+    if (identity) aliasSet.add(identity);
+
+    const fallbackId = sid || identity || name || `unknown_${rows.length}`;
+    aliasSet.add(fallbackId);
 
     const isLocal = Boolean(
-      (sid && sid === localSidNorm) ||
-        (identity && identity === localIdentityNorm) ||
+      (localSidNorm && aliasSet.has(localSidNorm)) ||
+        (localIdentityNorm && aliasSet.has(localIdentityNorm)) ||
         (name && (nameLower === localNameNorm || nameLower === 'you')),
     );
 
-    const fallbackId = identity || sid || name || `unknown_${rows.length}`;
-    const key = isLocal ? '__LOCAL__' : fallbackId;
-    if (seenKeys.has(key)) return;
-    seenKeys.add(key);
+    const canonicalId = isLocal
+      ? localSidNorm || localIdentityNorm || fallbackId
+      : fallbackId;
+
+    if (seenKeys.has(canonicalId)) return;
+    seenKeys.add(canonicalId);
 
     const score =
       (isLocal ? 1000 : 0) +
@@ -282,22 +366,27 @@ const buildParticipantRows = (
       (sid ? 50 : 0) +
       (name && nameLower !== 'you' ? 10 : 0);
 
+    const aliasIds = Array.from(aliasSet).filter((alias) => alias && alias !== canonicalId);
+
     rows.push({
-      id: key,
+      id: canonicalId,
       name: isLocal ? 'You' : name || 'User',
-      sid,
-      identity,
+      aliasIds,
       isLocal,
       score,
     });
   });
 
   if (!rows.some((row) => row.isLocal)) {
+    const canonicalId = localSidNorm || localIdentityNorm || '__local_fallback';
+    const aliases: string[] = [];
+    if (localSidNorm && localSidNorm !== canonicalId) aliases.push(localSidNorm);
+    if (localIdentityNorm && localIdentityNorm !== canonicalId) aliases.push(localIdentityNorm);
+
     rows.unshift({
-      id: '__LOCAL__',
+      id: canonicalId,
       name: 'You',
-      sid: localSidNorm,
-      identity: localIdentityNorm,
+      aliasIds: aliases,
       isLocal: true,
       score: 9999,
     });
@@ -309,7 +398,7 @@ const buildParticipantRows = (
     return b.score - a.score;
   });
 
-  return rows.map((row) => ({ id: row.id, name: row.name }));
+  return rows.map((row) => ({ id: row.id, name: row.name, isLocal: row.isLocal, aliasIds: row.aliasIds }));
 };
 
 // ——— A* helpers ———
@@ -510,6 +599,79 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     () => buildParticipantRows(participants as any[] | undefined, room, localSid),
     [participants, room, localSid],
   );
+  const localParticipantRow = useMemo(
+    () => uniqueParticipants.find((row) => row.isLocal) ?? null,
+    [uniqueParticipants],
+  );
+
+  const seatAssignments = useSeatInteractionStore((state) => state.occupantToSeat);
+  const seatClaims = useSeatInteractionStore((state) => state.seats);
+  const claimSeat = useSeatInteractionStore((state) => state.claimSeat);
+  const releaseSeat = useSeatInteractionStore((state) => state.releaseSeat);
+  const applyRemoteSeatEvent = useSeatInteractionStore((state) => state.applyRemoteEvent);
+  const pruneSeatOccupants = useSeatInteractionStore((state) => state.pruneOccupants);
+  const validateSeatIndices = useSeatInteractionStore((state) => state.validateSeatIndices);
+
+  const presenceById = useMeetingStore((state) => state.presenceById);
+  const localPresence = useMeetingStore((state) => state.localPresence);
+  const startWhisper = useMeetingStore((state) => state.startWhisper);
+  const toggleChatAction = useMeetingStore((state) => state.toggleChat);
+  const setActiveDMPeer = useMeetingStore((state) => state.setActiveDMPeer);
+
+  const broadcastSeatEvent = useCallback(
+    (event: SeatClaimUpdate) => {
+      if (!event?.occupantId || !room) return;
+      try {
+        const lkRoom: any = room;
+        if (lkRoom?.localParticipant?.publishData) {
+          const payload = JSON.stringify({
+            t: 'seat',
+            id: event.occupantId,
+            index: event.seatIndex,
+            name: event.occupantName,
+            room: event.roomId ?? null,
+            ts: event.ts ?? Date.now(),
+          });
+          void lkRoom.localParticipant
+            .publishData(new TextEncoder().encode(payload), { reliable: true })
+            .catch(() => {});
+        }
+      } catch { /* ignore */ }
+    },
+    [room],
+  );
+
+  const attemptSeatClaim = useCallback(
+    (seatIdx: number | null) => {
+      if (seatIdx == null || seatIdx < 0) return false;
+      const localId = localParticipantIdRef.current || norm(localSid);
+      if (!localId) return false;
+      const seats = seatTransformsRef.current;
+      const seat = seats?.[seatIdx];
+      if (!seat) return false;
+      const currentSeat = seatAssignments?.[localId];
+      const roomIdForSeat = resolveRoomForPosition({ x: seat.position.x, z: seat.position.z }, navVolumesRef.current) ?? null;
+      if (currentSeat === seatIdx) {
+        const releaseResult = releaseSeat(localId);
+        if (releaseResult) {
+          broadcastSeatEvent(releaseResult);
+        }
+        return true;
+      }
+      const occupantName = localParticipantRow?.name || 'You';
+      const claimResult = claimSeat(seatIdx, localId, occupantName, roomIdForSeat);
+      if (claimResult) {
+        if (avatarRef.current) {
+          avatarRef.current.position.copy(seat.position);
+          avatarRef.current.rotation.y = seat.yaw;
+        }
+        broadcastSeatEvent({ ...claimResult, roomId: claimResult.roomId ?? roomIdForSeat });
+        return true;
+      }
+      return false;
+    },
+    [seatAssignments, releaseSeat, broadcastSeatEvent, claimSeat, localParticipantRow, localSid],
+  );
 
   // LiveKit
   const cameraRefs = useTracks([{ source: Track.Source.Camera, withPlaceholder: false }], { onlySubscribed: false });
@@ -523,6 +685,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rafRef = useRef<number | null>(null);
   const coldStartFramesRef = useRef(0);
+  const localParticipantIdRef = useRef<string>('');
 
   // Centralized helper: ensure we start in a valid third-person view on first frames
   const applyColdStartSafety = () => {
@@ -640,6 +803,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const monitorPlanesRef = useRef<Map<number, THREE.Mesh>>(new Map());
   const avatarsGroupRef = useRef<THREE.Group | null>(null);
   const avatarBySidRef = useRef<Map<string, THREE.Group>>(new Map());
+  const avatarAliasRef = useRef<Map<string, string>>(new Map());
 
   // Zones/rooms
   const zonesInfoRef = useRef<BuiltZonesInfo | null>(null);
@@ -658,6 +822,17 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const [roomPresence, setRoomPresence] = useState<Record<RoomId, number>>(() => createRoomPresenceRecord());
   const [portalSuggestion, setPortalSuggestion] = useState<RoomId | null>(null);
   const portalSuggestionRef = useRef<RoomId | null>(null);
+  const [contextMenu, setContextMenu] = useState<
+    | null
+    | {
+        x: number;
+        y: number;
+        participantId?: string;
+        seatIndex?: number | null;
+        name?: string;
+        isLocal?: boolean;
+      }
+  >(null);
   const roomPresenceRef = useRef<Record<RoomId, number>>(createRoomPresenceRecord());
   const roomAdjacency = useMemo<Record<RoomId, RoomId[]>>(() => {
     const map = {} as Record<RoomId, RoomId[]>;
@@ -671,6 +846,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const [insideConference, setInsideConference] = useState(false);
   const remoteInConferenceRef = useRef<Map<string, boolean>>(new Map());
   const lastAudioSubRef = useRef<Map<string, boolean>>(new Map());
+  const audioVolumeRef = useRef<Map<string, number>>(new Map());
   const avatarLodNextAtRef = useRef<number>(0);
 
   // Remote movement sync
@@ -681,6 +857,8 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const diceMeshRef = useRef<THREE.Mesh | null>(null);
   const diceSpinRef = useRef<{ t: number; dur: number; targetEuler: THREE.Euler } | null>(null);
   const [insideGameRoom, setInsideGameRoom] = useState(false);
+  const { note: roomNote, setNote: setRoomNote } = useRoomNote(currentRoomId);
+  const showWhiteboard = currentRoomId === 'conference' || currentRoomId === 'focus-booths';
 
   // Debug overlays (component-scope so multiple effects can use them)
   const debugStateRef = useRef<{ hitboxes: THREE.Group | null; nav: THREE.Group | null; avatar: THREE.Mesh | null }>({ hitboxes: null, nav: null, avatar: null });
@@ -941,9 +1119,13 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       setCurrentViewMode(GLOBAL_SCENE_CACHE.viewMode);
 
       // Restore local avatar ref promptly so controls work immediately
-      const maybeLocal = avatarBySidRef.current.get('__LOCAL__') || avatarBySidRef.current.get(norm(localSid));
+      const localKey = localParticipantIdRef.current || norm(localSid);
+      const maybeLocal = localKey ? avatarBySidRef.current.get(localKey) : undefined;
+      const fallbackLocal = avatarBySidRef.current.get(norm(localSid));
       if (maybeLocal) {
         avatarRef.current = maybeLocal;
+      } else if (fallbackLocal) {
+        avatarRef.current = fallbackLocal;
       }
 
       // Ensure no stale transition blocks input after remount
@@ -1423,6 +1605,82 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       return false;
     };
 
+    const resolveSeatIndexAt = (clientX: number, clientY: number, target: EventTarget | null): number | null => {
+      const baseEl = (target as HTMLElement) ?? targetEl;
+      const cam = cameraRef.current;
+      const seats = seatTransformsRef.current;
+      if (!baseEl || !cam || !seats?.length) return null;
+      const rect = baseEl.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -(((clientY - rect.top) / rect.height) * 2 - 1),
+      );
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(ndc, cam);
+      const intersection = new THREE.Vector3();
+      if (!ray.intersectPlane(FLOOR_PLANE, intersection)) return null;
+      let bestIdx: number | null = null;
+      let bestDist = Infinity;
+      const thresholdSq = 0.6 * 0.6;
+      for (let i = 0; i < seats.length; i++) {
+        const seat = seats[i];
+        const dx = seat.position.x - intersection.x;
+        const dz = seat.position.z - intersection.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq <= thresholdSq && distSq < bestDist) {
+          bestIdx = i;
+          bestDist = distSq;
+        }
+      }
+      return bestIdx;
+    };
+
+    const resolveAvatarAt = (clientX: number, clientY: number, target: EventTarget | null) => {
+      const baseEl = (target as HTMLElement) ?? targetEl;
+      const cam = cameraRef.current;
+      const avatarsGroup = avatarsGroupRef.current;
+      if (!baseEl || !cam || !avatarsGroup) return null;
+      const rect = baseEl.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -(((clientY - rect.top) / rect.height) * 2 - 1),
+      );
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(ndc, cam);
+      const hits = ray.intersectObjects(avatarsGroup.children, true);
+      if (!hits.length) return null;
+      let group: THREE.Object3D | null = hits[0].object;
+      while (group && group.parent && group.parent !== avatarsGroup) {
+        group = group.parent;
+      }
+      if (!group) return null;
+      const participantIdRaw: string = group.userData?.participantId || '';
+      let canonicalId = participantIdRaw;
+      if (!canonicalId && Array.isArray(group.userData?.aliasIds)) {
+        for (const alias of group.userData.aliasIds as string[]) {
+          const mapped = avatarAliasRef.current.get(alias);
+          if (mapped) { canonicalId = mapped; break; }
+        }
+      }
+      if (!canonicalId && participantIdRaw) {
+        canonicalId = avatarAliasRef.current.get(participantIdRaw) || participantIdRaw;
+      }
+      const participant = uniqueParticipants.find((row) => row.id === canonicalId) ?? null;
+      return {
+        participantId: canonicalId || participantIdRaw,
+        name: participant?.name ?? group.userData?.displayName,
+        isLocal: participant?.isLocal ?? Boolean(group.userData?.isLocal),
+      };
+    };
+
+    const handleSeatSelection = (clientX: number, clientY: number, target: EventTarget | null) => {
+      const seatIdx = resolveSeatIndexAt(clientX, clientY, target);
+      if (seatIdx == null) return false;
+      return attemptSeatClaim(seatIdx);
+    };
+
     // Mouse orbit / rotate / pan
     let dragging = false;
     let lastX = 0;
@@ -1474,7 +1732,51 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
     };
 
-    const onContextMenu = (event: Event) => event.preventDefault();
+    const onContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+      const containerRect = container.getBoundingClientRect();
+      const baseX = event.clientX - containerRect.left;
+      const baseY = event.clientY - containerRect.top;
+      const menuX = Math.min(Math.max(0, baseX), Math.max(0, containerRect.width - 220));
+      const menuY = Math.min(Math.max(0, baseY), Math.max(0, containerRect.height - 160));
+      const seatIdx = resolveSeatIndexAt(event.clientX, event.clientY, event.target);
+      if (seatIdx != null) {
+        let occupantId: string | undefined;
+        participantSeatMapRef.current.forEach((idx, pid) => {
+          if (idx === seatIdx) occupantId = pid;
+        });
+        if (!occupantId) {
+          for (const [pid, idx] of Object.entries(seatAssignments ?? {})) {
+            if (idx === seatIdx) { occupantId = pid; break; }
+          }
+        }
+        const participant = occupantId
+          ? uniqueParticipants.find((row) => row.id === occupantId) ?? null
+          : null;
+        setContextMenu({
+          x: menuX,
+          y: menuY,
+          participantId: occupantId,
+          seatIndex: seatIdx,
+          name: participant?.name ?? (occupantId ? occupantId : 'Available seat'),
+          isLocal: participant?.isLocal ?? false,
+        });
+        return;
+      }
+      const avatarHit = resolveAvatarAt(event.clientX, event.clientY, event.target);
+      if (avatarHit?.participantId) {
+        setContextMenu({
+          x: menuX,
+          y: menuY,
+          participantId: avatarHit.participantId,
+          seatIndex: null,
+          name: avatarHit.name,
+          isLocal: avatarHit.isLocal,
+        });
+        return;
+      }
+      setContextMenu(null);
+    };
 
     targetEl.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
@@ -1645,6 +1947,10 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     // Single click for room navigation, double-click the big presentation screen => reset & recenter
     const onClick = (e: MouseEvent) => {
       if (dragging) return;
+      if (handleSeatSelection(e.clientX, e.clientY, e.target)) {
+        e.preventDefault();
+        return;
+      }
       if (handleNavigationAt(e.clientX, e.clientY, e.target)) {
         e.preventDefault();
       }
@@ -1759,8 +2065,14 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
       // Ensure avatar ref exists after rehydrate
       if (!you) {
-        const found = avatarBySidRef.current.get('__LOCAL__') || avatarBySidRef.current.get(norm(localSid));
-        if (found) avatarRef.current = found;
+        const localKey = localParticipantIdRef.current || norm(localSid);
+        const found = localKey ? avatarBySidRef.current.get(localKey) : undefined;
+        if (found) {
+          avatarRef.current = found;
+        } else {
+          const fallback = avatarBySidRef.current.get(norm(localSid));
+          if (fallback) avatarRef.current = fallback;
+        }
       }
 
       if (avatarRef.current) {
@@ -1959,6 +2271,10 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         }
 
         const resolvedRoomId = resolveRoomForPosition({ x: you.position.x, z: you.position.z }, navVolumesRef.current);
+        if (resolvedRoomId !== currentRoomIdRef.current) {
+          currentRoomIdRef.current = resolvedRoomId;
+          try { setCurrentRoomId(resolvedRoomId ?? null); } catch {}
+        }
         let suggestedRoom: RoomId | null = null;
         for (const portal of portalTriggersRef.current) {
           const dx = portal.center.x - you.position.x;
@@ -2121,7 +2437,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       // Ease remotes
       avatarBySidRef.current.forEach((g, sid) => {
         // Skip easing for local avatar which uses direct controls
-        if (sid === '__LOCAL__') return;
+        if (g?.userData?.isLocal) return;
         const t = remoteTargetsRef.current.get(sid);
         if (!t) return;
         g.position.lerp(t.pos, 0.2);
@@ -2329,6 +2645,29 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
             if (identity) remoteInConferenceRef.current.set(identity, nowIn);
             scheduleAudioSubUpdate();
           }
+          return;
+        }
+
+        if (msg?.t === 'seat' && msg?.id) {
+          const occupantId = norm(msg.id);
+          if (!occupantId) return;
+          const seatIndexRaw =
+            typeof msg.index === 'number'
+              ? msg.index
+              : msg.index == null
+                ? null
+                : Number(msg.index);
+          const seatIndex =
+            seatIndexRaw == null || !Number.isFinite(seatIndexRaw) ? null : seatIndexRaw;
+          const update: SeatClaimUpdate = {
+            seatIndex,
+            occupantId,
+            occupantName: typeof msg.name === 'string' ? msg.name : undefined,
+            roomId: typeof msg.room === 'string' ? msg.room : null,
+            ts: typeof msg.ts === 'number' ? msg.ts : Date.now(),
+          };
+          applyRemoteSeatEvent(update);
+          return;
         }
       } catch { }
     };
@@ -2407,6 +2746,91 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     [],
   );
 
+  useEffect(() => {
+    if (!contextMenu) return undefined;
+    const close = () => setContextMenu(null);
+    window.addEventListener('pointerdown', close, true);
+    return () => {
+      window.removeEventListener('pointerdown', close, true);
+    };
+  }, [contextMenu]);
+
+  useEffect(() => {
+    const aliasLookup = new Map<string, ParticipantRow>();
+    for (const row of uniqueParticipants) {
+      aliasLookup.set(row.id, row);
+      for (const alias of row.aliasIds) {
+        aliasLookup.set(alias, row);
+      }
+    }
+    avatarBySidRef.current.forEach((group, key) => {
+      const participant = aliasLookup.get(key) ?? aliasLookup.get(avatarAliasRef.current.get(key) ?? '');
+      let status: PresenceStatus | null = null;
+      if (participant) {
+        for (const alias of [participant.id, ...participant.aliasIds]) {
+          const record = presenceById[alias];
+          if (record?.status) {
+            status = record.status as PresenceStatus;
+            break;
+          }
+        }
+        if (!status && participant.isLocal) {
+          status = localPresence;
+        }
+      } else {
+        const record = presenceById[key];
+        status = (record?.status as PresenceStatus | undefined) ?? null;
+      }
+      applyStatusBadge(group, status);
+    });
+  }, [presenceById, localPresence, uniqueParticipants]);
+
+  useEffect(() => {
+    if (!room) return undefined;
+
+    const updateVolumes = () => {
+      const you = avatarRef.current;
+      if (!you) return;
+      const localRoom = resolveRoomForPosition({ x: you.position.x, z: you.position.z }, navVolumesRef.current);
+      const lkRoom: any = room;
+      const remotes: any[] = Array.from(lkRoom?.remoteParticipants?.values?.() ?? []);
+      for (const remote of remotes) {
+        const sid = norm(remote?.sid);
+        if (!sid) continue;
+        const canonical = avatarAliasRef.current.get(sid) || sid;
+        const avatar = avatarBySidRef.current.get(canonical);
+        if (!avatar) continue;
+        const remoteRoom = resolveRoomForPosition({ x: avatar.position.x, z: avatar.position.z }, navVolumesRef.current);
+        const dist = avatar.position.distanceTo(you.position);
+        let baseVolume = 0.3;
+        if (localRoom && remoteRoom) {
+          if (localRoom === remoteRoom) baseVolume = 1.0;
+          else if (roomAdjacency[localRoom]?.includes(remoteRoom)) baseVolume = 0.6;
+          else baseVolume = 0.2;
+        }
+        const falloff = THREE.MathUtils.clamp(1 - dist / 12, 0.05, 1);
+        const targetVolume = Math.max(0.05, baseVolume * falloff);
+        const publications: any[] = Array.from(remote?.audioTracks?.values?.() ?? []);
+        for (const pub of publications) {
+          if (typeof pub?.setVolume !== 'function') continue;
+          const key = String(pub?.trackSid ?? sid);
+          const prevVolume = audioVolumeRef.current.get(key);
+          if (prevVolume != null && Math.abs(prevVolume - targetVolume) < 0.05) continue;
+          try {
+            pub.setVolume(targetVolume);
+            audioVolumeRef.current.set(key, targetVolume);
+          } catch { /* ignore volume errors */ }
+        }
+      }
+    };
+
+    updateVolumes();
+    const interval = window.setInterval(updateVolumes, 600);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [room, roomAdjacency]);
+
   // Participants → desks/avatars/video (includes LOCAL only once)
   useEffect(() => {
     const scene = sceneRef.current;
@@ -2418,13 +2842,42 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     const uniq = uniqueParticipants;
     const signature = uniq.map((p) => `${p.id}:${p.name ?? ''}`).join('|');
 
+    const localRow = uniq.find((row) => row.isLocal);
+    if (localRow?.id) {
+      localParticipantIdRef.current = localRow.id;
+    }
+
     const targetDeskCount = Math.max(10, uniq.length + 8);
     seatTransformsRef.current = mgr.ensureDeskCount(targetDeskCount);
+    const seatCapacity = seatTransformsRef.current.length;
+    validateSeatIndices(seatCapacity);
+
+    const occupantSet = new Set(uniq.map((p) => p.id));
+    const seededPrevious = new Map<string, number>();
+    const usedSeats = new Set<number>();
+
+    Object.entries(seatAssignments ?? {}).forEach(([occupantId, seatIdxValue]) => {
+      const seatIdx = typeof seatIdxValue === 'number' ? seatIdxValue : Number(seatIdxValue);
+      if (!Number.isFinite(seatIdx) || seatIdx < 0 || seatIdx >= seatCapacity) return;
+      if (!occupantSet.has(occupantId)) return;
+      if (usedSeats.has(seatIdx)) return;
+      seededPrevious.set(occupantId, seatIdx);
+      usedSeats.add(seatIdx);
+    });
+
+    participantSeatMapRef.current.forEach((idx, occupantId) => {
+      if (seededPrevious.has(occupantId)) return;
+      if (!occupantSet.has(occupantId)) return;
+      if (idx == null || idx < 0 || idx >= seatCapacity) return;
+      if (usedSeats.has(idx)) return;
+      seededPrevious.set(occupantId, idx);
+      usedSeats.add(idx);
+    });
 
     const nextSeatMap = assignParticipantsToDesks(
       uniq,
-      participantSeatMapRef.current,
-      seatTransformsRef.current.length,
+      seededPrevious,
+      seatCapacity,
     );
 
     const prevSignature = participantSignatureRef.current;
@@ -2486,6 +2939,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     // Track existing avatars to avoid recreating them
     const existingAvatars = new Set(avatarBySidRef.current.keys());
     const currentParticipants = new Set(uniq.map(p => p.id));
+    pruneSeatOccupants(Array.from(currentParticipants));
 
     // Remove avatars for participants who left
     for (const sid of existingAvatars) {
@@ -2501,6 +2955,11 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           });
           avatars.remove(avatar);
           avatarBySidRef.current.delete(sid);
+          const aliasToRemove: string[] = [];
+          avatarAliasRef.current.forEach((canonical, alias) => {
+            if (canonical === sid) aliasToRemove.push(alias);
+          });
+          aliasToRemove.forEach((alias) => avatarAliasRef.current.delete(alias));
         }
       }
     }
@@ -2516,7 +2975,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       const seat = seatTransformsRef.current[seatIdx];
       const existingAvatar = avatarBySidRef.current.get(sid);
 
-      const isLocal = sid === '__LOCAL__';
+      const isLocal = p.isLocal;
 
       // If avatar exists, handle updates
       if (existingAvatar) {
@@ -2527,6 +2986,11 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           // Keep current position, don't reset to seat
           continue;
         }
+
+        (p.aliasIds ?? []).forEach((alias) => {
+          if (!alias) return;
+          avatarAliasRef.current.set(alias, sid);
+        });
 
         // For remote avatars, only update position if seat changed significantly
         if (!isLocal) {
@@ -2542,7 +3006,12 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
 
       // Create new avatar only if it doesn't exist
-      const g = new THREE.Group(); g.userData.displayName = (p.name || 'User'); g.userData.isLocal = isLocal; g.position.copy(seat.position);
+      const g = new THREE.Group();
+      g.userData.displayName = (p.name || 'User');
+      g.userData.isLocal = isLocal;
+      g.userData.participantId = sid;
+      g.userData.aliasIds = p.aliasIds ?? [];
+      g.position.copy(seat.position);
       g.rotation.y = seat.yaw;
 
       const bodyColor = isLocal ? 0x3D93F8 : 0x8a8af0;
@@ -2604,6 +3073,10 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
       avatars.add(g);
       avatarBySidRef.current.set(sid, g);
+      (p.aliasIds ?? []).forEach((alias) => {
+        if (!alias) return;
+        avatarAliasRef.current.set(alias, sid);
+      });
 
       if (isLocal && !localAvatarSet) {
         avatarRef.current = g;
@@ -2686,9 +3159,16 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
             mat.map.dispose?.();
             mat.map = undefined as any;
           }
-          const t = camTexBySid.get(sid === '__LOCAL__' ? norm(localSid) : sid);
-          if (t) {
-            mat.map = t;
+          const candidateIds = [sid, ...(p0.aliasIds ?? [])];
+          if (p0.isLocal) candidateIds.push(norm(localSid));
+          let texture: THREE.VideoTexture | undefined;
+          for (const key of candidateIds) {
+            if (!key) continue;
+            const tex = camTexBySid.get(key);
+            if (tex) { texture = tex; break; }
+          }
+          if (texture) {
+            mat.map = texture;
             mat.toneMapped = false;
             mat.needsUpdate = true;
           } else {
@@ -2702,9 +3182,16 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       if (!g) continue;
       const prev = g.getObjectByName('VID_BADGE');
       if (prev) g.remove(prev);
-      const t2 = camTexBySid.get(sid === '__LOCAL__' ? norm(localSid) : sid);
-      if (t2) {
-        const badge = makeVideoBadge(t2);
+      const candidateIds = [sid, ...(p0.aliasIds ?? [])];
+      if (p0.isLocal) candidateIds.push(norm(localSid));
+      let headTexture: THREE.VideoTexture | undefined;
+      for (const key of candidateIds) {
+        if (!key) continue;
+        const tex = camTexBySid.get(key);
+        if (tex) { headTexture = tex; break; }
+      }
+      if (headTexture) {
+        const badge = makeVideoBadge(headTexture);
         const head = g.getObjectByName('HEAD') as THREE.Mesh | undefined;
         if (head) badge.position.copy(head.position).add(new THREE.Vector3(0, 0.02, 0.02));
         else badge.position.set(0, 1.55, 0.02);
@@ -2737,6 +3224,45 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     };
     diceSpinRef.current = { t: 0, dur: 0.9, targetEuler: targets[face] || new THREE.Euler() };
   };
+
+  const handleWhisperTarget = useCallback(
+    (targetId?: string) => {
+      const normalized = targetId ? norm(targetId) : '';
+      const localId = localParticipantIdRef.current || norm(localSid);
+      if (!normalized || normalized === localId) {
+        setContextMenu(null);
+        return;
+      }
+      void startWhisper(normalized).catch(() => {});
+      setContextMenu(null);
+    },
+    [startWhisper, localSid],
+  );
+
+  const handleDirectMessage = useCallback(
+    (targetId?: string) => {
+      const normalized = targetId ? norm(targetId) : '';
+      const localId = localParticipantIdRef.current || norm(localSid);
+      if (!normalized || normalized === localId) {
+        setContextMenu(null);
+        return;
+      }
+      setActiveDMPeer(normalized);
+      if (!chatOpen) {
+        toggleChatAction();
+      }
+      setContextMenu(null);
+    },
+    [setActiveDMPeer, toggleChatAction, chatOpen, localSid],
+  );
+
+  const handleSeatFromMenu = useCallback(
+    (seatIdx: number | null) => {
+      attemptSeatClaim(seatIdx);
+      setContextMenu(null);
+    },
+    [attemptSeatClaim],
+  );
 
   // Layout resize
   useEffect(() => {
@@ -2823,6 +3349,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   }, []);
 
   const themeClass = theme === 'light' ? 'theme-light' : 'theme-dark';
+  const localParticipantId = localParticipantIdRef.current || norm(localSid);
   return (
     <div className={`relative h-full w-full overflow-hidden ns-meeting3d ${themeClass}`}>
       <div
@@ -3049,6 +3576,83 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         >
           🎲 Roll Dice
         </button>
+      )}
+      {showWhiteboard && currentRoomId && (
+        <RoomWhiteboard roomId={currentRoomId} value={roomNote} onChange={setRoomNote} />
+      )}
+      {contextMenu && (
+        <div
+          className="absolute z-40 w-[220px] rounded-lg border shadow-xl backdrop-blur"
+          style={{
+            left: contextMenu.x,
+            top: contextMenu.y,
+            background: 'var(--surface-1)',
+            borderColor: 'var(--panel-border)',
+            color: 'var(--text-1)'
+          }}
+        >
+          <div className="px-3 py-2 border-b text-[12px] font-semibold"
+            style={{ borderColor: 'var(--panel-border)' }}
+          >
+            {contextMenu.name || (contextMenu.seatIndex != null ? 'Seat options' : 'Interaction')}
+          </div>
+          <div className="flex flex-col gap-1 px-3 py-2 text-[12px]">
+            {contextMenu.seatIndex != null && (
+              contextMenu.isLocal ? (
+                <button
+                  type="button"
+                  onClick={() => handleSeatFromMenu(contextMenu.seatIndex ?? null)}
+                  className="text-left rounded px-2 py-1"
+                  style={{ background: 'var(--panel-subtle)', border: '1px solid var(--panel-border)' }}
+                >
+                  Release seat
+                </button>
+              ) : contextMenu.participantId ? (
+                <div className="text-[11px] opacity-70 px-2 py-1 border rounded"
+                  style={{ borderColor: 'var(--panel-border)' }}
+                >
+                  Seat occupied
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleSeatFromMenu(contextMenu.seatIndex ?? null)}
+                  className="text-left rounded px-2 py-1"
+                  style={{ background: 'var(--panel-subtle)', border: '1px solid var(--panel-border)' }}
+                >
+                  Claim seat here
+                </button>
+              )
+            )}
+            {contextMenu.participantId && contextMenu.participantId !== localParticipantId && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleWhisperTarget(contextMenu.participantId)}
+                  className="text-left rounded px-2 py-1"
+                  style={{ border: '1px solid var(--panel-border)' }}
+                >
+                  Start whisper
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDirectMessage(contextMenu.participantId)}
+                  className="text-left rounded px-2 py-1"
+                  style={{ border: '1px solid var(--panel-border)' }}
+                >
+                  Direct message
+                </button>
+              </>
+            )}
+            {!contextMenu.participantId && contextMenu.seatIndex == null && (
+              <div className="text-[11px] opacity-70 px-2 py-1 border rounded"
+                style={{ borderColor: 'var(--panel-border)' }}
+              >
+                No actions available
+              </div>
+            )}
+          </div>
+        </div>
       )}
       </div>
       );
