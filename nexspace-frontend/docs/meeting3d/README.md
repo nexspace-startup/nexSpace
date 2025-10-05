@@ -10,24 +10,36 @@ src/
     meeting3d/
       index.tsx             # Lazy-loaded entry point that wires Suspense + fallback
       SceneRoot.tsx         # Primary 3D orchestrator (scene, movement, presence)
+      config.ts             # Central feature flags for incremental rollout
       lib3d/                # Three.js helpers, materials, geometry builders
       ui/                   # React overlays (minimap, shell, drawers, etc.)
       hooks/                # Meeting3D-specific hooks
       avatar/               # Avatar prefab + animation utilities
       interaction/          # Seat claiming, teleport, navmesh helpers
-      rooms/                # Layout definitions for lobby, lounge, booths …
+      rooms/
+        definitions.ts      # Canonical room descriptors, nav volumes, portals
+        navigation.ts       # Runtime helpers (resolve rooms, nav volumes)
+        types.ts            # Shared room + portal types
 ```
 
 Only `SceneRoot` currently renders the full scene while we finish migrating logic into the smaller packages. New code should prefer dropping files into `ui/`, `interaction/`, or `rooms/` instead of growing `SceneRoot`.
 
 ## Adding a new room
 
-1. Define a new room rectangle and props inside `rooms/<room-name>.ts`. Rooms expose
-   - `bounds` — world-space coordinates
-   - `label` — minimap + UI name
-   - `build` — factory that receives the shared `THREE.Scene` and current palette
-2. Register the room inside `lib3d/Zone.ts` by importing your builder and appending it to the room table.
-3. Update any teleport anchors or minimap metadata inside `SceneRoot` so avatars can jump into the new space.
+1. Append a new descriptor to `rooms/definitions.ts` with `bounds`, `defaultSpawn`, and portal metadata.
+   - Update `ROOM_NAV_VOLUMES` with any additional connector strips needed for pathfinding.
+   - Add matching entries to `ROOM_PORTALS` so the minimap + door highlights stay in sync.
+2. Reference the new room inside `lib3d/Zone.ts` to lay out meshes, signage, and colliders.
+   - Use the shared helpers (`roomTitle`, `resolveBounds`) so physical geometry aligns with the descriptor bounds.
+   - Push any bespoke doorways (e.g. cafe prep, backstage) to the returned `doorways` array.
+3. If the space needs special props, add them under `lib3d/` and register with the existing palette hooks for theme swaps.
+4. Update docs or UX overlays (e.g. `MinimapOverlay`) if the room introduces custom actions or status indicators.
+
+## Feature flags & navigation
+
+- Flip toggles in `config.ts` to roll out pieces of the revamp (`showMinimapOverlay`, `enforceNavVolumes`, etc.).
+- Navigation helpers live in `rooms/navigation.ts` and expose sorted nav volumes, adjacency lookups, and portal metadata.
+- `SceneRoot` enforces the nav volumes when the flag is on and uses the room definitions to calculate quick jumps + presence counts.
 
 ## Adding a prop or prefab
 
@@ -58,5 +70,5 @@ Meeting3D ships with day and night palettes that update materials and environmen
 
 - Finalise extraction of avatar rendering + seat claiming into `avatar/` & `interaction/`
 - Add automated performance captures (Lighthouse/Trace) to CI
-- Publish nav-mesh authoring guide for external map designers
+- Publish nav-volume authoring guide for external map designers
 

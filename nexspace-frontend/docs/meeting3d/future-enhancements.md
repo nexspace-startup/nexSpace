@@ -6,3 +6,4 @@
 - [ ] Add shared whiteboard widgets to the conference and focus rooms
 - [ ] Implement saveable seating layouts per workspace
 - [ ] Expose analytics hooks for seat usage and room dwell time
+- [ ] Automate regression tests for nav-volume enforcement, portal cues, and minimap quick jumps

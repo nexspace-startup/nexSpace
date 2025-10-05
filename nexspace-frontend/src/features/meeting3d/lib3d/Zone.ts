@@ -3,6 +3,8 @@ import { createSofa } from './sofa';
 import { createOfficeChair } from './officeChair';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { MODE_PALETTE, type ModePalette, type FurniturePalette } from './themeConfig';
+import { ROOM_DEFINITIONS, ROOM_PORTALS } from '../rooms/definitions';
+import type { RoomId } from '../rooms/types';
 
 function createRealisticTiledFloor(
     scene: THREE.Scene,
@@ -140,7 +142,7 @@ export type BuiltZonesInfo = {
     disposeZones: () => void;
     openOfficeArea: { minX: number; maxX: number; minZ: number; maxZ: number };
     stageScreen: THREE.Mesh | null;
-    roomRects: Array<{ name: string; rect: { minX: number; maxX: number; minZ: number; maxZ: number } }>;
+    roomRects: Array<{ id?: RoomId; name: string; rect: { minX: number; maxX: number; minZ: number; maxZ: number } }>;
     doorways: Array<{ x: number; z: number }>;
     landmarks: Array<{ name: string; x: number; z: number }>;
     navNodes: Array<{ id: string; x: number; z: number }>;
@@ -487,31 +489,55 @@ export function buildZones(
     scene.add(screen);
 
     // Room definitions with better spacing
-    // change positions of rooms and when you change, change label, lighting, and doorways too
-    const huddleA = { minX: -22, maxX: -9, minZ: -14, maxZ: 0.5 };
-    const confRoom = { minX: 6.5, maxX: 18, minZ: -12, maxZ: 6 };
-    const loungeRect = { minX: -4.5, maxX: 5.5, minZ: 4.5, maxZ: 14.5 };
+    const roomById = (roomId: RoomId) => ROOM_DEFINITIONS.find((room) => room.id === roomId);
+    const resolveBounds = (
+        roomId: RoomId,
+        fallback: { minX: number; maxX: number; minZ: number; maxZ: number }
+    ) => {
+        const match = roomById(roomId);
+        if (match) {
+            return {
+                minX: match.bounds.minX,
+                maxX: match.bounds.maxX,
+                minZ: match.bounds.minZ,
+                maxZ: match.bounds.maxZ,
+            };
+        }
+        return { ...fallback };
+    };
+    const lobbyRect = resolveBounds('lobby', { minX: -9.5, maxX: 9.5, minZ: -ROOM_D / 2 + 2.0, maxZ: -6.4 });
+    const focusRect = resolveBounds('focus-booths', { minX: -22, maxX: -9, minZ: -14, maxZ: 0.5 });
+    const conferenceRect = resolveBounds('conference', { minX: 6.5, maxX: 18, minZ: -12, maxZ: 6 });
+    const loungeRect = resolveBounds('cafe-lounge', { minX: -4.5, maxX: 5.5, minZ: 4.5, maxZ: 14.5 });
+    const openRect = resolveBounds('open-desk', { minX: -ROOM_W / 2 + 4.0, maxX: ROOM_W / 2 - 7.0, minZ: -1.0, maxZ: 12.5 });
     const gameRect = { minX: -18, maxX: -10.5, minZ: 6, maxZ: 13.5 };
     const pantryRect = { minX: ROOM_W / 2 - 9.0, maxX: ROOM_W / 2 - 3.2, minZ: ROOM_D / 2 - 9.2, maxZ: ROOM_D / 2 - 4.2 };
-    const openRect = { minX: -ROOM_W / 2 + 4.0, maxX: ROOM_W / 2 - 7.0, minZ: -1.0, maxZ: 12.5 };
 
+    const roomTitle = (roomId: RoomId, fallback: string) => roomById(roomId)?.title ?? fallback;
     const roomRects = [
-        { name: 'Focus Pod A', rect: huddleA },
-        { name: 'Conference', rect: confRoom },
-        { name: 'Lounge', rect: loungeRect },
-        { name: 'Game Room', rect: gameRect },
-        { name: 'Kitchen', rect: pantryRect },
-        { name: 'Open Office', rect: openRect },
+        { id: 'lobby', name: roomTitle('lobby', 'Lobby'), rect: lobbyRect },
+        { id: 'focus-booths', name: roomTitle('focus-booths', 'Focus Booths'), rect: focusRect },
+        { id: 'conference', name: roomTitle('conference', 'Conference'), rect: conferenceRect },
+        { id: 'cafe-lounge', name: roomTitle('cafe-lounge', 'Cafe Lounge'), rect: loungeRect },
+        { id: 'open-desk', name: roomTitle('open-desk', 'Open Desk Area'), rect: openRect },
+        { name: 'Cafe Games', rect: gameRect },
+        { name: 'Cafe Prep', rect: pantryRect },
     ];
 
     // Walls with warm, inviting colors and modern design
     const doorways: Array<{ x: number; z: number }> = [];
+    const addDoorway = (x: number, z: number) => {
+        if (!doorways.some((d) => Math.abs(d.x - x) < 0.01 && Math.abs(d.z - z) < 0.01)) {
+            doorways.push({ x, z });
+        }
+    };
+    ROOM_PORTALS.forEach((portal) => addDoorway(portal.position.x, portal.position.z));
 
     // Focus Pod A - light powder blue (light mode friendly)
     addRoomWithDoor(
         scene,
         colliders,
-        huddleA,
+        focusRect,
         2.5,
         0.12,
         { wall: 'E', width: 1.8, centerZ: -6.5 },
@@ -519,13 +545,11 @@ export function buildZones(
         activePalette.rooms.focus.accent,
         'focus'
     );
-    doorways.push({ x: huddleA.maxX, z: -2.0 });
-    addWarmLighting(scene, (huddleA.minX + huddleA.maxX) / 2, 2.2, (huddleA.minZ + huddleA.maxZ) / 2, activePalette.rooms.focus.accent);
+    addWarmLighting(scene, (focusRect.minX + focusRect.maxX) / 2, 2.2, (focusRect.minZ + focusRect.maxZ) / 2, activePalette.rooms.focus.accent);
 
     // Conference Room — glass walls with open glass door and beige roof
-    const confGlass = addGlassRoomWithOpenDoor(scene, colliders, confRoom, 5.2, 0.06, { wall: 'W', width: 2.2, centerZ: -2.0 });
-    doorways.push({ x: confRoom.minX, z: -2.0 });
-    addWarmLighting(scene, (confRoom.minX + confRoom.maxX) / 2, 2.7, (confRoom.minZ + confRoom.maxZ) / 2, activePalette.rooms.conference?.accent ?? activePalette.accent);
+    const confGlass = addGlassRoomWithOpenDoor(scene, colliders, conferenceRect, 5.2, 0.06, { wall: 'W', width: 2.2, centerZ: -2.0 });
+    addWarmLighting(scene, (conferenceRect.minX + conferenceRect.maxX) / 2, 2.7, (conferenceRect.minZ + conferenceRect.maxZ) / 2, activePalette.rooms.conference?.accent ?? activePalette.accent);
 
     // Lounge - warm peach
     addRoomWithDoor(
@@ -539,7 +563,6 @@ export function buildZones(
         activePalette.rooms.lounge.accent,
         'lounge'
     );
-    doorways.push({ x: (loungeRect.minX + loungeRect.maxX) / 2, z: loungeRect.minZ });
     addWarmLighting(scene, (loungeRect.minX + loungeRect.maxX) / 2, 2.2, (loungeRect.minZ + loungeRect.maxZ) / 2, activePalette.rooms.lounge.accent);
 
     // Game Room - soft lavender
@@ -554,7 +577,7 @@ export function buildZones(
         activePalette.rooms.game.accent,
         'game'
     );
-    doorways.push({ x: (gameRect.minX + gameRect.maxX) / 2, z: gameRect.minZ });
+    addDoorway((gameRect.minX + gameRect.maxX) / 2, gameRect.minZ);
     addWarmLighting(scene, (gameRect.minX + gameRect.maxX) / 2, 2.2, (gameRect.minZ + gameRect.maxZ) / 2, activePalette.rooms.game.accent);
 
     // Kitchen - pale mint
@@ -569,13 +592,13 @@ export function buildZones(
         activePalette.rooms.kitchen.accent,
         'kitchen'
     );
-    doorways.push({ x: pantryRect.minX, z: (pantryRect.minZ + pantryRect.maxZ) / 2 });
+    addDoorway(pantryRect.minX, (pantryRect.minZ + pantryRect.maxZ) / 2);
     addWarmLighting(scene, (pantryRect.minX + pantryRect.maxX) / 2, 2.2, (pantryRect.minZ + pantryRect.maxZ) / 2, activePalette.rooms.kitchen.accent);
 
     // 1) Compute center once
     const confCenter = {
-        x: (confRoom.minX + confRoom.maxX) / 2,
-        z: (confRoom.minZ + confRoom.maxZ) / 2
+        x: (conferenceRect.minX + conferenceRect.maxX) / 2,
+        z: (conferenceRect.minZ + conferenceRect.maxZ) / 2
     };
 
     // 2) Make a pivot at the room center and add to scene
@@ -587,8 +610,8 @@ export function buildZones(
     const created = []; // collect objects to reparent cleanly
 
     // --- table ---
-    const tableLen = Math.min((confRoom.maxX - confRoom.minX) * 0.72, 8.0);
-    const tableDepth = Math.min((confRoom.maxZ - confRoom.minZ) * 0.48, 3.2);
+    const tableLen = Math.min((conferenceRect.maxX - conferenceRect.minX) * 0.72, 8.0);
+    const tableDepth = Math.min((conferenceRect.maxZ - conferenceRect.minZ) * 0.48, 3.2);
 
     const confTopMat = createWoodMaterial(furniture.conferenceTableTop, 0.35);
     confTopMat.userData.furnitureKey = 'conferenceTableTop';
@@ -684,7 +707,7 @@ export function buildZones(
         new THREE.PlaneGeometry(3.8, 2.1),
         new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2, metalness: 0.8 })
     );
-    tv.position.set(confRoom.maxX - 0.07, 1.6, confCenter.z + 0.2);
+    tv.position.set(conferenceRect.maxX - 0.07, 1.6, confCenter.z + 0.2);
     tv.rotation.y = -Math.PI / 2;
     tv.castShadow = true;
     scene.add(tv);
@@ -737,40 +760,43 @@ export function buildZones(
     // Enhanced Labels with click data
     const roomLabelSprites: THREE.Sprite[] = [];
 
-    const lblA = labelSprite('Focus Pod A', 3.2, toHex(activePalette.rooms.focus.accent));
-    lblA.position.set((huddleA.minX + huddleA.maxX) / 2, 2.8, (huddleA.minZ + huddleA.maxZ) / 2);
+    const focusLabel = roomTitle('focus-booths', 'Focus Booths');
+    const lblA = labelSprite(focusLabel, 3.2, toHex(activePalette.rooms.focus.accent));
+    lblA.position.set((focusRect.minX + focusRect.maxX) / 2, 2.8, (focusRect.minZ + focusRect.maxZ) / 2);
     (lblA as any).userData = {
-        roomName: 'Focus Pod A',
-        centerX: (huddleA.minX + huddleA.maxX) / 2,
-        centerZ: (huddleA.minZ + huddleA.maxZ) / 2
+        roomName: focusLabel,
+        centerX: (focusRect.minX + focusRect.maxX) / 2,
+        centerZ: (focusRect.minZ + focusRect.maxZ) / 2
     };
     scene.add(lblA);
     roomLabelSprites.push(lblA);
 
-    const lblC = labelSprite('Conference', 3.2, toHex(activePalette.rooms.conference?.accent ?? activePalette.accent));
-    lblC.position.set((confRoom.minX + confRoom.maxX) / 2, 2.9, (confRoom.minZ + confRoom.maxZ) / 2);
+    const conferenceLabel = roomTitle('conference', 'Conference Rooms');
+    const lblC = labelSprite(conferenceLabel, 3.2, toHex(activePalette.rooms.conference?.accent ?? activePalette.accent));
+    lblC.position.set((conferenceRect.minX + conferenceRect.maxX) / 2, 2.9, (conferenceRect.minZ + conferenceRect.maxZ) / 2);
     (lblC as any).userData = {
-        roomName: 'Conference',
-        centerX: (confRoom.minX + confRoom.maxX) / 2,
-        centerZ: (confRoom.minZ + confRoom.maxZ) / 2
+        roomName: conferenceLabel,
+        centerX: (conferenceRect.minX + conferenceRect.maxX) / 2,
+        centerZ: (conferenceRect.minZ + conferenceRect.maxZ) / 2
     };
     scene.add(lblC);
     roomLabelSprites.push(lblC);
 
-    const lblL = labelSprite('Lounge', 3.2, toHex(activePalette.rooms.lounge.accent));
+    const loungeLabel = roomTitle('cafe-lounge', 'Cafe Lounge');
+    const lblL = labelSprite(loungeLabel, 3.2, toHex(activePalette.rooms.lounge.accent));
     lblL.position.set((loungeRect.minX + loungeRect.maxX) / 2, 2.8, (loungeRect.minZ + loungeRect.maxZ) / 2);
     (lblL as any).userData = {
-        roomName: 'Lounge',
+        roomName: loungeLabel,
         centerX: (loungeRect.minX + loungeRect.maxX) / 2,
         centerZ: (loungeRect.minZ + loungeRect.maxZ) / 2
     };
     scene.add(lblL);
     roomLabelSprites.push(lblL);
 
-    const lblG = labelSprite('Game Room', 3.0, toHex(activePalette.rooms.game.accent));
+    const lblG = labelSprite('Cafe Games', 3.0, toHex(activePalette.rooms.game.accent));
     lblG.position.set((gameRect.minX + gameRect.maxX) / 2, 2.8, (gameRect.minZ + gameRect.maxZ) / 2);
     (lblG as any).userData = {
-        roomName: 'Game Room',
+        roomName: 'Cafe Games',
         centerX: (gameRect.minX + gameRect.maxX) / 2,
         centerZ: (gameRect.minZ + gameRect.maxZ) / 2
     };
@@ -861,7 +887,7 @@ export function buildZones(
     const center = (r: { minX: number; maxX: number; minZ: number; maxZ: number }) => ({ x: (r.minX + r.maxX) / 2, z: (r.minZ + r.maxZ) / 2 });
 
     pushNode('open', (openRect.minX + openRect.maxX) / 2, (openRect.minZ + openRect.maxZ) / 2);
-    pushNode('conf', center(confRoom).x, center(confRoom).z);
+    pushNode('conf', center(conferenceRect).x, center(conferenceRect).z);
     pushNode('lounge', center(loungeRect).x, center(loungeRect).z);
     pushNode('game', center(gameRect).x, center(gameRect).z);
     pushNode('pantry', center(pantryRect).x, center(pantryRect).z);
@@ -1016,13 +1042,13 @@ export function buildZones(
                 const d: any = confGlass;
                 if (!d) return;
                 const doorH = (d.height) * 0.92;
-                const cz = d.centerZ ?? (confRoom.minZ + confRoom.maxZ) / 2;
+                const cz = d.centerZ ?? (conferenceRect.minZ + conferenceRect.maxZ) / 2;
                 if (d.wall === 'W') {
                     if (open) {
-                        d.doorPanel.position.set(confRoom.minX + 0.6, doorH / 2, cz);
+                        d.doorPanel.position.set(conferenceRect.minX + 0.6, doorH / 2, cz);
                         d.doorPanel.rotation.y = Math.PI / 2;
                     } else {
-                        d.doorPanel.position.set(confRoom.minX + d.thickness / 2, doorH / 2, cz);
+                        d.doorPanel.position.set(conferenceRect.minX + d.thickness / 2, doorH / 2, cz);
                         d.doorPanel.rotation.y = 0;
                     }
                 }

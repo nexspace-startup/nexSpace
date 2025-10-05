@@ -12,7 +12,11 @@ import { type DeskPrefab, createDeskModule } from './lib3d/Desks';
 import { buildEnvironment, applyEnvironmentTheme, animateEnvironmentTheme } from './lib3d/Environment';
 import { MODE_PALETTE } from './lib3d/themeConfig';
 import { type BuiltZonesInfo, buildZones, applyZoneTheme, animateZoneTheme } from './lib3d/Zone';
-import { COLLIDER_BLOCKLIST } from './lib3d/colliderBlocklist';
+import { meeting3dFeatures } from './config';
+import MinimapOverlay, { type MinimapRoomSummary } from './ui/MinimapOverlay';
+import { ROOM_DEFINITIONS, ROOM_NAV_GLOBAL_BOUNDS, ROOM_PORTALS, getRoomById, getRoomCenter } from './rooms/definitions';
+import type { RoomBounds, RoomId, RoomPortal } from './rooms/types';
+import { createRoomPresenceRecord, DEFAULT_SORTED_NAV_VOLUMES, getAdjacentRooms, isPointInsideNavVolumes, resolveRoomForPosition, type NavVolumeRuntime } from './rooms/navigation';
 
 type Props = { bottomSafeAreaPx?: number; topSafeAreaPx?: number; };
 
@@ -43,27 +47,11 @@ const CONTROL_KEY_SET = new Set([
   'KeyN',
 ]);
 
-const TMP_VEC3_A = new THREE.Vector3();
-const TMP_VEC3_B = new THREE.Vector3();
 const TMP_VEC3_C = new THREE.Vector3();
 const TMP_VEC3_D = new THREE.Vector3();
 const TMP_VEC2_A = new THREE.Vector2();
 const TMP_VEC2_B = new THREE.Vector2();
 const TMP_BOX3_A = new THREE.Box3();
-
-const isBlocked = (box: THREE.Box3) => {
-  const center = box.getCenter(TMP_VEC3_A);
-  const size = box.getSize(TMP_VEC3_B);
-  const tol = 0.08;
-  const arrEq = (a: [number, number, number], b: THREE.Vector3) =>
-    Math.abs(a[0] - b.x) < tol && Math.abs(a[1] - b.y) < tol && Math.abs(a[2] - b.z) < tol;
-  for (const item of COLLIDER_BLOCKLIST) {
-    if (arrEq(item.center, center) && arrEq(item.size, size)) {
-      return true;
-    }
-  }
-  return false;
-};
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const norm = (v: any) => String(v ?? '');
@@ -97,7 +85,27 @@ type SceneCache = {
   viewMode: 'first-person' | 'third-person';
 };
 
+type PortalTrigger = RoomPortal & { center: THREE.Vector3 };
+
 let GLOBAL_SCENE_CACHE: SceneCache | null = null;
+
+const findRoomRectById = (
+  info: BuiltZonesInfo | null | undefined,
+  roomId: RoomId,
+  fallbackNames: string[] = [],
+) => {
+  if (!info) {
+    return undefined;
+  }
+  const definition = getRoomById(roomId);
+  const names = new Set<string>();
+  if (definition?.title) names.add(definition.title);
+  if (definition?.label) names.add(definition.label);
+  for (const name of fallbackNames) {
+    if (name) names.add(name);
+  }
+  return info.roomRects.find((entry) => entry.id === roomId || names.has(entry.name))?.rect;
+};
 
 // --- Movement tuning ---
 const BASE_WALK_SPEED = 10.2;     // was ~2.5
@@ -466,12 +474,8 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const minimapStyle = useMemo<React.CSSProperties>(() => {
     const base: React.CSSProperties = {
       zIndex: 5,
-      borderColor: 'var(--panel-border)',
-      background: 'var(--surface-1)',
       width: minimapSize,
-      height: minimapSize,
       right: isMobile ? 12 : 16,
-      boxShadow: '0 18px 42px rgba(0,0,0,0.3)',
     };
 
     if (isMobile) {
@@ -482,6 +486,14 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     return base;
   }, [isMobile, minimapSize]);
+
+  const simpleMinimapStyle = useMemo<React.CSSProperties>(() => ({
+    ...minimapStyle,
+    height: minimapSize,
+    borderColor: 'var(--panel-border)',
+    background: 'var(--surface-1)',
+    boxShadow: '0 18px 42px rgba(0,0,0,0.3)',
+  }), [minimapStyle, minimapSize]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const minimapRef = useRef<HTMLCanvasElement | null>(null);
@@ -599,10 +611,13 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   // Static env
   const stageScreenRef = useRef<THREE.Mesh | null>(null);
   const obstaclesRef = useRef<THREE.Box3[]>([]);
-  const roomBoundsRef = useRef<{ minX: number; maxX: number; minZ: number; maxZ: number }>({ minX: -ROOM_W / 2 + 0.3, maxX: ROOM_W / 2 - 0.3, minZ: -ROOM_D / 2 + 0.3, maxZ: ROOM_D / 2 - 0.3 });
+  const roomBoundsRef = useRef<RoomBounds>({ ...ROOM_NAV_GLOBAL_BOUNDS });
 
   const isPointClear = useCallback(
     (x: number, z: number) => {
+      if (meeting3dFeatures.enforceNavVolumes && !isPointInsideNavVolumes(x, z, navVolumesRef.current)) {
+        return false;
+      }
       const center = TMP_VEC3_C.set(x, 0.85, z);
       const size = TMP_VEC3_D.set(0.42, 1.6, 0.42);
       const box = TMP_BOX3_A.setFromCenterAndSize(center, size);
@@ -633,6 +648,24 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const minimapHitsRef = useRef<Array<{ x: number; y: number; w: number; h: number; target?: THREE.Vector3; allowGhost?: boolean; roomName?: string }>>([]);
   const minimapSeatDotsRef = useRef<Array<{ x: number; z: number; name?: string; sid: string }>>([]);
   const roomLabelsRef = useRef<THREE.Sprite[]>([]);
+  const navVolumesRef = useRef<readonly NavVolumeRuntime[]>(DEFAULT_SORTED_NAV_VOLUMES);
+  const portalTriggersRef = useRef<PortalTrigger[]>(
+    ROOM_PORTALS.map((portal) => ({ ...portal, center: new THREE.Vector3(portal.position.x, 0, portal.position.z) })),
+  );
+  const queuePathToRef = useRef<(x: number, z: number, allowGhost?: boolean, roomName?: string) => void>(() => {});
+  const [currentRoomId, setCurrentRoomId] = useState<RoomId | null>(null);
+  const currentRoomIdRef = useRef<RoomId | null>(null);
+  const [roomPresence, setRoomPresence] = useState<Record<RoomId, number>>(() => createRoomPresenceRecord());
+  const [portalSuggestion, setPortalSuggestion] = useState<RoomId | null>(null);
+  const portalSuggestionRef = useRef<RoomId | null>(null);
+  const roomPresenceRef = useRef<Record<RoomId, number>>(createRoomPresenceRecord());
+  const roomAdjacency = useMemo<Record<RoomId, RoomId[]>>(() => {
+    const map = {} as Record<RoomId, RoomId[]>;
+    for (const room of ROOM_DEFINITIONS) {
+      map[room.id] = getAdjacentRooms(room.id);
+    }
+    return map;
+  }, []);
   // Conference room audio isolation state
   const insideConferenceRef = useRef<boolean>(false);
   const [insideConference, setInsideConference] = useState(false);
@@ -722,12 +755,8 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const lodPropsDistRef = useRef(40);
   
   // —— Helper: conference rect lookup ——
-  const getConferenceRect = () => {
-    const info = zonesInfoRef.current;
-    if (!info) return undefined as undefined | { minX: number; maxX: number; minZ: number; maxZ: number };
-    const r = (info.roomRects || []).find(r => r.name === 'Conference');
-    return r?.rect;
-  };
+  const getConferenceRect = () =>
+    findRoomRectById(zonesInfoRef.current, 'conference', ['Conference']);
   const isInsideRect = (
     p: { x: number; z: number },
     rect?: { minX: number; maxX: number; minZ: number; maxZ: number },
@@ -1029,7 +1058,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       // Compose structural zone colliders with desk colliders (with a corridor carve only on desks)
       try {
         const zinfo = zonesInfoRef.current!;
-        const lounge = zinfo.roomRects.find(r => r.name === 'Lounge')?.rect;
+        const lounge = findRoomRectById(zinfo, 'cafe-lounge', ['Lounge', 'Cafe Lounge']);
         let desks = mgr.colliders;
         if (lounge) {
           const cx = (lounge.minX + lounge.maxX) / 2;
@@ -1044,7 +1073,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           );
           desks = desks.filter(b => !b.intersectsBox(carve1) && !b.intersectsBox(carve2));
         }
-        obstaclesRef.current = [ ...(zinfo?.zoneColliders ?? []), ...desks ].filter(b => !isBlocked(b));
+        obstaclesRef.current = [ ...(zinfo?.zoneColliders ?? []), ...desks ];
         // If debug overlay is active, rebuild it to reflect new obstacles
         if (debugStateRef.current.hitboxes) { removeColliderDebug(); addColliderDebug(); }
       } catch { obstaclesRef.current.push(...mgr.colliders); }
@@ -1093,8 +1122,14 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       const zinfo = zonesInfoRef.current;
       let targetRect: { minX: number; maxX: number; minZ: number; maxZ: number } | null = null;
       if (roomName && zinfo) {
-        const rr = zinfo.roomRects.find(r => r.name === roomName);
-        if (rr) targetRect = rr.rect;
+        const canonical = ROOM_DEFINITIONS.find((room) => room.title === roomName || room.label === roomName);
+        if (canonical) {
+          targetRect = findRoomRectById(zinfo, canonical.id, [roomName]) ?? null;
+        }
+        if (!targetRect) {
+          const rr = zinfo.roomRects.find((r) => r.name === roomName);
+          if (rr) targetRect = rr.rect;
+        }
       }
 
       let bestInsideSafeId: string | null = null; let bestInsideSafeD = Infinity;
@@ -1292,6 +1327,8 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         console.log(`Navigating to ${roomName}...`);
       }
     };
+
+    queuePathToRef.current = queuePathTo;
 
     // INPUT
     const onResize = () => {
@@ -1796,6 +1833,9 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
               // If we were ghosting, ensure we end up at a safe, non-colliding spot
               if (autoGhostRef.current) {
                 const isCollidingAt = (p: THREE.Vector3) => {
+                  if (meeting3dFeatures.enforceNavVolumes && !isPointInsideNavVolumes(p.x, p.z, navVolumesRef.current)) {
+                    return true;
+                  }
                   const box = new THREE.Box3().setFromCenterAndSize(
                     new THREE.Vector3(p.x, 0.85, p.z),
                     new THREE.Vector3(AVATAR_HALF, 1.6, AVATAR_HALF)
@@ -1877,6 +1917,9 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
                 you.position.y,
                 Math.min(bounds.maxZ, Math.max(bounds.minZ, nz))
               );
+              if (meeting3dFeatures.enforceNavVolumes && !isPointInsideNavVolumes(target.x, target.z, navVolumesRef.current)) {
+                continue;
+              }
               const youBox = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(target.x, 0.85, target.z), new THREE.Vector3(AVATAR_HALF, 1.6, AVATAR_HALF));
               let blocked = false;
               for (const b of obstaclesRef.current) {
@@ -1904,11 +1947,31 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
                     break;
                   }
                 }
-                if (okX) you.position.set(target.x, you.position.y, you.position.z);
-                if (okZ) you.position.set(you.position.x, you.position.y, target.z);
+                if (okX && (!meeting3dFeatures.enforceNavVolumes || isPointInsideNavVolumes(target.x, you.position.z, navVolumesRef.current))) {
+                  you.position.set(target.x, you.position.y, you.position.z);
+                }
+                if (okZ && (!meeting3dFeatures.enforceNavVolumes || isPointInsideNavVolumes(you.position.x, target.z, navVolumesRef.current))) {
+                  you.position.set(you.position.x, you.position.y, target.z);
+                }
               }
             }
           }
+        }
+
+        const resolvedRoomId = resolveRoomForPosition({ x: you.position.x, z: you.position.z }, navVolumesRef.current);
+        let suggestedRoom: RoomId | null = null;
+        for (const portal of portalTriggersRef.current) {
+          const dx = portal.center.x - you.position.x;
+          const dz = portal.center.z - you.position.z;
+          if (dx * dx + dz * dz <= portal.radius * portal.radius) {
+            const [a, b] = portal.rooms;
+            suggestedRoom = resolvedRoomId === a ? b : a;
+            break;
+          }
+        }
+        if (portalSuggestionRef.current !== suggestedRoom) {
+          portalSuggestionRef.current = suggestedRoom;
+          try { setPortalSuggestion(suggestedRoom); } catch {}
         }
 
         if (viewMode === 'first-person') {
@@ -1925,15 +1988,17 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
               you.position.y,
               you.position.z + forward.z * step
             );
-            const youBox = new THREE.Box3().setFromCenterAndSize(
-              new THREE.Vector3(target.x, 0.85, target.z),
-              new THREE.Vector3(AVATAR_HALF, 1.6, AVATAR_HALF)
-            );
-            let blocked = false;
-            for (const b of obstaclesRef.current) {
-              if (b.intersectsBox(youBox)) {
-                blocked = true;
-                break;
+            let blocked = meeting3dFeatures.enforceNavVolumes && !isPointInsideNavVolumes(target.x, target.z, navVolumesRef.current);
+            if (!blocked) {
+              const youBox = new THREE.Box3().setFromCenterAndSize(
+                new THREE.Vector3(target.x, 0.85, target.z),
+                new THREE.Vector3(AVATAR_HALF, 1.6, AVATAR_HALF)
+              );
+              for (const b of obstaclesRef.current) {
+                if (b.intersectsBox(youBox)) {
+                  blocked = true;
+                  break;
+                }
               }
             }
             if (!blocked) {
@@ -2114,9 +2179,23 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         avatarLodNextAtRef.current = now + 80; // ~12 fps updates
       }
       // If debug avatar AABB exists, keep it in sync
-      if (debugStateRef.current.avatar && avatarRef.current) {
-        const you = avatarRef.current;
-        debugStateRef.current.avatar.position.set(you.position.x, 0.85, you.position.z);
+      const nextPresence = createRoomPresenceRecord();
+      avatarBySidRef.current.forEach((g) => {
+        if (!g) return;
+        const roomId = resolveRoomForPosition({ x: g.position.x, z: g.position.z }, navVolumesRef.current);
+        if (!roomId) return;
+        nextPresence[roomId] = (nextPresence[roomId] ?? 0) + 1;
+      });
+      let changed = false;
+      for (const room of ROOM_DEFINITIONS) {
+        if ((roomPresenceRef.current[room.id] ?? 0) !== (nextPresence[room.id] ?? 0)) {
+          changed = true;
+          break;
+        }
+      }
+      if (changed) {
+        roomPresenceRef.current = nextPresence;
+        try { setRoomPresence(nextPresence); } catch {}
       }
 
       renderer.render(scene, cam);
@@ -2140,6 +2219,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     animate();
 
     return () => {
+      queuePathToRef.current = () => {};
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onKey, { capture: true } as any);
       window.removeEventListener('keyup', onKey, { capture: true } as any);
@@ -2276,6 +2356,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     (room as any)?.on?.(RoomEvent.ConnectionStateChanged, onConn);
 
     return () => {
+      queuePathToRef.current = () => {};
       (room as any)?.off?.(RoomEvent.DataReceived, onData);
       (room as any)?.off?.(RoomEvent.ActiveSpeakersChanged, onSpeakers);
       (room as any)?.off?.(RoomEvent.ConnectionStateChanged, onConn);
@@ -2316,6 +2397,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     intervalId = window.setInterval(broadcastMovement, 160);
 
     return () => {
+      queuePathToRef.current = () => {};
       if (intervalId) window.clearInterval(intervalId);
     };
   }, [room, localSid]);
@@ -2369,7 +2451,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       const zinfo = zonesInfoRef.current!;
       let desks = mgr.colliders;
       // Carve corridor in front of Lounge (apply only to desk colliders)
-      const lounge = zinfo.roomRects.find(r => r.name === 'Lounge')?.rect;
+      const lounge = findRoomRectById(zinfo, 'cafe-lounge', ['Lounge', 'Cafe Lounge']);
       if (lounge) {
         const cx = (lounge.minX + lounge.maxX) / 2;
         const cz = lounge.minZ;
@@ -2383,7 +2465,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         );
         desks = desks.filter(b => !b.intersectsBox(carve1) && !b.intersectsBox(carve2));
       }
-      obstaclesRef.current = [ ...(zinfo?.zoneColliders ?? []), ...desks ].filter(b => !isBlocked(b));
+      obstaclesRef.current = [ ...(zinfo?.zoneColliders ?? []), ...desks ];
       if (debugStateRef.current.hitboxes) { removeColliderDebug(); addColliderDebug(); }
     } catch {}
 
@@ -2631,6 +2713,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     }
 
     return () => {
+      queuePathToRef.current = () => {};
       for (const tex of camTexBySid.values()) {
         try {
           tex.dispose();
@@ -2717,6 +2800,28 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     typeof window === 'undefined' ? true : window.innerWidth >= 768,
   );
 
+  const roomQuickList = useMemo<MinimapRoomSummary[]>(() => {
+    return ROOM_DEFINITIONS
+      .slice()
+      .sort((a, b) => a.order - b.order)
+      .map<MinimapRoomSummary>((room) => ({
+        id: room.id,
+        title: room.title,
+        label: room.label,
+        description: room.description,
+        accentColor: room.accentColor,
+        occupancy: roomPresence[room.id] ?? 0,
+        connections: (roomAdjacency[room.id] ?? []).map((rid) => getRoomById(rid)?.title ?? rid),
+      }));
+  }, [roomPresence, roomAdjacency]);
+
+  const handleJumpToRoom = useCallback((roomId: RoomId) => {
+    const targetRoom = getRoomById(roomId);
+    if (!targetRoom) return;
+    const spawn = targetRoom.defaultSpawn ?? getRoomCenter(targetRoom);
+    queuePathToRef.current(spawn.x, spawn.z, false, targetRoom.title);
+  }, []);
+
   const themeClass = theme === 'light' ? 'theme-light' : 'theme-dark';
   return (
     <div className={`relative h-full w-full overflow-hidden ns-meeting3d ${themeClass}`}>
@@ -2731,13 +2836,25 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         }}
       />
       {!isMobile && (
-        <canvas
-          ref={minimapRef}
-          width={minimapSize}
-          height={minimapSize}
-          className="absolute rounded-lg border pointer-events-auto"
-          style={minimapStyle}
-        />
+        meeting3dFeatures.showMinimapOverlay ? (
+          <MinimapOverlay
+            containerStyle={minimapStyle}
+            canvasRef={minimapRef}
+            size={minimapSize}
+            rooms={roomQuickList}
+            currentRoomId={currentRoomId}
+            suggestedRoomId={portalSuggestion}
+            onJump={handleJumpToRoom}
+          />
+        ) : (
+          <canvas
+            ref={minimapRef}
+            width={minimapSize}
+            height={minimapSize}
+            className="absolute rounded-lg border pointer-events-auto"
+            style={simpleMinimapStyle}
+          />
+        )
       )}
 
       {/* Controls Panel */}
