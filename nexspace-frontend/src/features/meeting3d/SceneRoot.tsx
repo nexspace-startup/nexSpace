@@ -2,14 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three';
 import { useTracks, isTrackReference } from '@livekit/components-react';
 import { RoomEvent, Track } from 'livekit-client';
-import type {
-  LocalParticipant,
-  Participant,
-  RemoteParticipant,
-  RemoteTrackPublication,
-  Room as LiveKitRoom,
-  TrackPublication,
-} from 'livekit-client';
+import type { LocalParticipant, Participant, RemoteParticipant, Room as LiveKitRoom } from 'livekit-client';
 import { useMeetingStore } from '../../stores/meetingStore';
 import type { MeetingAvatar } from '../../stores/meetingStore';
 import { useUIStore } from '../../stores/uiStore';
@@ -27,7 +20,7 @@ import { useSeatInteractionStore, type SeatClaimUpdate } from './interaction/sea
 import { useRoomNote } from './hooks/useRoomNotes';
 import RoomWhiteboard from './ui/RoomWhiteboard';
 import { ROOM_DEFINITIONS, ROOM_NAV_GLOBAL_BOUNDS, ROOM_PORTALS, getRoomById, getRoomCenter } from './rooms/definitions';
-import type { RoomBounds, RoomId, RoomPortal } from './rooms/types';
+import type { RoomAudioProfile, RoomBounds, RoomId, RoomPortal } from './rooms/types';
 import { createRoomPresenceRecord, DEFAULT_SORTED_NAV_VOLUMES, getAdjacentRooms, isPointInsideNavVolumes, resolveRoomForPosition, type NavVolumeRuntime } from './rooms/navigation';
 import type { PresenceStatus } from '../../constants/enums';
 
@@ -92,9 +85,22 @@ type PerfSnapshot = {
   totalHeapMB: number | null;
 };
 
-// Bigger canvas; main room will be managed by zones
-const ROOM_W = 48;
-const ROOM_D = 34;
+// Expanded canvas; rooms defined in layout metadata
+const ROOM_W = 60;
+const ROOM_D = 44;
+
+const DEFAULT_ROOM_AUDIO_PROFILE: RoomAudioProfile = {
+  sameRoom: 0.9,
+  adjacent: 0.55,
+  remote: 0.2,
+  falloffRadius: 12,
+};
+
+const getAudioProfileForRoom = (roomId: RoomId | null | undefined): RoomAudioProfile => {
+  if (!roomId) return DEFAULT_ROOM_AUDIO_PROFILE;
+  const room = getRoomById(roomId);
+  return room?.audioProfile ?? DEFAULT_ROOM_AUDIO_PROFILE;
+};
 
 // --- Global 3D cache to speed up re-mounts (switching back to 3D) ---
 type SceneCache = {
@@ -695,12 +701,25 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   // Scene
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const setCeilingVisibilityRef = useRef<(visible: boolean) => void>(() => {});
+  const environmentObstaclesRef = useRef<THREE.Box3[]>([]);
   const minFrameMsRef = useRef<number>(0); // adaptive render throttle
   const isTabVisibleRef = useRef<boolean>(true);
   const initialPerfNow =
     typeof performance !== 'undefined' && typeof performance.now === 'function'
       ? performance.now()
       : 0;
+  const ensureCeilingController = useCallback((scene?: THREE.Scene | null) => {
+    if (!scene) {
+      setCeilingVisibilityRef.current = () => {};
+      return;
+    }
+    setCeilingVisibilityRef.current = (visible: boolean) => {
+      const group = scene.getObjectByName('ROOM_CEILINGS') as THREE.Group | null;
+      if (!group) return;
+      group.visible = visible;
+    };
+  }, []);
   const perfSampleRef = useRef<{ sampleStart: number; frameCount: number; frameTimeTotal: number }>({
     sampleStart: initialPerfNow,
     frameCount: 0,
@@ -877,6 +896,106 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     }
     return map;
   }, []);
+  const teleportAvatarToRoom = useCallback(
+    (roomId: RoomId): boolean => {
+      const you = avatarRef.current;
+      const scene = sceneRef.current;
+      if (!you) return false;
+      const roomDef = getRoomById(roomId);
+      if (!roomDef) return false;
+
+      const spawn = roomDef.defaultSpawn ?? getRoomCenter(roomDef);
+      const navBounds = roomBoundsRef.current;
+      const roomRect =
+        findRoomRectById(zonesInfoRef.current, roomId, [roomDef.title, roomDef.label]) ?? roomDef.bounds;
+
+      const clampToBounds = (pos: THREE.Vector3, bounds?: RoomBounds | null) => {
+        if (!bounds) return pos;
+        pos.x = clamp(pos.x, bounds.minX + AVATAR_HALF, bounds.maxX - AVATAR_HALF);
+        pos.z = clamp(pos.z, bounds.minZ + AVATAR_HALF, bounds.maxZ - AVATAR_HALF);
+        return pos;
+      };
+
+      const candidates: THREE.Vector3[] = [];
+      const pushCandidate = (x: number, z: number) => {
+        const v = new THREE.Vector3(x, you.position.y, z);
+        clampToBounds(v, roomRect);
+        clampToBounds(v, navBounds);
+        candidates.push(v);
+      };
+
+      pushCandidate(spawn.x, spawn.z);
+      const center = getRoomCenter(roomDef);
+      pushCandidate(center.x, center.z);
+
+      if (navNodesRef.current.length) {
+        const sorted = navNodesRef.current
+          .map((node) => ({ node, d: Math.hypot(node.x - spawn.x, node.z - spawn.z) }))
+          .sort((a, b) => a.d - b.d)
+          .slice(0, 12);
+        for (const entry of sorted) {
+          pushCandidate(entry.node.x, entry.node.z);
+        }
+      }
+
+      const radii = [0.5, 0.9, 1.4, 2.0, 2.8, 3.4];
+      for (const r of radii) {
+        for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) {
+          pushCandidate(spawn.x + Math.cos(angle) * r, spawn.z + Math.sin(angle) * r);
+        }
+      }
+
+      const testBox = new THREE.Box3();
+      const boxCenter = new THREE.Vector3();
+      const boxSize = new THREE.Vector3(AVATAR_HALF * 2, 1.6, AVATAR_HALF * 2);
+      const isBlocked = (pos: THREE.Vector3) => {
+        if (
+          meeting3dFeatures.enforceNavVolumes &&
+          !isPointInsideNavVolumes(pos.x, pos.z, navVolumesRef.current)
+        ) {
+          return true;
+        }
+        testBox.setFromCenterAndSize(boxCenter.set(pos.x, 0.85, pos.z), boxSize);
+        for (const ob of obstaclesRef.current) {
+          if (ob.intersectsBox(testBox)) {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      let safe = candidates.find((candidate) => !isBlocked(candidate));
+      if (!safe) {
+        safe = new THREE.Vector3(
+          clamp(spawn.x, navBounds.minX + AVATAR_HALF, navBounds.maxX - AVATAR_HALF),
+          you.position.y,
+          clamp(spawn.z, navBounds.minZ + AVATAR_HALF, navBounds.maxZ - AVATAR_HALF),
+        );
+      }
+
+      you.position.copy(safe);
+      camTargetRef.current.set(safe.x, 1.2, safe.z);
+      followLockRef.current = false;
+      scrollMoveRef.current = 0;
+      pathQueueRef.current = [];
+      autoGhostRef.current = false;
+
+      if (pathLineRef.current && scene) {
+        scene.remove(pathLineRef.current);
+        pathLineRef.current.geometry.dispose();
+        (pathLineRef.current.material as THREE.Material).dispose();
+        pathLineRef.current = null;
+      }
+
+      const cam = cameraRef.current;
+      if (viewModeRef.current === 'first-person' && cam) {
+        const headHeight = 1.55;
+        cam.position.set(safe.x, headHeight, safe.z);
+      }
+      return true;
+    },
+    [],
+  );
   // Conference room audio isolation state
   const insideConferenceRef = useRef<boolean>(false);
   const [insideConference, setInsideConference] = useState(false);
@@ -1137,6 +1256,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       camera = GLOBAL_SCENE_CACHE.camera;
       zonesInfoRef.current = GLOBAL_SCENE_CACHE.zonesInfo;
       obstaclesRef.current = GLOBAL_SCENE_CACHE.obstacles;
+      environmentObstaclesRef.current = GLOBAL_SCENE_CACHE.obstacles.slice();
       stageScreenRef.current = GLOBAL_SCENE_CACHE.stageScreen;
       deskMgrRef.current = GLOBAL_SCENE_CACHE.deskMgr;
       avatarsGroupRef.current = GLOBAL_SCENE_CACHE.avatarsGroup;
@@ -1153,6 +1273,8 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       targetDistRef.current = GLOBAL_SCENE_CACHE.targetDist;
       viewModeRef.current = GLOBAL_SCENE_CACHE.viewMode;
       setCurrentViewMode(GLOBAL_SCENE_CACHE.viewMode);
+      ensureCeilingController(scene);
+      setCeilingVisibilityRef.current(GLOBAL_SCENE_CACHE.viewMode === 'first-person');
 
       // Restore local avatar ref promptly so controls work immediately
       const localKey = localParticipantIdRef.current || norm(localSid);
@@ -1245,9 +1367,15 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     // Build static environment if not cached
     if (!GLOBAL_SCENE_CACHE) {
       const env = buildEnvironment(scene!, { ROOM_W, ROOM_D, palette: MODE_PALETTE[theme], theme }, rendererRef.current ?? undefined);
+      environmentObstaclesRef.current = env.obstacles.slice();
       obstaclesRef.current = env.obstacles;
       stageScreenRef.current = env.stageScreen;
+      setCeilingVisibilityRef.current = env.setCeilingsVisible;
+      env.setCeilingsVisible(viewModeRef.current === 'first-person');
       try { applyEnvironmentTheme(scene!, theme); } catch {}
+    } else {
+      ensureCeilingController(scene);
+      setCeilingVisibilityRef.current(viewModeRef.current === 'first-person');
     }
 
     
@@ -1270,10 +1398,10 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         bayCols: 5, bayRows: 2,
         deskGapX: 1.5, deskGapZ: 1.7,
         bayAisleX: 2.2, bayAisleZ: 2.4,
-        startX: zones.openOfficeArea.minX - 2.0,
-        startZ: zones.openOfficeArea.minZ - 5.0,
-        maxWidth: (zones.openOfficeArea.maxX - zones.openOfficeArea.minX) - 2.0,
-        maxDepth: (zones.openOfficeArea.maxZ - zones.openOfficeArea.minZ) - 1.8,
+        startX: zones.openOfficeArea.minX + 2.0,
+        startZ: zones.openOfficeArea.minZ + 2.4,
+        maxWidth: (zones.openOfficeArea.maxX - zones.openOfficeArea.minX) - 4.0,
+        maxDepth: (zones.openOfficeArea.maxZ - zones.openOfficeArea.minZ) - 4.0,
         faceYaw: Math.PI,
       });
       deskMgrRef.current = mgr;
@@ -1295,7 +1423,9 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           );
           desks = desks.filter(b => !b.intersectsBox(carve1) && !b.intersectsBox(carve2));
         }
-        obstaclesRef.current = [ ...(zinfo?.zoneColliders ?? []), ...desks ];
+        const structural = zinfo?.zoneColliders ?? [];
+        const baseObstacles = environmentObstaclesRef.current ?? [];
+        obstaclesRef.current = [...baseObstacles, ...structural, ...desks];
         // If debug overlay is active, rebuild it to reflect new obstacles
         if (debugStateRef.current.hitboxes) { removeColliderDebug(); addColliderDebug(); }
       } catch { obstaclesRef.current.push(...mgr.colliders); }
@@ -1628,8 +1758,11 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         if (suggestedRoomId) {
           const targetRoom = getRoomById(suggestedRoomId);
           if (targetRoom) {
-            const spawn = targetRoom.defaultSpawn ?? getRoomCenter(targetRoom);
-            queuePathTo(spawn.x, spawn.z, false, targetRoom.title);
+            const teleported = teleportAvatarToRoom(targetRoom.id);
+            if (!teleported) {
+              const spawn = targetRoom.defaultSpawn ?? getRoomCenter(targetRoom);
+              queuePathTo(spawn.x, spawn.z, false, targetRoom.title);
+            }
             portalSuggestionRef.current = null;
             try { setPortalSuggestion(null); } catch {}
           }
@@ -2747,6 +2880,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       navNodesRef.current = [];
       navGraphRef.current = null;
       canSendDataRef.current = false;
+      setCeilingVisibilityRef.current = () => {};
     };
   }, []); // NO DEPENDENCIES - scene built only once
 
@@ -2895,6 +3029,10 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   }, [contextMenu]);
 
   useEffect(() => {
+    setCeilingVisibilityRef.current(currentViewMode === 'first-person');
+  }, [currentViewMode]);
+
+  useEffect(() => {
     const aliasLookup = new Map<string, ParticipantRow>();
     for (const row of uniqueParticipants) {
       aliasLookup.set(row.id, row);
@@ -2941,13 +3079,26 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         if (!avatar) continue;
         const remoteRoom = resolveRoomForPosition({ x: avatar.position.x, z: avatar.position.z }, navVolumesRef.current);
         const dist = avatar.position.distanceTo(you.position);
-        let baseVolume = 0.3;
+        const localProfile = getAudioProfileForRoom(localRoom);
+        const remoteProfile = getAudioProfileForRoom(remoteRoom);
+        const adjacencyMatch =
+          !!localRoom && !!remoteRoom &&
+          (roomAdjacency[localRoom]?.includes(remoteRoom) || roomAdjacency[remoteRoom]?.includes(localRoom));
+
+        let baseVolume = Math.min(localProfile.remote, remoteProfile.remote);
         if (localRoom && remoteRoom) {
-          if (localRoom === remoteRoom) baseVolume = 1.0;
-          else if (roomAdjacency[localRoom]?.includes(remoteRoom)) baseVolume = 0.6;
-          else baseVolume = 0.2;
+          if (localRoom === remoteRoom) {
+            baseVolume = Math.min(localProfile.sameRoom, remoteProfile.sameRoom);
+          } else if (adjacencyMatch) {
+            baseVolume = Math.min(localProfile.adjacent, remoteProfile.adjacent);
+          }
         }
-        const falloff = THREE.MathUtils.clamp(1 - dist / 12, 0.05, 1);
+
+        const falloffRadius = Math.max(
+          6,
+          Math.min(localProfile.falloffRadius ?? DEFAULT_ROOM_AUDIO_PROFILE.falloffRadius, remoteProfile.falloffRadius ?? DEFAULT_ROOM_AUDIO_PROFILE.falloffRadius),
+        );
+        const falloff = THREE.MathUtils.clamp(1 - dist / falloffRadius, 0.05, 1);
         const targetVolume = Math.max(0.05, baseVolume * falloff);
         const publications: any[] = Array.from(remote?.audioTracks?.values?.() ?? []);
         for (const pub of publications) {
@@ -3057,7 +3208,9 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         );
         desks = desks.filter(b => !b.intersectsBox(carve1) && !b.intersectsBox(carve2));
       }
-      obstaclesRef.current = [ ...(zinfo?.zoneColliders ?? []), ...desks ];
+      const structural = zinfo?.zoneColliders ?? [];
+      const baseObstacles = environmentObstaclesRef.current ?? [];
+      obstaclesRef.current = [...baseObstacles, ...structural, ...desks];
       if (debugStateRef.current.hitboxes) { removeColliderDebug(); addColliderDebug(); }
     } catch {}
 
@@ -3487,14 +3640,20 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     return getRoomById(portalSuggestion) ?? null;
   }, [portalSuggestion]);
 
-  const handleJumpToRoom = useCallback((roomId: RoomId) => {
-    const targetRoom = getRoomById(roomId);
-    if (!targetRoom) return;
-    const spawn = targetRoom.defaultSpawn ?? getRoomCenter(targetRoom);
-    queuePathToRef.current(spawn.x, spawn.z, false, targetRoom.title);
-    portalSuggestionRef.current = null;
-    try { setPortalSuggestion(null); } catch {}
-  }, []);
+  const handleJumpToRoom = useCallback(
+    (roomId: RoomId) => {
+      const targetRoom = getRoomById(roomId);
+      if (!targetRoom) return;
+      const teleported = teleportAvatarToRoom(roomId);
+      if (!teleported) {
+        const spawn = targetRoom.defaultSpawn ?? getRoomCenter(targetRoom);
+        queuePathToRef.current(spawn.x, spawn.z, false, targetRoom.title);
+      }
+      portalSuggestionRef.current = null;
+      try { setPortalSuggestion(null); } catch {}
+    },
+    [teleportAvatarToRoom],
+  );
 
   const hasPerfSample = perfSnapshot.fps > 0 || perfSnapshot.draws > 0 || perfSnapshot.triangles > 0;
   const fpsOk = !hasPerfSample || perfSnapshot.fps >= FPS_BUDGET;

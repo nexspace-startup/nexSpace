@@ -19,6 +19,17 @@ export type RoomBounds = {
   maxZ: number;
 };
 
+export type RoomAudioProfile = {
+  /** Volume multiplier when both participants share the room. */
+  sameRoom: number;
+  /** Volume multiplier when rooms are adjacent/connected. */
+  adjacent: number;
+  /** Volume multiplier when rooms are distant. */
+  remote: number;
+  /** Distance in meters before falloff reaches the minimum volume. */
+  falloffRadius: number;
+};
+
 export type RoomDefinition = {
   id: RoomId;
   title: string;
@@ -29,6 +40,7 @@ export type RoomDefinition = {
   defaultSpawn: { x: number; z: number };
   description?: string;
   accentColor: string;
+  audioProfile?: RoomAudioProfile;
 };
 
 export type RoomPortal = {

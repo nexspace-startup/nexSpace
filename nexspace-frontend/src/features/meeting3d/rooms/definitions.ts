@@ -1,8 +1,11 @@
-import type { NavVolumeDefinition, RoomBounds, RoomDefinition, RoomId, RoomPortal } from './types';
+import type { NavVolumeDefinition, RoomAudioProfile, RoomBounds, RoomDefinition, RoomId, RoomPortal } from './types';
 
-const ROOM_D = 34;
+const ROOM_D = 44;
 
 const makeBounds = (bounds: RoomBounds): RoomBounds => ({ ...bounds });
+const makeProfile = (profile: RoomAudioProfile): RoomAudioProfile => ({ ...profile });
+
+const DEFAULT_FALLOFF = 14;
 
 export const ROOM_DEFINITIONS: RoomDefinition[] = [
   {
@@ -11,10 +14,11 @@ export const ROOM_DEFINITIONS: RoomDefinition[] = [
     label: 'Lobby',
     kind: 'lobby',
     order: 10,
-    bounds: makeBounds({ minX: -9.5, maxX: 9.5, minZ: -16.2, maxZ: -6.4 }),
-    defaultSpawn: { x: 0, z: -11.2 },
-    description: 'Spawn, presence overview, and quick teleports.',
+    bounds: makeBounds({ minX: -12.0, maxX: 12.0, minZ: -22.0, maxZ: -12.0 }),
+    defaultSpawn: { x: 0, z: -17.0 },
+    description: 'Reception, help desk, and fast teleports into the hub.',
     accentColor: '#4f46e5',
+    audioProfile: makeProfile({ sameRoom: 0.95, adjacent: 0.65, remote: 0.35, falloffRadius: DEFAULT_FALLOFF + 4 }),
   },
   {
     id: 'open-desk',
@@ -22,10 +26,11 @@ export const ROOM_DEFINITIONS: RoomDefinition[] = [
     label: 'Desks',
     kind: 'collaboration',
     order: 20,
-    bounds: makeBounds({ minX: -20.0, maxX: 16.8, minZ: -6.6, maxZ: 13.0 }),
-    defaultSpawn: { x: -1.0, z: 6.4 },
-    description: 'Hot desks, collaboration tables, and shared resources.',
+    bounds: makeBounds({ minX: -24.0, maxX: 18.0, minZ: -12.0, maxZ: 12.0 }),
+    defaultSpawn: { x: -3.0, z: 0 },
+    description: 'Hot desks, collaboration tables, and shared huddle zones.',
     accentColor: '#f97316',
+    audioProfile: makeProfile({ sameRoom: 1.0, adjacent: 0.58, remote: 0.22, falloffRadius: DEFAULT_FALLOFF }),
   },
   {
     id: 'conference',
@@ -33,10 +38,11 @@ export const ROOM_DEFINITIONS: RoomDefinition[] = [
     label: 'Conference',
     kind: 'conference',
     order: 30,
-    bounds: makeBounds({ minX: 6.2, maxX: 18.4, minZ: -12.4, maxZ: 6.4 }),
-    defaultSpawn: { x: 11.5, z: -2.8 },
-    description: 'Glass-walled rooms with screen share and private audio.',
+    bounds: makeBounds({ minX: 18.0, maxX: 30.0, minZ: -10.0, maxZ: 10.0 }),
+    defaultSpawn: { x: 24.0, z: 0 },
+    description: 'Glass conference suite for private meetings and screen share.',
     accentColor: '#38bdf8',
+    audioProfile: makeProfile({ sameRoom: 1.0, adjacent: 0.18, remote: 0.08, falloffRadius: DEFAULT_FALLOFF - 3 }),
   },
   {
     id: 'focus-booths',
@@ -44,10 +50,11 @@ export const ROOM_DEFINITIONS: RoomDefinition[] = [
     label: 'Focus',
     kind: 'focus',
     order: 40,
-    bounds: makeBounds({ minX: -22.4, maxX: -8.6, minZ: -14.2, maxZ: 1.2 }),
-    defaultSpawn: { x: -15.8, z: -6.2 },
-    description: 'Heads-down pods with DND indicators and hush audio.',
+    bounds: makeBounds({ minX: -30.0, maxX: -18.0, minZ: -10.0, maxZ: 8.0 }),
+    defaultSpawn: { x: -24.0, z: -2.0 },
+    description: 'Sound-dampened focus booths with DND indicators.',
     accentColor: '#34d399',
+    audioProfile: makeProfile({ sameRoom: 0.9, adjacent: 0.16, remote: 0.06, falloffRadius: DEFAULT_FALLOFF - 4 }),
   },
   {
     id: 'cafe-lounge',
@@ -55,10 +62,11 @@ export const ROOM_DEFINITIONS: RoomDefinition[] = [
     label: 'Cafe',
     kind: 'social',
     order: 50,
-    bounds: makeBounds({ minX: -5.6, maxX: 6.6, minZ: 4.0, maxZ: 15.0 }),
-    defaultSpawn: { x: 0.8, z: 9.8 },
-    description: 'Casual lounge, coffee bar, and game nook.',
+    bounds: makeBounds({ minX: -10.0, maxX: 12.0, minZ: 12.0, maxZ: 22.0 }),
+    defaultSpawn: { x: 1.0, z: 17.0 },
+    description: 'Cafe lounge with coffee bar, sofas, and a game nook.',
     accentColor: '#fbbf24',
+    audioProfile: makeProfile({ sameRoom: 0.85, adjacent: 0.5, remote: 0.2, falloffRadius: DEFAULT_FALLOFF + 2 }),
   },
 ];
 
@@ -66,45 +74,45 @@ const halfD = ROOM_D / 2;
 
 export const ROOM_NAV_VOLUMES: NavVolumeDefinition[] = [
   // Primary volumes
-  { id: 'lobby-core', roomId: 'lobby', bounds: makeBounds({ minX: -9.5, maxX: 9.5, minZ: -halfD + 1.4, maxZ: -6.4 }), priority: 6, primary: true },
-  { id: 'open-core', roomId: 'open-desk', bounds: makeBounds({ minX: -20.0, maxX: 16.8, minZ: -5.8, maxZ: 13.0 }), priority: 5, primary: true },
-  { id: 'conference-core', roomId: 'conference', bounds: makeBounds({ minX: 6.2, maxX: 18.4, minZ: -12.4, maxZ: 6.4 }), priority: 5, primary: true },
-  { id: 'focus-core', roomId: 'focus-booths', bounds: makeBounds({ minX: -22.4, maxX: -8.6, minZ: -14.2, maxZ: 1.2 }), priority: 5, primary: true },
-  { id: 'cafe-core', roomId: 'cafe-lounge', bounds: makeBounds({ minX: -5.6, maxX: 6.6, minZ: 4.0, maxZ: 15.0 }), priority: 5, primary: true },
+  { id: 'lobby-core', roomId: 'lobby', bounds: makeBounds({ minX: -11.5, maxX: 11.5, minZ: -halfD + 1.0, maxZ: -12.4 }), priority: 6, primary: true },
+  { id: 'open-core', roomId: 'open-desk', bounds: makeBounds({ minX: -23.0, maxX: 17.0, minZ: -10.8, maxZ: 11.6 }), priority: 5, primary: true },
+  { id: 'conference-core', roomId: 'conference', bounds: makeBounds({ minX: 19.0, maxX: 29.0, minZ: -9.2, maxZ: 9.2 }), priority: 5, primary: true },
+  { id: 'focus-core', roomId: 'focus-booths', bounds: makeBounds({ minX: -29.5, maxX: -18.5, minZ: -9.5, maxZ: 7.5 }), priority: 5, primary: true },
+  { id: 'cafe-core', roomId: 'cafe-lounge', bounds: makeBounds({ minX: -9.2, maxX: 11.2, minZ: 12.8, maxZ: 21.6 }), priority: 5, primary: true },
   // Connectors (inherit the open desk room for now)
-  { id: 'connector-open-lobby', roomId: 'open-desk', bounds: makeBounds({ minX: -5.0, maxX: 5.0, minZ: -8.2, maxZ: -5.4 }), priority: 3, primary: false },
-  { id: 'connector-open-focus', roomId: 'open-desk', bounds: makeBounds({ minX: -10.2, maxX: -7.2, minZ: -6.8, maxZ: 1.6 }), priority: 3, primary: false },
-  { id: 'connector-open-conference', roomId: 'open-desk', bounds: makeBounds({ minX: 5.6, maxX: 7.8, minZ: -6.4, maxZ: 2.6 }), priority: 3, primary: false },
-  { id: 'connector-open-cafe', roomId: 'open-desk', bounds: makeBounds({ minX: -1.8, maxX: 2.2, minZ: 3.4, maxZ: 6.8 }), priority: 3, primary: false },
+  { id: 'connector-open-lobby', roomId: 'open-desk', bounds: makeBounds({ minX: -6.0, maxX: 6.0, minZ: -13.6, maxZ: -9.8 }), priority: 3, primary: false },
+  { id: 'connector-open-focus', roomId: 'open-desk', bounds: makeBounds({ minX: -24.4, maxX: -18.4, minZ: -6.4, maxZ: 5.6 }), priority: 3, primary: false },
+  { id: 'connector-open-conference', roomId: 'open-desk', bounds: makeBounds({ minX: 17.6, maxX: 20.8, minZ: -5.6, maxZ: 6.0 }), priority: 3, primary: false },
+  { id: 'connector-open-cafe', roomId: 'open-desk', bounds: makeBounds({ minX: -6.0, maxX: 6.0, minZ: 11.6, maxZ: 15.6 }), priority: 3, primary: false },
 ];
 
 export const ROOM_PORTALS: RoomPortal[] = [
   {
     id: 'portal-lobby-open',
     rooms: ['lobby', 'open-desk'],
-    position: { x: 0, z: -6.2 },
-    radius: 2.6,
+    position: { x: -2.5, z: -12.0 },
+    radius: 3.2,
     label: 'Lobby Doors',
   },
   {
     id: 'portal-open-focus',
     rooms: ['open-desk', 'focus-booths'],
-    position: { x: -9.0, z: -2.0 },
-    radius: 1.9,
+    position: { x: -18.0, z: -2.0 },
+    radius: 2.4,
     label: 'Focus Entry',
   },
   {
     id: 'portal-open-conference',
     rooms: ['open-desk', 'conference'],
-    position: { x: 6.5, z: -2.0 },
-    radius: 1.9,
+    position: { x: 18.0, z: -1.5 },
+    radius: 2.4,
     label: 'Conference Door',
   },
   {
     id: 'portal-open-cafe',
     rooms: ['open-desk', 'cafe-lounge'],
-    position: { x: 0.5, z: 4.6 },
-    radius: 2.2,
+    position: { x: 0, z: 12.0 },
+    radius: 2.8,
     label: 'Cafe Threshold',
   },
 ];
