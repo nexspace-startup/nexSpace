@@ -372,33 +372,6 @@ export const useMeetingStore = create<MeetingState>()(
       }
     };
 
-    const ensureLocalAvatarInMetadata = async (room: Room) => {
-      try {
-        const lp: any = room.localParticipant;
-        const currentMd = lp?.metadata;
-        const avatar = useUserStore.getState()?.user?.avatar;
-
-        if (!avatar) return;
-
-        let json: any = {};
-        if (currentMd) {
-          try {
-            json = JSON.parse(currentMd);
-          } catch {
-            json = {};
-          }
-        }
-
-        const prof = json.profile ?? {};
-        if (prof.avatar === avatar) return;
-
-        json.profile = { ...prof, avatar };
-        await lp?.setMetadata?.(JSON.stringify(json));
-      } catch {
-        // Ignore errors
-      }
-    };
-
     // ------------------------------------------------------------------------
     // Whisper Management
     // ------------------------------------------------------------------------
@@ -672,10 +645,6 @@ export const useMeetingStore = create<MeetingState>()(
       syncAV(room);
       syncScreenShare(room);
       seedPresenceFromRoom(room);
-
-      // Ensure avatar in metadata
-      ensureLocalAvatarInMetadata(room);
-      setTimeout(() => ensureLocalAvatarInMetadata(room), 500);
 
       // Broadcast profile
       broadcastProfile(room);
