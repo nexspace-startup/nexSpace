@@ -20,13 +20,14 @@ type BuiltEnvironment = {
   disposeEnv: () => void;
   moduleHandles: Promise<RoomModuleHandle[]>;
   roomLayout: THREE.Group | null;
+  setCeilingsVisible: (visible: boolean) => void;
 };
 
 const ENV_HANDLES: Partial<Record<EnvironmentVariant, EnvironmentMapHandle>> = {};
 
 const ROOM_PARTITION_HEIGHT = 2.6;
 const ROOM_PARTITION_THICKNESS = 0.16;
-const PORTAL_GAP_PAD = 0.45;
+const PORTAL_GAP_PAD = 0.75;
 const PORTAL_EDGE_EPS = 0.8;
 
 function disposeObjectDeep(object: THREE.Object3D | null | undefined) {
@@ -761,12 +762,59 @@ function createPortalMarkers(palette: ModePalette): THREE.Group {
   return group;
 }
 
-type RoomLayoutHandle = { group: THREE.Group; obstacles: THREE.Box3[]; dispose: () => void };
+type RoomLayoutHandle = { group: THREE.Group; ceilings: THREE.Group; obstacles: THREE.Box3[]; dispose: () => void };
+
+function createCeilingMaterial(palette: ModePalette): THREE.MeshStandardMaterial {
+  const canvas = IS_BROWSER ? document.createElement('canvas') : null;
+  if (!canvas) {
+    return new THREE.MeshStandardMaterial({
+      color: 0xf4f3ef,
+      roughness: 0.9,
+      metalness: 0.02,
+      side: THREE.DoubleSide,
+    });
+  }
+  canvas.width = canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = '#f4f3ef';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = 'rgba(90, 90, 90, 0.2)';
+    ctx.lineWidth = 4;
+    const step = canvas.width / 6;
+    for (let i = 0; i <= canvas.width; i += step) {
+      ctx.beginPath();
+      ctx.moveTo(i + 0.5, 0);
+      ctx.lineTo(i + 0.5, canvas.height);
+      ctx.stroke();
+    }
+    for (let j = 0; j <= canvas.height; j += step) {
+      ctx.beginPath();
+      ctx.moveTo(0, j + 0.5);
+      ctx.lineTo(canvas.width, j + 0.5);
+      ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas!);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.needsUpdate = true;
+  return new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    map: tex,
+    roughness: 0.92,
+    metalness: 0.02,
+    side: THREE.DoubleSide,
+  });
+}
 
 function addRoomLayout(scene: THREE.Scene, palette: ModePalette): RoomLayoutHandle {
   const layoutGroup = new THREE.Group();
   layoutGroup.name = 'ROOM_LAYOUT';
+  const ceilingsGroup = new THREE.Group();
+  ceilingsGroup.name = 'ROOM_CEILINGS';
+  ceilingsGroup.visible = false;
   const obstacles: THREE.Box3[] = [];
+  const ceilingMaterial = createCeilingMaterial(palette);
 
   for (const room of ROOM_DEFINITIONS) {
     const roomGroup = new THREE.Group();
@@ -811,19 +859,32 @@ function addRoomLayout(scene: THREE.Scene, palette: ModePalette): RoomLayoutHand
     obstacles.push(...furniture.obstacles);
 
     layoutGroup.add(roomGroup);
+
+    const ceiling = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, depth),
+      ceilingMaterial.clone(),
+    );
+    ceiling.rotation.x = -Math.PI / 2;
+    ceiling.position.set(centerX, 3.2, centerZ);
+    ceiling.receiveShadow = true;
+    ceiling.name = `room-ceiling-${room.id}`;
+    ceilingsGroup.add(ceiling);
   }
 
   const portalMarkers = createPortalMarkers(palette);
   layoutGroup.add(portalMarkers);
 
   scene.add(layoutGroup);
+  scene.add(ceilingsGroup);
 
   const dispose = () => {
     layoutGroup.removeFromParent();
     disposeObjectDeep(layoutGroup);
+    ceilingsGroup.removeFromParent();
+    disposeObjectDeep(ceilingsGroup);
   };
 
-  return { group: layoutGroup, obstacles, dispose };
+  return { group: layoutGroup, ceilings: ceilingsGroup, obstacles, dispose };
 }
 
 function addAmbientLights(scene: THREE.Scene) {
@@ -941,6 +1002,11 @@ export function buildEnvironment(
   const stage = addStage(scene, palette);
   const planters = addPlanters(scene, palette);
   const roomLayoutHandle = addRoomLayout(scene, palette);
+  const setCeilingsVisible = (visible: boolean) => {
+    if (roomLayoutHandle.ceilings) {
+      roomLayoutHandle.ceilings.visible = visible;
+    }
+  };
   const surround = addSurroundingGrid(scene, opts.ROOM_W, opts.ROOM_D, renderer, palette);
 
   const obstacles: THREE.Box3[] = [];
@@ -1016,6 +1082,7 @@ export function buildEnvironment(
     disposeEnv,
     moduleHandles,
     roomLayout: roomLayoutHandle.group,
+    setCeilingsVisible,
   };
 }
 

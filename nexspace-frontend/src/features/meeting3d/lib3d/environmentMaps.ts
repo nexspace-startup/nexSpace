@@ -48,6 +48,9 @@ async function createEnvironmentMap(
     loader.setDataType(THREE.FloatType);
 
     const texture = await loader.loadAsync(HDRI_PATHS[variant]);
+    if (!texture || !(texture as THREE.Texture).isTexture || !(texture as THREE.Texture).image) {
+      throw new Error('HDRI texture missing image data');
+    }
     const pmrem = new THREE.PMREMGenerator(renderer);
     const envRT = pmrem.fromEquirectangular(texture);
 

@@ -6,9 +6,9 @@ export const meeting3dFeatures = {
   /** Keep portal metadata active so later phases can light up teleport triggers. */
   showPortalDebug: false,
   /** Toggle HDR environment map + PMREM lighting. */
-  enableHdriEnvironment: true,
+  enableHdriEnvironment: false,
   /** Toggle GLB-backed room modules. */
-  useRoomModules: true,
+  useRoomModules: false,
   /** Show the in-scene performance diagnostics HUD. */
   showPerformanceOverlay: true,
 } as const;
