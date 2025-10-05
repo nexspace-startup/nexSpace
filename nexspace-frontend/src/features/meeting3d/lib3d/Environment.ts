@@ -6,6 +6,8 @@ import { getMaterial } from './materialCache';
 import { preloadEnvironmentMap, type EnvironmentVariant, type EnvironmentMapHandle } from './environmentMaps';
 import { mountRoomModules, type RoomModuleHandle } from './RoomModuleLoader';
 import { meeting3dFeatures } from '../config';
+import { ROOM_DEFINITIONS, ROOM_PORTALS, getRoomById } from '../rooms/definitions';
+import type { RoomBounds, RoomDefinition, RoomPortal } from '../rooms/types';
 
 RectAreaLightUniformsLib.init();
 
@@ -17,9 +19,62 @@ type BuiltEnvironment = {
   localMonitor: THREE.Mesh | null;
   disposeEnv: () => void;
   moduleHandles: Promise<RoomModuleHandle[]>;
+  roomLayout: THREE.Group | null;
 };
 
 const ENV_HANDLES: Partial<Record<EnvironmentVariant, EnvironmentMapHandle>> = {};
+
+const ROOM_PARTITION_HEIGHT = 2.6;
+const ROOM_PARTITION_THICKNESS = 0.16;
+const PORTAL_GAP_PAD = 0.45;
+const PORTAL_EDGE_EPS = 0.8;
+
+function disposeObjectDeep(object: THREE.Object3D | null | undefined) {
+  if (!object) return;
+  const disposedMaterials = new Set<THREE.Material>();
+  const disposedTextures = new Set<THREE.Texture>();
+  object.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    const line = node as THREE.Line | THREE.LineSegments;
+    const sprite = node as THREE.Sprite;
+    if (mesh && mesh.geometry) {
+      try { mesh.geometry.dispose(); } catch { /* noop */ }
+    }
+    if (line && line.geometry) {
+      try { line.geometry.dispose(); } catch { /* noop */ }
+    }
+    const materials: THREE.Material[] = [];
+    if (mesh && mesh.material) {
+      if (Array.isArray(mesh.material)) {
+        materials.push(...mesh.material);
+      } else {
+        materials.push(mesh.material as THREE.Material);
+      }
+    }
+    if (line && line.material) {
+      if (Array.isArray(line.material)) {
+        materials.push(...line.material);
+      } else {
+        materials.push(line.material as THREE.Material);
+      }
+    }
+    if (sprite && sprite.material) {
+      materials.push(sprite.material as THREE.Material);
+    }
+    materials.forEach((material) => {
+      if (!material || disposedMaterials.has(material)) {
+        return;
+      }
+      const map = (material as any).map as THREE.Texture | undefined;
+      if (map && !disposedTextures.has(map)) {
+        try { map.dispose(); } catch { /* noop */ }
+        disposedTextures.add(map);
+      }
+      try { material.dispose(); } catch { /* noop */ }
+      disposedMaterials.add(material);
+    });
+  });
+}
 
 function variantFromTheme(theme: Mode): EnvironmentVariant {
   return theme === 'light' ? 'day' : 'night';
@@ -144,17 +199,31 @@ function addWalls(scene: THREE.Scene, width: number, depth: number, palette: Mod
 }
 
 function addStage(scene: THREE.Scene, palette: ModePalette) {
+  const conference = getRoomById('conference');
+  const openDesk = getRoomById('open-desk');
   const screenMat = getMaterial('screen', palette) as THREE.MeshBasicMaterial;
-  const screen = new THREE.Mesh(new THREE.PlaneGeometry(11.5, 4.2), screenMat);
-  screen.position.set(0, 2.5, -15.6);
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(8.4, 3.8), screenMat);
+  if (conference) {
+    const centerX = (conference.bounds.minX + conference.bounds.maxX) / 2;
+    const frontZ = conference.bounds.minZ + 0.3;
+    screen.position.set(centerX, 2.4, frontZ);
+  } else {
+    screen.position.set(0, 2.4, -15.6);
+  }
   screen.name = 'STAGE_SCREEN';
   scene.add(screen);
 
   const podium = new THREE.Mesh(
-    new RoundedBoxGeometry(3.2, 0.3, 1.0, 4, 0.08),
+    new RoundedBoxGeometry(2.8, 0.3, 1.0, 4, 0.08),
     getMaterial('wood-accent', palette),
   );
-  podium.position.set(0, 0.16, -14.6);
+  if (conference) {
+    const centerX = (conference.bounds.minX + conference.bounds.maxX) / 2;
+    const podiumZ = conference.bounds.minZ + 1.3;
+    podium.position.set(centerX, 0.18, podiumZ);
+  } else {
+    podium.position.set(0, 0.16, -14.6);
+  }
   podium.receiveShadow = true;
   podium.castShadow = true;
   scene.add(podium);
@@ -163,7 +232,13 @@ function addStage(scene: THREE.Scene, palette: ModePalette) {
     new THREE.BoxGeometry(1.1, 0.7, 0.06),
     getMaterial('metal-accent', palette),
   );
-  monitor.position.set(19.1, 2.1, 14.4);
+  if (openDesk) {
+    const monitorX = openDesk.bounds.maxX - 1.2;
+    const monitorZ = openDesk.bounds.maxZ - 1.1;
+    monitor.position.set(monitorX, 1.8, monitorZ);
+  } else {
+    monitor.position.set(2.0, 1.6, 6.0);
+  }
   monitor.name = 'LOCAL_MONITOR';
   monitor.castShadow = true;
   monitor.receiveShadow = true;
@@ -219,6 +294,536 @@ function addPlanters(scene: THREE.Scene, palette: ModePalette) {
 
   scene.add(planterGroup);
   return planterGroup;
+}
+
+function createRoomSign(
+  room: RoomDefinition,
+  accent: THREE.Color,
+  centerX: number,
+  centerZ: number,
+  depth: number,
+): THREE.Mesh {
+  const width = Math.min(3.4, Math.max(2.2, depth * 0.6));
+  const height = 0.9;
+  let material: THREE.MeshBasicMaterial;
+  if (IS_BROWSER) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 192;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = 'rgba(10,16,24,0.88)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = accent.getStyle();
+    ctx.lineWidth = 6;
+    ctx.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 64px "Inter", "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(room.title, canvas.width / 2, canvas.height / 2);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false });
+  } else {
+    material = new THREE.MeshBasicMaterial({
+      color: accent.getHex(),
+      transparent: true,
+      opacity: 0.82,
+      toneMapped: false,
+    });
+  }
+  material.depthWrite = false;
+  material.depthTest = true;
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
+  sign.position.set(centerX, 1.9, centerZ - depth / 2 + 0.6);
+  sign.lookAt(new THREE.Vector3(centerX, 1.9, centerZ + depth / 2));
+  sign.renderOrder = 3;
+  sign.name = `room-sign-${room.id}`;
+  return sign;
+}
+
+type PartitionBuild = { meshes: THREE.Mesh[]; obstacles: THREE.Box3[] };
+
+function buildPartitionsForRoom(room: RoomDefinition, palette: ModePalette): PartitionBuild {
+  const meshes: THREE.Mesh[] = [];
+  const obstacles: THREE.Box3[] = [];
+  const bounds = room.bounds;
+  const accent = new THREE.Color(room.accentColor);
+  const baseColor = accent.clone().lerp(new THREE.Color(palette.surroundWalls), 0.45);
+  const material = new THREE.MeshStandardMaterial({
+    color: baseColor.getHex(),
+    roughness: 0.72,
+    metalness: 0.12,
+  });
+  const portals = ROOM_PORTALS.filter((portal) => portal.rooms.includes(room.id));
+
+  const addSegment = (
+    orientation: 'horizontal' | 'vertical',
+    fixed: number,
+    start: number,
+    end: number,
+  ) => {
+    const length = end - start;
+    if (length <= 0.2) {
+      return;
+    }
+    const geometry =
+      orientation === 'horizontal'
+        ? new THREE.BoxGeometry(length, ROOM_PARTITION_HEIGHT, ROOM_PARTITION_THICKNESS)
+        : new THREE.BoxGeometry(ROOM_PARTITION_THICKNESS, ROOM_PARTITION_HEIGHT, length);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    if (orientation === 'horizontal') {
+      const centerX = (start + end) / 2;
+      mesh.position.set(centerX, ROOM_PARTITION_HEIGHT / 2, fixed);
+      obstacles.push(
+        new THREE.Box3().setFromCenterAndSize(
+          new THREE.Vector3(centerX, ROOM_PARTITION_HEIGHT / 2, fixed),
+          new THREE.Vector3(length, ROOM_PARTITION_HEIGHT, ROOM_PARTITION_THICKNESS),
+        ),
+      );
+    } else {
+      const centerZ = (start + end) / 2;
+      mesh.position.set(fixed, ROOM_PARTITION_HEIGHT / 2, centerZ);
+      obstacles.push(
+        new THREE.Box3().setFromCenterAndSize(
+          new THREE.Vector3(fixed, ROOM_PARTITION_HEIGHT / 2, centerZ),
+          new THREE.Vector3(ROOM_PARTITION_THICKNESS, ROOM_PARTITION_HEIGHT, length),
+        ),
+      );
+    }
+    meshes.push(mesh);
+  };
+
+  const buildSegments = (
+    orientation: 'horizontal' | 'vertical',
+    fixed: number,
+    min: number,
+    max: number,
+  ) => {
+    const relevant = portals
+      .filter((portal) =>
+        orientation === 'horizontal'
+          ? Math.abs(portal.position.z - fixed) <= portal.radius + PORTAL_EDGE_EPS
+          : Math.abs(portal.position.x - fixed) <= portal.radius + PORTAL_EDGE_EPS,
+      )
+      .map((portal) => ({
+        coord: orientation === 'horizontal' ? portal.position.x : portal.position.z,
+        radius: portal.radius,
+      }))
+      .sort((a, b) => a.coord - b.coord);
+
+    let cursor = min;
+    for (const portal of relevant) {
+      const gapStart = portal.coord - (portal.radius + PORTAL_GAP_PAD);
+      if (gapStart - cursor > 0.25) {
+        addSegment(orientation, fixed, cursor, gapStart);
+      }
+      cursor = Math.max(cursor, portal.coord + portal.radius + PORTAL_GAP_PAD);
+    }
+    if (max - cursor > 0.25) {
+      addSegment(orientation, fixed, cursor, max);
+    }
+  };
+
+  buildSegments('horizontal', bounds.minZ, bounds.minX, bounds.maxX);
+  buildSegments('horizontal', bounds.maxZ, bounds.minX, bounds.maxX);
+  buildSegments('vertical', bounds.minX, bounds.minZ, bounds.maxZ);
+  buildSegments('vertical', bounds.maxX, bounds.minZ, bounds.maxZ);
+
+  return { meshes, obstacles };
+}
+
+type FurnitureBuild = { objects: THREE.Object3D[]; obstacles: THREE.Box3[] };
+
+function buildFurnitureForRoom(room: RoomDefinition, palette: ModePalette): FurnitureBuild {
+  const objects: THREE.Object3D[] = [];
+  const obstacles: THREE.Box3[] = [];
+  const { bounds } = room;
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+  const width = bounds.maxX - bounds.minX;
+  const depth = bounds.maxZ - bounds.minZ;
+  const furniture = palette.furniture;
+
+  const addCollider = (center: THREE.Vector3, size: THREE.Vector3) => {
+    obstacles.push(new THREE.Box3().setFromCenterAndSize(center, size));
+  };
+
+  const addObject = (object: THREE.Object3D, size?: THREE.Vector3) => {
+    objects.push(object);
+    if (size) {
+      addCollider(object.position.clone(), size);
+    }
+  };
+
+  const woodMaterial = new THREE.MeshStandardMaterial({
+    color: furniture.conferenceTableTop,
+    roughness: 0.5,
+    metalness: 0.18,
+  });
+  const metalMaterial = new THREE.MeshStandardMaterial({
+    color: furniture.conferenceTableLegs,
+    roughness: 0.32,
+    metalness: 0.65,
+  });
+  const seatMaterial = new THREE.MeshStandardMaterial({
+    color: furniture.chairSeat,
+    roughness: 0.75,
+    metalness: 0.08,
+  });
+  const sofaMaterial = new THREE.MeshStandardMaterial({
+    color: furniture.sofaFabric,
+    roughness: 0.82,
+    metalness: 0.05,
+  });
+  const counterMaterial = new THREE.MeshStandardMaterial({
+    color: furniture.coffeeCounter,
+    roughness: 0.6,
+    metalness: 0.12,
+  });
+  const gameTableMaterial = new THREE.MeshStandardMaterial({
+    color: furniture.gameTableTop,
+    roughness: 0.56,
+    metalness: 0.16,
+  });
+  const gameBaseMaterial = new THREE.MeshStandardMaterial({
+    color: furniture.gameTableLeg,
+    roughness: 0.58,
+    metalness: 0.12,
+  });
+
+  switch (room.id) {
+    case 'lobby': {
+      const desk = new THREE.Mesh(new RoundedBoxGeometry(3.8, 1.0, 1.2, 5, 0.12), counterMaterial.clone());
+      desk.position.set(centerX, 0.5, bounds.maxZ - 1.6);
+      desk.castShadow = true;
+      desk.receiveShadow = true;
+      addObject(desk, new THREE.Vector3(3.8, 1.2, 1.2));
+
+      const kiosk = new THREE.Mesh(new RoundedBoxGeometry(0.9, 1.6, 0.5, 4, 0.08), metalMaterial.clone());
+      kiosk.position.set(bounds.minX + width * 0.25, 0.8, centerZ);
+      kiosk.castShadow = true;
+      kiosk.receiveShadow = true;
+      addObject(kiosk, new THREE.Vector3(0.9, 1.6, 0.5));
+
+      const sofa = new THREE.Mesh(new RoundedBoxGeometry(2.6, 0.6, 1.0, 4, 0.12), sofaMaterial.clone());
+      sofa.position.set(bounds.maxX - 2.2, 0.3, centerZ - 0.6);
+      sofa.castShadow = true;
+      sofa.receiveShadow = true;
+      addObject(sofa, new THREE.Vector3(2.6, 0.8, 1.0));
+
+      const lowTable = new THREE.Mesh(new RoundedBoxGeometry(1.4, 0.3, 0.8, 4, 0.1), woodMaterial.clone());
+      lowTable.position.set(bounds.maxX - 2.2, 0.18, centerZ + 0.4);
+      lowTable.castShadow = true;
+      lowTable.receiveShadow = true;
+      addObject(lowTable, new THREE.Vector3(1.4, 0.4, 0.8));
+      break;
+    }
+    case 'open-desk': {
+      const deskGeo = new RoundedBoxGeometry(2.6, 0.12, 1.3, 3, 0.08);
+      const chairGeo = new RoundedBoxGeometry(0.54, 0.45, 0.54, 3, 0.12);
+      const deskPositions = [
+        { x: bounds.minX + 4.2, z: centerZ - 4.4 },
+        { x: bounds.minX + 10.5, z: centerZ - 4.4 },
+        { x: bounds.maxX - 4.2, z: centerZ - 4.4 },
+        { x: bounds.minX + 4.2, z: centerZ + 3.8 },
+        { x: bounds.minX + 10.5, z: centerZ + 3.8 },
+        { x: bounds.maxX - 4.2, z: centerZ + 3.8 },
+      ];
+      deskPositions.forEach((pos) => {
+        const desk = new THREE.Mesh(deskGeo.clone(), woodMaterial.clone());
+        desk.position.set(pos.x, 0.78, pos.z);
+        desk.castShadow = true;
+        desk.receiveShadow = true;
+        addObject(desk, new THREE.Vector3(2.6, 1.2, 1.4));
+
+        const chairFront = new THREE.Mesh(chairGeo.clone(), seatMaterial.clone());
+        chairFront.position.set(pos.x, 0.45, pos.z - 0.9);
+        chairFront.castShadow = true;
+        chairFront.receiveShadow = true;
+        addObject(chairFront, new THREE.Vector3(0.6, 0.7, 0.7));
+
+        const chairBack = new THREE.Mesh(chairGeo.clone(), seatMaterial.clone());
+        chairBack.position.set(pos.x, 0.45, pos.z + 0.9);
+        chairBack.rotation.y = Math.PI;
+        chairBack.castShadow = true;
+        chairBack.receiveShadow = true;
+        addObject(chairBack, new THREE.Vector3(0.6, 0.7, 0.7));
+      });
+
+      const collabTable = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 0.12, 24), gameTableMaterial.clone());
+      collabTable.position.set(centerX, 0.78, centerZ);
+      collabTable.castShadow = true;
+      collabTable.receiveShadow = true;
+      addObject(collabTable, new THREE.Vector3(2.8, 1.0, 2.8));
+
+      const stoolGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.48, 20);
+      const stoolMat = seatMaterial.clone();
+      const stoolOffsets: Array<[number, number]> = [
+        [1.0, 0],
+        [-1.0, 0],
+        [0, 1.0],
+        [0, -1.0],
+      ];
+      stoolOffsets.forEach(([ox, oz]) => {
+        const stool = new THREE.Mesh(stoolGeo.clone(), stoolMat);
+        stool.position.set(centerX + ox, 0.24, centerZ + oz);
+        stool.castShadow = true;
+        stool.receiveShadow = true;
+        addObject(stool, new THREE.Vector3(0.64, 0.6, 0.64));
+      });
+      break;
+    }
+    case 'conference': {
+      const table = new THREE.Mesh(new RoundedBoxGeometry(5.6, 0.18, 2.6, 6, 0.2), woodMaterial.clone());
+      table.position.set(centerX, 0.9, centerZ);
+      table.castShadow = true;
+      table.receiveShadow = true;
+      addObject(table, new THREE.Vector3(5.6, 1.2, 2.6));
+
+      const chairGeo = new RoundedBoxGeometry(0.6, 0.55, 0.6, 3, 0.14);
+      const chairOffsets: Array<[number, number]> = [
+        [-2.2, -1.4],
+        [-0.8, -1.4],
+        [0.8, -1.4],
+        [2.2, -1.4],
+        [-2.2, 1.4],
+        [-0.8, 1.4],
+        [0.8, 1.4],
+        [2.2, 1.4],
+      ];
+      chairOffsets.forEach(([ox, oz]) => {
+        const chair = new THREE.Mesh(chairGeo.clone(), seatMaterial.clone());
+        chair.position.set(centerX + ox, 0.45, centerZ + oz);
+        chair.rotation.y = oz > 0 ? Math.PI : 0;
+        chair.castShadow = true;
+        chair.receiveShadow = true;
+        addObject(chair, new THREE.Vector3(0.7, 0.8, 0.7));
+      });
+
+      const credenza = new THREE.Mesh(new RoundedBoxGeometry(3.2, 0.8, 0.6, 4, 0.08), metalMaterial.clone());
+      credenza.position.set(centerX, 0.4, bounds.minZ + 0.8);
+      credenza.castShadow = true;
+      credenza.receiveShadow = true;
+      addObject(credenza, new THREE.Vector3(3.2, 0.8, 0.6));
+      break;
+    }
+    case 'focus-booths': {
+      const podMaterial = new THREE.MeshStandardMaterial({
+        color: palette.rooms.focus.base,
+        roughness: 0.78,
+        metalness: 0.08,
+      });
+      const podAccent = new THREE.MeshStandardMaterial({
+        color: palette.rooms.focus.accent,
+        roughness: 0.6,
+        metalness: 0.2,
+      });
+      const podCount = 4;
+      for (let i = 0; i < podCount; i += 1) {
+        const x = bounds.minX + 2.2 + i * 3.2;
+        const shell = new THREE.Mesh(new RoundedBoxGeometry(1.6, 1.8, 1.4, 4, 0.18), podMaterial.clone());
+        shell.position.set(x, 0.9, bounds.minZ + 1.6);
+        shell.castShadow = true;
+        shell.receiveShadow = true;
+        addObject(shell, new THREE.Vector3(1.6, 1.8, 1.4));
+
+        const desk = new THREE.Mesh(new RoundedBoxGeometry(1.2, 0.12, 0.6, 3, 0.08), podAccent.clone());
+        desk.position.set(x, 0.95, bounds.minZ + 1.2);
+        desk.castShadow = true;
+        desk.receiveShadow = true;
+        addObject(desk, new THREE.Vector3(1.2, 0.8, 0.6));
+
+        const chair = new THREE.Mesh(new RoundedBoxGeometry(0.6, 0.5, 0.6, 3, 0.12), seatMaterial.clone());
+        chair.position.set(x, 0.45, bounds.minZ + 2.0);
+        chair.castShadow = true;
+        chair.receiveShadow = true;
+        addObject(chair, new THREE.Vector3(0.7, 0.8, 0.7));
+      }
+      break;
+    }
+    case 'cafe-lounge': {
+      const counter = new THREE.Mesh(new RoundedBoxGeometry(width * 0.6, 0.9, 0.8, 4, 0.12), counterMaterial.clone());
+      counter.position.set(centerX - width * 0.1, 0.45, bounds.minZ + 1.1);
+      counter.castShadow = true;
+      counter.receiveShadow = true;
+      addObject(counter, new THREE.Vector3(width * 0.6, 0.9, 0.8));
+
+      const sofa = new THREE.Mesh(new RoundedBoxGeometry(3.0, 0.7, 1.2, 4, 0.14), sofaMaterial.clone());
+      sofa.position.set(bounds.minX + 2.4, 0.35, centerZ + 2.6);
+      sofa.castShadow = true;
+      sofa.receiveShadow = true;
+      addObject(sofa, new THREE.Vector3(3.0, 0.9, 1.2));
+
+      const tables: Array<[number, number]> = [
+        [centerX + 2.6, centerZ + 2.6],
+        [centerX - 0.4, centerZ + 3.2],
+      ];
+      tables.forEach(([x, z]) => {
+        const top = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 0.12, 24), gameTableMaterial.clone());
+        top.position.set(x, 0.78, z);
+        top.castShadow = true;
+        top.receiveShadow = true;
+        addObject(top, new THREE.Vector3(1.6, 1.0, 1.6));
+
+        const base = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.68, 20), gameBaseMaterial.clone());
+        base.position.set(x, 0.34, z);
+        base.castShadow = true;
+        base.receiveShadow = true;
+        addObject(base);
+      });
+
+      const stoolGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.5, 20);
+      const stoolPositions: Array<[number, number]> = [
+        [centerX + 1.4, centerZ + 1.2],
+        [centerX + 3.4, centerZ + 1.2],
+        [centerX + 1.4, centerZ + 2.2],
+        [centerX + 3.4, centerZ + 2.2],
+      ];
+      stoolPositions.forEach(([x, z]) => {
+        const stool = new THREE.Mesh(stoolGeo.clone(), seatMaterial.clone());
+        stool.position.set(x, 0.25, z);
+        stool.castShadow = true;
+        stool.receiveShadow = true;
+        addObject(stool, new THREE.Vector3(0.64, 0.6, 0.64));
+      });
+      break;
+    }
+    default:
+      break;
+  }
+
+  return { objects, obstacles };
+}
+
+function createPortalLabel(portal: RoomPortal): THREE.Sprite {
+  if (!IS_BROWSER) {
+    const material = new THREE.SpriteMaterial({ color: 0xffffff, opacity: 0.85, transparent: true, depthWrite: false });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(2.4, 0.8, 1);
+    sprite.name = `portal-label-${portal.id}`;
+    return sprite;
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = 384;
+  canvas.height = 144;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = 'rgba(12,18,28,0.9)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = 'rgba(148,163,184,0.6)';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
+  ctx.fillStyle = '#e2e8f0';
+  ctx.font = 'bold 48px "Inter", "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(portal.label ?? 'Portal', canvas.width / 2, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(2.6, 0.86, 1);
+  sprite.name = `portal-label-${portal.id}`;
+  return sprite;
+}
+
+function createPortalMarkers(palette: ModePalette): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'ROOM_PORTALS_MARKERS';
+  ROOM_PORTALS.forEach((portal) => {
+    const ringGeometry = new THREE.RingGeometry(Math.max(0.2, portal.radius - 0.25), portal.radius, 40);
+    const ringMaterial = new THREE.MeshBasicMaterial({
+      color: palette.accent,
+      transparent: true,
+      opacity: 0.42,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(portal.position.x, 0.04, portal.position.z);
+    ring.renderOrder = 1;
+    group.add(ring);
+
+    const beacon = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.06, 2.2, 16),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3, toneMapped: false }),
+    );
+    beacon.position.set(portal.position.x, 1.1, portal.position.z);
+    group.add(beacon);
+
+    const label = createPortalLabel(portal);
+    label.position.set(portal.position.x, 1.95, portal.position.z);
+    group.add(label);
+  });
+  return group;
+}
+
+type RoomLayoutHandle = { group: THREE.Group; obstacles: THREE.Box3[]; dispose: () => void };
+
+function addRoomLayout(scene: THREE.Scene, palette: ModePalette): RoomLayoutHandle {
+  const layoutGroup = new THREE.Group();
+  layoutGroup.name = 'ROOM_LAYOUT';
+  const obstacles: THREE.Box3[] = [];
+
+  for (const room of ROOM_DEFINITIONS) {
+    const roomGroup = new THREE.Group();
+    roomGroup.name = `layout-${room.id}`;
+    const bounds = room.bounds;
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+    const width = bounds.maxX - bounds.minX;
+    const depth = bounds.maxZ - bounds.minZ;
+    const accent = new THREE.Color(room.accentColor);
+
+    const floorColor = accent.clone().lerp(new THREE.Color(palette.floorBase), 0.55);
+    const floorMaterial = new THREE.MeshStandardMaterial({
+      color: floorColor.getHex(),
+      roughness: 0.82,
+      metalness: 0.14,
+    });
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(centerX, 0.005, centerZ);
+    floor.receiveShadow = true;
+    floor.name = `room-floor-${room.id}`;
+    roomGroup.add(floor);
+
+    const border = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.PlaneGeometry(width, depth)),
+      new THREE.LineBasicMaterial({ color: accent.getHex(), transparent: true, opacity: 0.6 }),
+    );
+    border.rotation.x = -Math.PI / 2;
+    border.position.set(centerX, 0.01, centerZ);
+    roomGroup.add(border);
+
+    const sign = createRoomSign(room, accent, centerX, centerZ, depth);
+    roomGroup.add(sign);
+
+    const partitions = buildPartitionsForRoom(room, palette);
+    partitions.meshes.forEach((mesh) => roomGroup.add(mesh));
+    obstacles.push(...partitions.obstacles);
+
+    const furniture = buildFurnitureForRoom(room, palette);
+    furniture.objects.forEach((obj) => roomGroup.add(obj));
+    obstacles.push(...furniture.obstacles);
+
+    layoutGroup.add(roomGroup);
+  }
+
+  const portalMarkers = createPortalMarkers(palette);
+  layoutGroup.add(portalMarkers);
+
+  scene.add(layoutGroup);
+
+  const dispose = () => {
+    layoutGroup.removeFromParent();
+    disposeObjectDeep(layoutGroup);
+  };
+
+  return { group: layoutGroup, obstacles, dispose };
 }
 
 function addAmbientLights(scene: THREE.Scene) {
@@ -335,15 +940,21 @@ export function buildEnvironment(
   const walls = addWalls(scene, opts.ROOM_W, opts.ROOM_D, palette);
   const stage = addStage(scene, palette);
   const planters = addPlanters(scene, palette);
+  const roomLayoutHandle = addRoomLayout(scene, palette);
   const surround = addSurroundingGrid(scene, opts.ROOM_W, opts.ROOM_D, renderer, palette);
 
   const obstacles: THREE.Box3[] = [];
-  obstacles.push(
-    new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(0, 1.6, -15.2), new THREE.Vector3(11.5, 3.2, 1.0)),
-  );
+  if (stage.screen) {
+    const stageWidth = (stage.screen.geometry as any)?.parameters?.width ?? 11.5;
+    const center = stage.screen.position.clone();
+    const depth = 1.2;
+    center.z += depth * 0.45;
+    obstacles.push(new THREE.Box3().setFromCenterAndSize(center, new THREE.Vector3(stageWidth, 3.0, depth)));
+  }
   for (const collider of planters.userData.colliders ?? []) {
     obstacles.push(collider);
   }
+  obstacles.push(...roomLayoutHandle.obstacles);
 
   if (renderer && meeting3dFeatures.enableHdriEnvironment) {
     (['day', 'night'] as EnvironmentVariant[]).forEach((variant) => {
@@ -389,6 +1000,7 @@ export function buildEnvironment(
         }
       }
     });
+    roomLayoutHandle.dispose();
     void moduleHandles.then((handles) => {
       handles.forEach((handle) => {
         handle.group.removeFromParent();
@@ -403,6 +1015,7 @@ export function buildEnvironment(
     localMonitor: stage.monitor,
     disposeEnv,
     moduleHandles,
+    roomLayout: roomLayoutHandle.group,
   };
 }
 

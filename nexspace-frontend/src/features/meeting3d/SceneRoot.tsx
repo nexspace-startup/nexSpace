@@ -1623,6 +1623,21 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         setSpeedMultUI(next);
       }
 
+      if (e.type === 'keydown' && (code === 'KeyE' || code === 'Enter' || code === 'NumpadEnter')) {
+        const suggestedRoomId = portalSuggestionRef.current;
+        if (suggestedRoomId) {
+          const targetRoom = getRoomById(suggestedRoomId);
+          if (targetRoom) {
+            const spawn = targetRoom.defaultSpawn ?? getRoomCenter(targetRoom);
+            queuePathTo(spawn.x, spawn.z, false, targetRoom.title);
+            portalSuggestionRef.current = null;
+            try { setPortalSuggestion(null); } catch {}
+          }
+          e.preventDefault();
+          return;
+        }
+      }
+
       if (e.type === 'keydown') container.focus();
     };
     window.addEventListener('keydown', onKey, { capture: true });
@@ -3465,11 +3480,20 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }));
   }, [roomPresence, roomAdjacency]);
 
+  const portalTargetRoom = useMemo(() => {
+    if (!portalSuggestion) {
+      return null;
+    }
+    return getRoomById(portalSuggestion) ?? null;
+  }, [portalSuggestion]);
+
   const handleJumpToRoom = useCallback((roomId: RoomId) => {
     const targetRoom = getRoomById(roomId);
     if (!targetRoom) return;
     const spawn = targetRoom.defaultSpawn ?? getRoomCenter(targetRoom);
     queuePathToRef.current(spawn.x, spawn.z, false, targetRoom.title);
+    portalSuggestionRef.current = null;
+    try { setPortalSuggestion(null); } catch {}
   }, []);
 
   const hasPerfSample = perfSnapshot.fps > 0 || perfSnapshot.draws > 0 || perfSnapshot.triangles > 0;
@@ -3590,6 +3614,33 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       )}
 
       {/* Controls Panel */}
+      {portalTargetRoom && (
+        <div
+          className="pointer-events-auto absolute left-1/2 z-30 flex -translate-x-1/2 flex-col items-center gap-2"
+          style={{
+            bottom: `calc(${bottomSafeAreaPx}px + env(safe-area-inset-bottom, 0px) + 32px)`,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => handleJumpToRoom(portalTargetRoom.id)}
+            className="rounded-full border px-4 py-2 text-sm font-semibold shadow-lg transition-colors"
+            style={{
+              borderColor: portalTargetRoom.accentColor,
+              background: 'rgba(12,18,28,0.85)',
+              color: '#f8fafc',
+              boxShadow: `0 12px 32px ${portalTargetRoom.accentColor}33`,
+            }}
+          >
+            Enter {portalTargetRoom.title}
+          </button>
+          <span className="rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-white/70"
+            style={{ borderColor: 'rgba(148, 163, 184, 0.45)', background: 'rgba(15,23,42,0.55)' }}
+          >
+            Press E to teleport instantly
+          </span>
+        </div>
+      )}
       <div
         className="absolute text-[11px] rounded-lg px-3 py-2 backdrop-blur-sm"
         style={controlsStyle}
