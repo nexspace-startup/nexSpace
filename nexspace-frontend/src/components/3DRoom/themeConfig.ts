@@ -2,6 +2,23 @@ export type Mode = 'dark' | 'light';
 
 export type RoomColor = { base: number; accent: number };
 
+export type FurniturePalette = {
+  sofaFabric: number;
+  sofaLegs: number;
+  chairSeat: number;
+  chairFrame: number;
+  chairPlastic: number;
+  conferenceTableTop: number;
+  conferenceTableLegs: number;
+  gameTableTop: number;
+  gameTableLeg: number;
+  coffeeCounter: number;
+  coffeeMachineBody: number;
+  coffeeMachineAccent: number;
+  plantPot: number;
+  plantLeaf: number;
+};
+
 export type ModePalette = {
   accent: number;
   surroundWalls: number; // perimeter wall color
@@ -14,6 +31,7 @@ export type ModePalette = {
   gridBg: string;        // CSS color for grid background
   gridMinor: string;     // CSS color for minor grid lines
   gridMajor: string;     // CSS color for major grid lines
+  furniture: FurniturePalette;
   rooms: {
     focus: RoomColor;     // Focus Pod A
     lounge: RoomColor;    // Lounge
@@ -36,32 +54,64 @@ export const MODE_PALETTE: Record<Mode, ModePalette> = {
     gridBg: '#f5f7fa',
     gridMinor: 'rgba(70, 90, 120, 0.18)',
     gridMajor: 'rgba(50, 70, 110, 0.34)',
+    furniture: {
+      sofaFabric: 0x7f7f83,
+      sofaLegs: 0xb8bcc2,
+      chairSeat: 0x3d3f45,
+      chairFrame: 0xd7cdb8,
+      chairPlastic: 0x1b1e22,
+      conferenceTableTop: 0xd0b089,
+      conferenceTableLegs: 0x8a8e94,
+      gameTableTop: 0x654321,
+      gameTableLeg: 0x2f2f2f,
+      coffeeCounter: 0x8b4513,
+      coffeeMachineBody: 0x2c2c2c,
+      coffeeMachineAccent: 0xd1d5db,
+      plantPot: 0x8b4513,
+      plantLeaf: 0x228b22,
+    },
     rooms: {
       focus: { base: 0xBBDEFB, accent: 0x64B5F6 }, // deeper powder blue for better contrast
-      lounge: { base: 0xFFCC80, accent: 0xFF9800 }, // richer peach/orange for visibility  
+      lounge: { base: 0xFFCC80, accent: 0xFF9800 }, // richer peach/orange for visibility
       game: { base: 0xD1C4E9, accent: 0x9575CD }, // deeper lavender for light backgrounds
       kitchen: { base: 0xC8E6C9, accent: 0x66BB6A }, // stronger mint green
       conference: { base: 0xF5F5F5, accent: 0xBDBDBD }, // light gray instead of pure white
     }
   },
   dark: {
-    accent: 0x3D93F8,
-    surroundWalls: 0x3a3f4a,
+    accent: 0x8ab4ff,
+    surroundWalls: 0x1f2633,
     rugLight: 0xF4F5F7,
-    rugDark: 0x343845,
-    sky: 0x111419,              // deep charcoal for dark mode
-    floorBase: 0x1A1A1A,
-    floorTiles: [0x7C828A, 0xA7ADB6, 0xB5BAC2],
-    floorGrout: 0x151518,
-    gridBg: '#202024',
-    gridMinor: 'rgba(190,200,215,0.25)',
-    gridMajor: 'rgba(230,240,255,0.55)',
+    rugDark: 0x1b2230,
+    sky: 0x06080d,              // deeper midnight blue tone
+    floorBase: 0x121821,
+    floorTiles: [0x1c2330, 0x202838, 0x17202a],
+    floorGrout: 0x0c1118,
+    gridBg: '#121622',
+    gridMinor: 'rgba(142,153,183,0.22)',
+    gridMajor: 'rgba(177,188,220,0.48)',
+    furniture: {
+      sofaFabric: 0x475569,
+      sofaLegs: 0x94a3b8,
+      chairSeat: 0x1f2937,
+      chairFrame: 0xcbd5f5,
+      chairPlastic: 0x111827,
+      conferenceTableTop: 0x6b4f2c,
+      conferenceTableLegs: 0x9aa5b5,
+      gameTableTop: 0x3f2a1a,
+      gameTableLeg: 0x2b3645,
+      coffeeCounter: 0x4a3422,
+      coffeeMachineBody: 0x1f2937,
+      coffeeMachineAccent: 0x8ab4ff,
+      plantPot: 0x3f2a1f,
+      plantLeaf: 0x4ade80,
+    },
     rooms: {
-      focus: { base: 0x3d4a5c, accent: 0x5a7a95 },
-      lounge: { base: 0x5c4033, accent: 0x8b6914 },
-      game: { base: 0x4a3f5c, accent: 0x7b68ee },
-      kitchen: { base: 0x5c5233, accent: 0xdaa520 },
-      conference: { base: 0xffffff, accent: 0x666666 },
+      focus: { base: 0x2c394a, accent: 0x6ba7ff },
+      lounge: { base: 0x3b2d24, accent: 0xffb86b },
+      game: { base: 0x312542, accent: 0xbc93ff },
+      kitchen: { base: 0x2e3524, accent: 0xb7f5a1 },
+      conference: { base: 0x28303d, accent: 0x93a4c6 },
     },
   },
 };

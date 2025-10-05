@@ -7,12 +7,29 @@ import minimiseIcon from "../assets/minimise_icon.svg";
 import maximiseIcon from "../assets/maximise_icon.svg";
 import { api } from "../services/httpService";
 import { inviteUser } from "../services/dashboardService";
+import type { InviteUserRequest } from "../services/dashboardService";
 import { toast } from "../stores/toastStore";
 import { WorkspaceRoleConstant, type WorkSpaceRole } from "../constants/enums";
+import type { ApiEnvelope } from "../types/api";
+import { firstApiError, isApiSuccess } from "../types/api";
 function initialsFrom(name: string): string {
   const parts = name?.trim().split(/\s+/).slice(0, 2) ?? [];
   return parts.map((p) => p?.[0]?.toUpperCase() ?? "").join("") || "W";
 }
+
+type WorkspaceInvitee = {
+  id: string;
+  name: string;
+  email: string;
+  initials: string;
+  avatar?: string | null;
+};
+
+type UserSearchPayload = {
+  userList: Array<{ id: string; name: string; email: string; avatar?: string | null }>;
+};
+
+type InviteContext = "existing" | "new" | null;
 
 const PANEL_WIDTH = 230;
 const PANEL_EXTRA_MAX = 50;
@@ -23,10 +40,9 @@ const WorkspacePanel: React.FC = () => {
   const setActive = useWorkspaceStore((s) => s.setActiveWorkspace);
   const createWorkspace = useWorkspaceStore((s) => s.createWorkspace);
   const deleteWorkspace = useWorkspaceStore((s) => s.deleteWorkspace);
-  const [createdWorkSpaceId, setcreatedWorkSpaceId] = useState<Workspace>();
-  const [InviteType, setInviteType] = useState(0)
-  // NEW: search results (for invite step)
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [createdWorkspace, setCreatedWorkspace] = useState<Workspace | null>(null);
+  const [inviteContext, setInviteContext] = useState<InviteContext>(null);
+  const [searchResults, setSearchResults] = useState<WorkspaceInvitee[]>([]);
 
   const isOpen = useUIStore((s) => s.isWorkspacePanelOpen);
   const toggle = useUIStore((s) => s.toggleWorkspacePanel);
@@ -44,7 +60,7 @@ const WorkspacePanel: React.FC = () => {
 
   // Delete modal
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
-  const [panelInvite, setPanelInvite] = useState<{ id: string, name: string } | null>(null)
+  const [panelInvite, setPanelInvite] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   // Create / Invite modal
@@ -56,7 +72,7 @@ const WorkspacePanel: React.FC = () => {
   // Invite step
   const [inviteInput, setInviteInput] = useState("");
   // CHANGED: invited holds user objects so we can show initials, name, email
-  const [invited, setInvited] = useState<any[]>([]);
+  const [invited, setInvited] = useState<WorkspaceInvitee[]>([]);
 
   const dragStartX = useRef(0);
   const dragStartExtra = useRef(0);
@@ -102,13 +118,14 @@ const WorkspacePanel: React.FC = () => {
 
   // Actions
   const handleInvite = (id: string, name: string) => {
-    setPanelInvite({ id, name })
-    setCreateOpen(true)
-    setCreateStep(2)
-    setInviteType(2)
+    setPanelInvite({ id, name });
+    setCreatedWorkspace(null);
+    setInviteContext("existing");
+    setCreateOpen(true);
+    setCreateStep(2);
   };
 
-  const handleEdit = (_id: string) => {
+  const handleEdit = () => {
     setOptionsFor(null);
   };
 
@@ -131,36 +148,84 @@ const WorkspacePanel: React.FC = () => {
   };
 
   const confirmCreate = async () => {
-    if (!workspaceName.trim()) return;
+    const trimmedName = workspaceName.trim();
+    if (!trimmedName) return;
+
     try {
       setCreating(true);
-      const res = await createWorkspace(workspaceName.trim());
-      if (res) {
-        setcreatedWorkSpaceId(res); setWorkspaceName(""); setCreateStep(2); setInviteInput(""); setSearchResults([]); setInvited([]); setInviteType(1)
+      const workspace = await createWorkspace(trimmedName);
+      if (workspace) {
+        setCreatedWorkspace(workspace);
+        setPanelInvite({ id: workspace.id, name: workspace.name });
+        setWorkspaceName("");
+        setCreateStep(2);
+        setInviteInput("");
+        setSearchResults([]);
+        setInvited([]);
+        setInviteContext("new");
       } else {
-        toast.error("Failed to create workspace" + workspaceName, 1)
+        toast.error(`Failed to create workspace "${trimmedName}"`);
       }
     } catch (err) {
       console.error("Failed to create workspace:", err);
+      toast.error("Unable to create workspace");
     } finally {
       setCreating(false);
     }
   };
 
   const handleInviteMember = async () => {
-    if (!inviteInput.trim() || !isValidEmail) return;
+    const trimmed = inviteInput.trim();
+    if (!trimmed || !isValidEmail) return;
+
     const matchedUser =
-      searchResults.find((u: any) => u.email === inviteInput.trim()) ||
-      invited.find((u: any) => u.email === inviteInput.trim());
-    if (matchedUser && !invited.find((u: any) => u.email === matchedUser.email)) {
-      const res = await inviteUser({ email: inviteInput, workspaceUid: InviteType == 1 ? panelInvite?.id : InviteType == 2 ? createdWorkSpaceId?.id : null })
-      res ? setInvited((prev) => [...prev, matchedUser]) : null
-    } else {
-      toast.warning("User already invited")
+      searchResults.find((user) => user.email === trimmed) ??
+      invited.find((user) => user.email === trimmed);
+
+    if (!matchedUser) {
+      toast.error("Select a valid teammate to invite");
+      return;
     }
-    setInviteInput("");
-    setSearchResults([]);
-    setIsValidEmail(false);
+
+    if (invited.some((user) => user.email === matchedUser.email)) {
+      toast.warning("User already invited");
+      setInviteInput("");
+      setSearchResults([]);
+      setIsValidEmail(false);
+      return;
+    }
+
+    const workspaceUid =
+      inviteContext === "existing"
+        ? panelInvite?.id ?? null
+        : inviteContext === "new"
+        ? createdWorkspace?.id ?? null
+        : null;
+
+    if (!workspaceUid) {
+      toast.error("Choose a workspace before inviting members");
+      return;
+    }
+
+    const request: InviteUserRequest = { email: trimmed, workspaceUid };
+
+    try {
+      const response = await inviteUser(request);
+      if (!response) {
+        toast.error("Unable to send invitation");
+        return;
+      }
+
+      setInvited((prev) => [...prev, matchedUser]);
+      toast.success(`Invitation sent to ${matchedUser.email}`);
+    } catch (error) {
+      console.error("Failed to invite member:", error);
+      toast.error("Unable to send invitation");
+    } finally {
+      setInviteInput("");
+      setSearchResults([]);
+      setIsValidEmail(false);
+    }
   };
 
 
@@ -170,25 +235,40 @@ const WorkspacePanel: React.FC = () => {
     const value = e.target.value;
     setInviteInput(value);
 
-    if (value.trim()) {
-      try {
-        const res = await api.get(`/auth/searchAll?q=${value.trim()}`);
-        const users =
-          res?.data?.data?.userList?.map((s: any) => ({
-            ...s,
-            initials: initialsFrom(s.name),
-          })) ?? [];
-        setSearchResults(users);
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setSearchResults([]);
+      setIsValidEmail(false);
+      return;
+    }
 
-        // check if typed value matches any email from results
-        const match = users.some((u: any) => u.email === value.trim());
-        setIsValidEmail(match);
-      } catch (err) {
-        console.error("Search API error:", err);
+    try {
+      const { data } = await api.get<ApiEnvelope<UserSearchPayload>>("/auth/searchAll", {
+        params: { q: trimmed },
+        withCredentials: true,
+      });
+
+      if (!isApiSuccess(data)) {
+        const message = firstApiError(data) ?? "Unable to search teammates";
+        toast.error(message);
         setSearchResults([]);
         setIsValidEmail(false);
+        return;
       }
-    } else {
+
+      const users: WorkspaceInvitee[] = data.data.userList.map((candidate) => ({
+        id: candidate.id,
+        name: candidate.name,
+        email: candidate.email,
+        avatar: candidate.avatar,
+        initials: initialsFrom(candidate.name),
+      }));
+
+      setSearchResults(users);
+      setIsValidEmail(users.some((user) => user.email === trimmed));
+    } catch (error) {
+      console.error("Search API error:", error);
+      toast.error("Unable to search teammates");
       setSearchResults([]);
       setIsValidEmail(false);
     }
@@ -196,10 +276,22 @@ const WorkspacePanel: React.FC = () => {
 
 
   // Add a user from search results to input (only email)
-  const handleSelectUser = (user: any) => {
+  const handleSelectUser = (user: WorkspaceInvitee) => {
     setInviteInput(user.email);
     setIsValidEmail(true);
-    // setSearchResults([]); // close the dropdown
+  };
+
+  const closeInviteModal = () => {
+    setCreateOpen(false);
+    setCreateStep(1);
+    setWorkspaceName("");
+    setInviteInput("");
+    setSearchResults([]);
+    setInvited([]);
+    setPanelInvite(null);
+    setCreatedWorkspace(null);
+    setInviteContext(null);
+    setIsValidEmail(false);
   };
 
 
@@ -278,7 +370,9 @@ const WorkspacePanel: React.FC = () => {
               role={ws.role}
               initials={initialsFrom(ws.name)}
               active={activeId === ws.id}
-              onTileClick={() => setActive(ws.id)}
+              onTileClick={() => {
+                void setActive(ws.id);
+              }}
               onOptionsClick={(args) => setOptionsFor(args)}
             />
           ))}
@@ -290,6 +384,13 @@ const WorkspacePanel: React.FC = () => {
             onClick={() => {
               setCreateOpen(true);
               setCreateStep(1);
+              setInviteContext(null);
+              setPanelInvite(null);
+              setCreatedWorkspace(null);
+              setInviteInput("");
+              setSearchResults([]);
+              setInvited([]);
+              setIsValidEmail(false);
             }}
             className="w-full h-10 rounded-2xl bg-[rgba(128,136,155,0.25)] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 hover:bg-white/20 transition-colors"
           >
@@ -317,7 +418,7 @@ const WorkspacePanel: React.FC = () => {
             <span>👥</span> Invite Members
           </button>
           <button
-            onClick={() => handleEdit(optionsFor.id)}
+            onClick={handleEdit}
             className="w-full flex items-center gap-2 px-4 py-2 text-sm text-[#80889B] hover:bg-[#202024] hover:text-white"
           >
             <span>✏️</span> Edit Space
@@ -400,7 +501,7 @@ const WorkspacePanel: React.FC = () => {
                 </div>
                 <div className="flex justify-end gap-3 px-6 py-4 border-t border-[#26272B]">
                   <button
-                    onClick={() => { setWorkspaceName(""); setCreateOpen(false); }}
+                    onClick={closeInviteModal}
                     disabled={creating}
                     className="px-6 py-2 rounded-lg bg-[rgba(128,136,155,0.25)] text-white font-medium hover:bg-[#33343A] transition disabled:opacity-50"
                   >
@@ -467,9 +568,9 @@ const WorkspacePanel: React.FC = () => {
                           scrolling ? "scrolling" : "",
                         ].join(" ")}
                       >
-                        {searchResults.map((user, idx) => (
+                        {searchResults.map((user) => (
                           <div
-                            key={idx}
+                            key={user.id}
                             onClick={() => handleSelectUser(user)}
                             className="flex items-center gap-3 px-3 py-2 hover:bg-[#2A2B31] cursor-pointer"
                           >
@@ -504,9 +605,9 @@ const WorkspacePanel: React.FC = () => {
                           scrolling ? "scrolling" : "",
                         ].join(" ")}
                       >
-                        {invited.map((user: any, i) => (
+                        {invited.map((user, index) => (
                           <div
-                            key={i}
+                            key={user.id ?? `${user.email}-${index}`}
                             className="flex items-center justify-between text-white text-sm py-1"
                           >
                             <div className="flex items-center gap-3">
@@ -520,7 +621,7 @@ const WorkspacePanel: React.FC = () => {
                             </div>
                             <button
                               onClick={() =>
-                                setInvited(invited.filter((_: any, idx: number) => idx !== i))
+                                setInvited((prev) => prev.filter((_, idx) => idx !== index))
                               }
                               className="text-red-500 hover:text-red-400"
                             >
@@ -536,13 +637,13 @@ const WorkspacePanel: React.FC = () => {
                 {/* Footer buttons */}
                 <div className="flex justify-end gap-3 px-6 py-4 border-t border-[#26272B]">
                   <button
-                    onClick={() => setCreateOpen(false)}
+                    onClick={closeInviteModal}
                     className="px-6 py-2 rounded-lg bg-[rgba(128,136,155,0.25)] text-white font-medium hover:bg-[#33343A] transition"
                   >
                     I’ll Do This Later
                   </button>
                   <button
-                    onClick={() => setCreateOpen(false)}
+                    onClick={closeInviteModal}
                     className="px-6 py-2 rounded-lg bg-[#3D93F8] text-white font-medium hover:bg-[#2F7BEF] transition"
                   >
                     Start Space

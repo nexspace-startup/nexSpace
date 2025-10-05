@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useTracks, isTrackReference } from '@livekit/components-react';
 import { RoomEvent, Track } from 'livekit-client';
 import { useMeetingStore } from '../stores/meetingStore';
 import { useUIStore } from '../stores/uiStore';
 import { useShallow } from 'zustand/react/shallow';
+import { useViewportSize } from '../hooks/useViewportSize';
 import { DeskGridManager, type SeatTransform } from './3DRoom/DeskGridManager';
 import { assignParticipantsToDesks } from './3DRoom/Participants';
 import { type DeskPrefab, createDeskModule } from './3DRoom/Desks';
@@ -15,18 +16,55 @@ import { COLLIDER_BLOCKLIST } from './3DRoom/colliderBlocklist';
 
 type Props = { bottomSafeAreaPx?: number; topSafeAreaPx?: number; };
 
-  const DEG2RAD = Math.PI / 180;
-  // Collision box half-extent for avatar (slightly slimmer to avoid snagging on thin walls)
-  const AVATAR_HALF = 0.32;
+const DEG2RAD = Math.PI / 180;
+const AVATAR_HALF = 0.32;
 
-  const isBlocked = (box: THREE.Box3) => {
-    const c = box.getCenter(new THREE.Vector3());
-    const s = box.getSize(new THREE.Vector3());
-    const tol = 0.08; // ~8cm tolerance for matching
-    const arrEq = (a: [number,number,number], b: THREE.Vector3) => Math.abs(a[0]-b.x) < tol && Math.abs(a[1]-b.y) < tol && Math.abs(a[2]-b.z) < tol;
-    for (const it of COLLIDER_BLOCKLIST) { if (arrEq(it.center, c) && arrEq(it.size, s)) return true; }
-    return false;
-  };
+const CONTROL_KEY_SET = new Set([
+  'KeyW',
+  'KeyA',
+  'KeyS',
+  'KeyD',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'ShiftLeft',
+  'ShiftRight',
+  'KeyQ',
+  'KeyE',
+  'Equal',
+  'Minus',
+  'NumpadAdd',
+  'NumpadSubtract',
+  'KeyV',
+  'BracketLeft',
+  'BracketRight',
+  'KeyH',
+  'KeyN',
+]);
+
+const TMP_VEC3_A = new THREE.Vector3();
+const TMP_VEC3_B = new THREE.Vector3();
+const TMP_VEC3_C = new THREE.Vector3();
+const TMP_VEC3_D = new THREE.Vector3();
+const TMP_VEC2_A = new THREE.Vector2();
+const TMP_VEC2_B = new THREE.Vector2();
+const TMP_BOX3_A = new THREE.Box3();
+
+const isBlocked = (box: THREE.Box3) => {
+  const center = box.getCenter(TMP_VEC3_A);
+  const size = box.getSize(TMP_VEC3_B);
+  const tol = 0.08;
+  const arrEq = (a: [number, number, number], b: THREE.Vector3) =>
+    Math.abs(a[0] - b.x) < tol && Math.abs(a[1] - b.y) < tol && Math.abs(a[2] - b.z) < tol;
+  for (const item of COLLIDER_BLOCKLIST) {
+    if (arrEq(item.center, center) && arrEq(item.size, size)) {
+      return true;
+    }
+  }
+  return false;
+};
+
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const norm = (v: any) => String(v ?? '');
 
@@ -122,6 +160,149 @@ function makeVideoBadge(tex: THREE.VideoTexture): THREE.Mesh {
   m.name = 'VID_BADGE';
   return m;
 }
+
+type ParticipantRow = { id: string; name?: string };
+
+type AggregatedParticipant = {
+  sid: string;
+  identity: string;
+  name: string;
+  raw: any;
+};
+
+const collectRoomParticipants = (room: unknown): any[] => {
+  try {
+    const lkRoom = room as { localParticipant?: any; remoteParticipants?: Map<string, any> | { values?: () => Iterable<any> } };
+    const remotes = Array.from(lkRoom?.remoteParticipants?.values?.() ?? []);
+    return [lkRoom?.localParticipant, ...remotes].filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+
+const mergeParticipant = (
+  bucket: Map<string, AggregatedParticipant>,
+  candidate: any,
+  options: { preferName?: boolean } = {},
+) => {
+  if (!candidate) return;
+
+  const sid = norm(candidate?.sid ?? candidate?.id);
+  const identity = norm(candidate?.identity);
+  const name = norm(candidate?.name);
+  const fallback = sid || identity || name || `anon_${bucket.size}`;
+
+  const existing = bucket.get(fallback);
+  if (existing) {
+    bucket.set(fallback, {
+      sid: sid || existing.sid,
+      identity: identity || existing.identity,
+      name:
+        options.preferName && existing.name
+          ? existing.name
+          : options.preferName && name
+            ? name
+            : existing.name || name,
+      raw: { ...existing.raw, ...candidate },
+    });
+  } else {
+    bucket.set(fallback, {
+      sid,
+      identity,
+      name,
+      raw: candidate,
+    });
+  }
+};
+
+const buildParticipantRows = (
+  participants: any[] | undefined,
+  room: unknown,
+  localSid: string,
+): ParticipantRow[] => {
+  const aggregated = new Map<string, AggregatedParticipant>();
+
+  for (const candidate of participants ?? []) {
+    mergeParticipant(aggregated, candidate, { preferName: true });
+  }
+
+  for (const candidate of collectRoomParticipants(room)) {
+    mergeParticipant(aggregated, candidate);
+  }
+
+  if (aggregated.size === 0 && (room as any)?.localParticipant) {
+    mergeParticipant(aggregated, (room as any)?.localParticipant, { preferName: true });
+  }
+
+  const localParticipant = (room as any)?.localParticipant;
+  const localSidNorm = norm(localSid);
+  const localIdentityNorm = norm(localParticipant?.identity);
+  const localNameNorm = norm(localParticipant?.name).toLowerCase();
+
+  type Row = {
+    id: string;
+    name?: string;
+    sid?: string;
+    identity?: string;
+    isLocal: boolean;
+    score: number;
+  };
+
+  const rows: Row[] = [];
+  const seenKeys = new Set<string>();
+
+  aggregated.forEach((value) => {
+    const sid = norm(value.sid);
+    const identity = norm(value.identity);
+    const name = norm(value.name);
+    const nameLower = name.toLowerCase();
+
+    const isLocal = Boolean(
+      (sid && sid === localSidNorm) ||
+        (identity && identity === localIdentityNorm) ||
+        (name && (nameLower === localNameNorm || nameLower === 'you')),
+    );
+
+    const fallbackId = identity || sid || name || `unknown_${rows.length}`;
+    const key = isLocal ? '__LOCAL__' : fallbackId;
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+
+    const score =
+      (isLocal ? 1000 : 0) +
+      (identity ? 100 : 0) +
+      (sid ? 50 : 0) +
+      (name && nameLower !== 'you' ? 10 : 0);
+
+    rows.push({
+      id: key,
+      name: isLocal ? 'You' : name || 'User',
+      sid,
+      identity,
+      isLocal,
+      score,
+    });
+  });
+
+  if (!rows.some((row) => row.isLocal)) {
+    rows.unshift({
+      id: '__LOCAL__',
+      name: 'You',
+      sid: localSidNorm,
+      identity: localIdentityNorm,
+      isLocal: true,
+      score: 9999,
+    });
+  }
+
+  rows.sort((a, b) => {
+    if (a.isLocal && !b.isLocal) return -1;
+    if (!a.isLocal && b.isLocal) return 1;
+    return b.score - a.score;
+  });
+
+  return rows.map((row) => ({ id: row.id, name: row.name }));
+};
 
 // ——— A* helpers ———
 type NavNode = { id: string; x: number; z: number };
@@ -251,6 +432,56 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const toggleTheme = useUIStore((s) => s.toggleTheme);
   const micEnabled = useMeetingStore((s) => s.micEnabled);
   const screenShareEnabled = useMeetingStore((s) => s.screenShareEnabled);
+  const { width: viewportWidth } = useViewportSize();
+  const isTablet = viewportWidth <= 1024;
+  const isMobile = viewportWidth <= 768;
+  const minimapSize = isMobile ? 220 : 300;
+  const chatOffsetPx = chatOpen && viewportWidth >= 1280 ? 408 : chatOpen && viewportWidth >= 1024 ? 320 : 0;
+  const paddingTopValue = `calc(${topSafeAreaPx}px + env(safe-area-inset-top, 0px))`;
+  const paddingBottomValue = `calc(${bottomSafeAreaPx}px + env(safe-area-inset-bottom, 0px))`;
+  const containerPaddingRight = chatOffsetPx > 0 && !isTablet ? `${chatOffsetPx}px` : undefined;
+  const controlsWidth = isMobile ? Math.min(Math.max(viewportWidth - 32, 240), 360) : 320;
+  const controlsStyle = useMemo<React.CSSProperties>(() => {
+    const base: React.CSSProperties = {
+      width: controlsWidth,
+      background: 'var(--panel-bg)',
+      color: 'var(--panel-text)',
+      border: '1px solid var(--panel-border)',
+      boxShadow: '0 12px 36px rgba(0,0,0,0.35)',
+      zIndex: 6,
+    };
+
+    if (isMobile) {
+      base.left = '50%';
+      base.top = 'calc(env(safe-area-inset-top, 0px) + 12px)';
+      base.transform = 'translateX(-50%)';
+    } else {
+      base.left = 16;
+      base.top = 16;
+    }
+
+    return base;
+  }, [controlsWidth, isMobile]);
+
+  const minimapStyle = useMemo<React.CSSProperties>(() => {
+    const base: React.CSSProperties = {
+      zIndex: 5,
+      borderColor: 'var(--panel-border)',
+      background: 'var(--surface-1)',
+      width: minimapSize,
+      height: minimapSize,
+      right: isMobile ? 12 : 16,
+      boxShadow: '0 18px 42px rgba(0,0,0,0.3)',
+    };
+
+    if (isMobile) {
+      base.top = 'calc(env(safe-area-inset-top, 0px) + 12px)';
+    } else {
+      base.bottom = 'calc(env(safe-area-inset-bottom, 0px) + 16px)';
+    }
+
+    return base;
+  }, [isMobile, minimapSize]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const minimapRef = useRef<HTMLCanvasElement | null>(null);
@@ -262,6 +493,11 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       return norm(rp?.sid ?? rp?.identity ?? '');
     } catch { return ''; }
   }, [room]);
+
+  const uniqueParticipants = useMemo<ParticipantRow[]>(
+    () => buildParticipantRows(participants as any[] | undefined, room, localSid),
+    [participants, room, localSid],
+  );
 
   // LiveKit
   const cameraRefs = useTracks([{ source: Track.Source.Camera, withPlaceholder: false }], { onlySubscribed: false });
@@ -304,6 +540,31 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const cameraDistRef = useRef<number>(7.0);
   const targetDistRef = useRef<number>(7.0);
   const scrollMoveRef = useRef<number>(0);
+  const touchStateRef = useRef<{
+    active: boolean;
+    mode: 'orbit' | 'panZoom';
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+    lastMidX: number;
+    lastMidY: number;
+    lastDist: number;
+    moved: boolean;
+    target: EventTarget | null;
+  }>({
+    active: false,
+    mode: 'orbit',
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    lastMidX: 0,
+    lastMidY: 0,
+    lastDist: 0,
+    moved: false,
+    target: null,
+  });
 
   // Tuning refs: speed multiplier + always-sprint
   const speedMultRef = useRef<number>(1.0);
@@ -340,11 +601,27 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const obstaclesRef = useRef<THREE.Box3[]>([]);
   const roomBoundsRef = useRef<{ minX: number; maxX: number; minZ: number; maxZ: number }>({ minX: -ROOM_W / 2 + 0.3, maxX: ROOM_W / 2 - 0.3, minZ: -ROOM_D / 2 + 0.3, maxZ: ROOM_D / 2 - 0.3 });
 
+  const isPointClear = useCallback(
+    (x: number, z: number) => {
+      const center = TMP_VEC3_C.set(x, 0.85, z);
+      const size = TMP_VEC3_D.set(0.42, 1.6, 0.42);
+      const box = TMP_BOX3_A.setFromCenterAndSize(center, size);
+      for (const obstacle of obstaclesRef.current) {
+        if (obstacle.intersectsBox(box)) {
+          return false;
+        }
+      }
+      return true;
+    },
+    [],
+  );
+
   // Desks / seating
   const deskPrefabRef = useRef<DeskPrefab | null>(null);
   const deskMgrRef = useRef<DeskGridManager | null>(null);
   const seatTransformsRef = useRef<SeatTransform[]>([]);
   const participantSeatMapRef = useRef<Map<string, number>>(new Map());
+  const participantSignatureRef = useRef<string>('');
   const monitorPlanesRef = useRef<Map<number, THREE.Mesh>>(new Map());
   const avatarsGroupRef = useRef<THREE.Group | null>(null);
   const avatarBySidRef = useRef<Map<string, THREE.Group>>(new Map());
@@ -354,6 +631,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const navNodesRef = useRef<NavNode[]>([]);
   const navGraphRef = useRef<NavGraph | null>(null);
   const minimapHitsRef = useRef<Array<{ x: number; y: number; w: number; h: number; target?: THREE.Vector3; allowGhost?: boolean; roomName?: string }>>([]);
+  const minimapSeatDotsRef = useRef<Array<{ x: number; z: number; name?: string; sid: string }>>([]);
   const roomLabelsRef = useRef<THREE.Sprite[]>([]);
   // Conference room audio isolation state
   const insideConferenceRef = useRef<boolean>(false);
@@ -819,17 +1097,6 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         if (rr) targetRect = rr.rect;
       }
 
-      const isPointClear = (x: number, z: number) => {
-        const box = new THREE.Box3().setFromCenterAndSize(
-          new THREE.Vector3(x, 0.85, z),
-          new THREE.Vector3(0.42, 1.6, 0.42)
-        );
-        for (const ob of obstaclesRef.current) {
-          if (ob.intersectsBox(box)) return false;
-        }
-        return true;
-      };
-
       let bestInsideSafeId: string | null = null; let bestInsideSafeD = Infinity;
       let bestInsideAnyId: string | null = null; let bestInsideAnyD = Infinity;
       let bestOverallSafeId: string | null = null; let bestOverallSafeD = Infinity;
@@ -1056,8 +1323,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     const onKey = (e: KeyboardEvent) => {
       const code = e.code;
-      const keys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyQ', 'KeyE', 'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract', 'KeyV', 'BracketLeft', 'BracketRight', 'KeyH', 'KeyN'];
-      if (keys.includes(code)) {
+      if (CONTROL_KEY_SET.has(code)) {
         keyState.current[code] = e.type === 'keydown';
         e.preventDefault();
       }
@@ -1088,73 +1354,231 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     window.addEventListener('keydown', onKey, { capture: true });
     window.addEventListener('keyup', onKey, { capture: true });
 
+    const containerEl = container;
+    const targetEl: HTMLElement = (rendererRef.current?.domElement as any) || containerEl;
+
+    const handleNavigationAt = (clientX: number, clientY: number, target: EventTarget | null) => {
+      const baseEl = (target as HTMLElement) ?? targetEl;
+      const cam = cameraRef.current;
+      if (!baseEl || !cam) return false;
+      const rect = baseEl.getBoundingClientRect();
+      if (!rect.width || !rect.height) return false;
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -(((clientY - rect.top) / rect.height) * 2 - 1),
+      );
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(ndc, cam);
+
+      const labels = roomLabelsRef.current;
+      if (labels.length > 0) {
+        const labelHits = ray.intersectObjects(labels);
+        if (labelHits.length > 0) {
+          const hit = labelHits[0].object as THREE.Sprite;
+          const data = (hit as any).userData;
+          if (data && data.roomName && data.centerX !== undefined && data.centerZ !== undefined) {
+            queuePathTo(data.centerX, data.centerZ, false, data.roomName);
+            return true;
+          }
+        }
+      }
+
+      return false;
+    };
+
     // Mouse orbit / rotate / pan
-    let dragging = false, lastX = 0, lastY = 0, dragButton = 0;
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    let dragButton = 0;
 
     const onMouseDown = (e: MouseEvent) => {
-      if (camTransitionRef.current) return; // ignore new drags during transition
+      if (camTransitionRef.current) return;
       dragging = true;
-      dragButton = e.button;      // 0=LMB, 1=MMB, 2=RMB
-      isPanningRef.current = (dragButton === 1 || dragButton === 2);
-      if (isPanningRef.current) followLockRef.current = true; // lock view after we start panning
-      lastX = e.clientX; lastY = e.clientY;
+      dragButton = e.button;
+      isPanningRef.current = dragButton === 1 || dragButton === 2;
+      if (isPanningRef.current) followLockRef.current = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
       container.focus();
     };
 
     const onMouseUp = () => {
       dragging = false;
-      isPanningRef.current = false; // keep follow locked until movement/rotate
+      isPanningRef.current = false;
     };
 
     const onMouseMove = (e: MouseEvent) => {
-      if (camTransitionRef.current) return; // ignore orbit/pan during transition
-      if (!dragging) return;
-      const dx = e.clientX - lastX, dy = e.clientY - lastY;
-      lastX = e.clientX; lastY = e.clientY;
+      if (!dragging || camTransitionRef.current) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
 
       if (dragButton === 0) {
-        // LMB = orbit
         yawRef.current -= dx * 0.2 * DEG2RAD;
         pitchRef.current = clamp(pitchRef.current - dy * 0.15 * DEG2RAD, -0.05, 0.8);
       } else if (dragButton === 1 || dragButton === 2) {
-        // MMB or RMB = PAN (Miro/Figma style) - only in third-person mode
         if (viewModeRef.current === 'third-person') {
           const cam = cameraRef.current;
           if (!cam) return;
-
-          // Pan amount scales with distance so it feels natural
           const dist = cameraDistRef.current;
           const k = 0.0018 * dist;
-
-          // Camera's forward & right projected to ground plane (XZ)
-          const dir = new THREE.Vector3(); cam.getWorldDirection(dir);
+          const dir = new THREE.Vector3();
+          cam.getWorldDirection(dir);
           const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
           const fwdXZ = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), right).normalize();
-
-          // Move the camera TARGET (not the avatar)
           camTargetRef.current.addScaledVector(right, -dx * k);
           camTargetRef.current.addScaledVector(fwdXZ, dy * k);
-
-          // Clamp target to room bounds
-          const b = roomBoundsRef.current;
-          camTargetRef.current.x = clamp(camTargetRef.current.x, b.minX, b.maxX);
-          camTargetRef.current.z = clamp(camTargetRef.current.z, b.minZ, b.maxZ);
+          const bounds = roomBoundsRef.current;
+          camTargetRef.current.x = clamp(camTargetRef.current.x, bounds.minX, bounds.maxX);
+          camTargetRef.current.z = clamp(camTargetRef.current.z, bounds.minZ, bounds.maxZ);
         }
       }
     };
 
-    const containerEl = container;
-    const targetEl: HTMLElement = (rendererRef.current?.domElement as any) || containerEl;
+    const onContextMenu = (event: Event) => event.preventDefault();
+
     targetEl.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
     window.addEventListener('mousemove', onMouseMove);
-    targetEl.addEventListener('contextmenu', (e) => e.preventDefault());
+    targetEl.addEventListener('contextmenu', onContextMenu);
+
+    // Touch gestures (mobile orbit / pan / pinch)
+    const onTouchStart = (e: TouchEvent) => {
+      if (camTransitionRef.current) return;
+      if (!e.touches.length) return;
+      const state = touchStateRef.current;
+      dragging = true;
+      state.active = true;
+      state.target = e.target;
+      container.focus();
+
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        state.mode = 'orbit';
+        state.startX = state.lastX = t.clientX;
+        state.startY = state.lastY = t.clientY;
+        state.moved = false;
+        isPanningRef.current = false;
+      } else {
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        state.mode = 'panZoom';
+        state.lastMidX = (t1.clientX + t2.clientX) / 2;
+        state.lastMidY = (t1.clientY + t2.clientY) / 2;
+        state.lastDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        state.moved = true;
+        isPanningRef.current = true;
+        followLockRef.current = true;
+      }
+
+      e.preventDefault();
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      const state = touchStateRef.current;
+      if (!state.active || camTransitionRef.current) return;
+      if (!e.touches.length) return;
+
+      if (state.mode === 'orbit' && e.touches.length === 1) {
+        const t = e.touches[0];
+        const dx = t.clientX - state.lastX;
+        const dy = t.clientY - state.lastY;
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) state.moved = true;
+        state.lastX = t.clientX;
+        state.lastY = t.clientY;
+        yawRef.current -= dx * 0.2 * DEG2RAD;
+        pitchRef.current = clamp(pitchRef.current - dy * 0.15 * DEG2RAD, -0.05, 0.8);
+      } else if (e.touches.length >= 2) {
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        state.mode = 'panZoom';
+        const midX = (t1.clientX + t2.clientX) / 2;
+        const midY = (t1.clientY + t2.clientY) / 2;
+        const dxMid = midX - state.lastMidX;
+        const dyMid = midY - state.lastMidY;
+        state.lastMidX = midX;
+        state.lastMidY = midY;
+        if (Math.abs(dxMid) > 1 || Math.abs(dyMid) > 1) state.moved = true;
+
+        const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        const distDelta = dist - state.lastDist;
+        state.lastDist = dist;
+
+        if (viewModeRef.current === 'third-person') {
+          const cam = cameraRef.current;
+          if (cam) {
+            const distCam = cameraDistRef.current;
+            const k = 0.0016 * distCam;
+            const dir = new THREE.Vector3();
+            cam.getWorldDirection(dir);
+            const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
+            const fwdXZ = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), right).normalize();
+            camTargetRef.current.addScaledVector(right, -dxMid * k);
+            camTargetRef.current.addScaledVector(fwdXZ, dyMid * k);
+            const bounds = roomBoundsRef.current;
+            camTargetRef.current.x = clamp(camTargetRef.current.x, bounds.minX, bounds.maxX);
+            camTargetRef.current.z = clamp(camTargetRef.current.z, bounds.minZ, bounds.maxZ);
+          }
+          const zoomDelta = distDelta * 0.01;
+          targetDistRef.current = clamp(targetDistRef.current + zoomDelta, 1.6, 32.0);
+        } else {
+          const move = THREE.MathUtils.clamp(-distDelta * 0.02, -3, 3);
+          if (move !== 0) {
+            scrollMoveRef.current += move;
+            pathQueueRef.current = [];
+            autoGhostRef.current = false;
+          }
+        }
+      }
+
+      e.preventDefault();
+    };
+
+    const resetTouchState = (navigate: boolean) => {
+      const state = touchStateRef.current;
+      if (navigate && !state.moved) {
+        handleNavigationAt(state.startX, state.startY, state.target);
+      }
+      state.active = false;
+      state.target = null;
+      state.moved = false;
+      isPanningRef.current = false;
+      dragging = false;
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      const state = touchStateRef.current;
+      if (!state.active) return;
+      if (e.touches.length === 0) {
+        resetTouchState(true);
+      } else if (e.touches.length === 1) {
+        const t = e.touches[0];
+        state.mode = 'orbit';
+        state.startX = state.lastX = t.clientX;
+        state.startY = state.lastY = t.clientY;
+        state.moved = false;
+        isPanningRef.current = false;
+      }
+
+      e.preventDefault();
+    };
+
+    const onTouchCancel = () => {
+      resetTouchState(false);
+    };
+
+    targetEl.addEventListener('touchstart', onTouchStart, { passive: false });
+    targetEl.addEventListener('touchmove', onTouchMove, { passive: false });
+    targetEl.addEventListener('touchend', onTouchEnd);
+    targetEl.addEventListener('touchcancel', onTouchCancel);
 
     // Wheel zoom - only in third-person mode
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       container.focus();
-      if (camTransitionRef.current) return; // ignore input during transition
+      if (camTransitionRef.current) return;
 
       if (viewModeRef.current === 'third-person') {
         const dir = Math.sign(e.deltaY);
@@ -1183,71 +1607,39 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     // Single click for room navigation, double-click the big presentation screen => reset & recenter
     const onClick = (e: MouseEvent) => {
-      // Dev deletion via Alt+Click removed per request
-      // Don't navigate if we're dragging
       if (dragging) return;
-
-      const rect = (e.target as HTMLElement).getBoundingClientRect();
-      const ndc = new THREE.Vector2(
-        ((e.clientX - rect.left) / rect.width) * 2 - 1,
-        -(((e.clientY - rect.top) / rect.height) * 2 - 1)
-      );
-
-      const ray = new THREE.Raycaster();
-      const cam = cameraRef.current!;
-      ray.setFromCamera(ndc, cam);
-
-      // Check for room label clicks
-      const roomLabels = roomLabelsRef.current;
-      if (roomLabels.length > 0) {
-        const labelHits = ray.intersectObjects(roomLabels);
-        if (labelHits.length > 0) {
-          const hitLabel = labelHits[0].object as THREE.Sprite;
-          const roomData = (hitLabel as any).userData;
-          if (roomData && roomData.roomName && roomData.centerX !== undefined && roomData.centerZ !== undefined) {
-            queuePathTo(roomData.centerX, roomData.centerZ, false, roomData.roomName);
-            e.preventDefault();
-            return;
-          }
-        }
+      if (handleNavigationAt(e.clientX, e.clientY, e.target)) {
+        e.preventDefault();
       }
     };
 
     // Mouse move for hover cursor
     const onMouseMoveHover = (e: MouseEvent) => {
       if (dragging) return;
-
       const rect = (e.target as HTMLElement).getBoundingClientRect();
       const ndc = new THREE.Vector2(
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
-        -(((e.clientY - rect.top) / rect.height) * 2 - 1)
+        -(((e.clientY - rect.top) / rect.height) * 2 - 1),
       );
-
       const ray = new THREE.Raycaster();
-      const cam = cameraRef.current!;
+      const cam = cameraRef.current;
+      if (!cam) return;
       ray.setFromCamera(ndc, cam);
-
-      // Check if hovering over room labels
-      const roomLabels = roomLabelsRef.current;
-      let isHoveringLabel = false;
-
-      if (roomLabels.length > 0) {
-        const labelHits = ray.intersectObjects(roomLabels);
-        if (labelHits.length > 0) {
-          isHoveringLabel = true;
-        }
-      }
-
-      // Update cursor
-      container.style.cursor = isHoveringLabel ? 'pointer' : 'default';
+      const labels = roomLabelsRef.current;
+      const hovering = labels.length > 0 && ray.intersectObjects(labels).length > 0;
+      container.style.cursor = hovering ? 'pointer' : 'default';
     };
 
     const onDblClick = (e: MouseEvent) => {
-      if (camTransitionRef.current) return; // ignore recenter during transition
+      if (camTransitionRef.current) return;
       const rect = (e.target as HTMLElement).getBoundingClientRect();
-      const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -(((e.clientY - rect.top) / rect.height) * 2 - 1));
+      const ndc = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -(((e.clientY - rect.top) / rect.height) * 2 - 1),
+      );
       const ray = new THREE.Raycaster();
-      const cam = cameraRef.current!;
+      const cam = cameraRef.current;
+      if (!cam) return;
       ray.setFromCamera(ndc, cam);
       const screen = stageScreenRef.current;
       if (!screen) return;
@@ -1257,15 +1649,10 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         if (viewModeRef.current === 'third-person') {
           targetDistRef.current = cameraDistRef.current = 7.0;
           pitchRef.current = 0.25;
-          // keep yaw as-is
-
-          // Re-center camera target on your avatar for convenience
           if (avatarRef.current) {
             camTargetRef.current.copy(avatarRef.current.position);
             camTargetRef.current.y = 1.2;
           }
-
-          // Release follow lock when explicitly recentering
           followLockRef.current = false;
         }
       }
@@ -1310,8 +1697,13 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     let lastT = performance.now();
     let lastFrameAt = lastT;
     const animate = () => {
-      // Don't run animation if WebGL failed
-      if (!renderer || !scene || !camera) {
+      const renderer = rendererRef.current;
+      const scene = sceneRef.current;
+      const cam = cameraRef.current;
+
+      // Don't run animation if WebGL failed or the scene has been torn down
+      if (!renderer || !scene || !cam) {
+        rafRef.current = requestAnimationFrame(animate);
         return;
       }
 
@@ -1327,7 +1719,6 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       const you = avatarRef.current;
       // Cold-start safety to ensure a valid third-person view
       applyColdStartSafety();
-      const cam = cameraRef.current!;
 
       // Ensure avatar ref exists after rehydrate
       if (!you) {
@@ -1337,8 +1728,6 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
       if (avatarRef.current) {
         const you = avatarRef.current;
-      // Cold-start safety to ensure a valid third-person view
-      applyColdStartSafety();
         // Update conference-room membership for LOCAL
         const confRect = getConferenceRect();
         const nowInConf = isInsideRect({ x: you.position.x, z: you.position.z }, confRect, insideConferenceRef.current);
@@ -1352,8 +1741,8 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         const yaw = yawRef.current;
 
         let vx = 0, vz = 0;
-        const fwd = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw));
-        const rgt = new THREE.Vector2(-fwd.y, fwd.x);
+        const fwd = TMP_VEC2_A.set(-Math.sin(yaw), -Math.cos(yaw));
+        const rgt = TMP_VEC2_B.set(-fwd.y, fwd.x);
         const viewMode = viewModeRef.current;
         const manualKeyMove = (
           keyState.current['KeyW'] || keyState.current['ArrowUp'] ||
@@ -1651,19 +2040,18 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         }
       } else {
         // No local avatar yet; still advance any pending camera transition
-        const cam = cameraRef.current!;
         const trans = camTransitionRef.current;
         if (trans) {
           const now = performance.now();
           const k = Math.min(1, (now - trans.t0) / trans.dur);
-          const s = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
-          cam.position.lerpVectors(trans.startPos, trans.endPos, s);
-          cam.quaternion.slerpQuaternions(trans.startQuat, trans.endQuat, s);
-          if (k >= 1) {
-            camTransitionRef.current = null;
+            const s = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+            cam.position.lerpVectors(trans.startPos, trans.endPos, s);
+            cam.quaternion.slerpQuaternions(trans.startQuat, trans.endQuat, s);
+            if (k >= 1) {
+              camTransitionRef.current = null;
+            }
           }
         }
-      }
 
       // Ease remotes
       avatarBySidRef.current.forEach((g, sid) => {
@@ -1701,11 +2089,11 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
 
       // Render + minimap
-      deskMgrRef.current?.updateLOD(cameraRef.current!.position, lodPropsDistRef.current);
+      deskMgrRef.current?.updateLOD(cam.position, lodPropsDistRef.current);
       // Avatar billboard LOD (throttled)
       if (now >= avatarLodNextAtRef.current) {
         avatarBySidRef.current.forEach((g) => {
-          const cam = cameraRef.current!; if (!cam || !g) { return; }
+          if (!g) return;
           const d = g.position.distanceTo(cam.position);
           const far = d > lodAvatarDistRef.current;
           let bb = g.getObjectByName('AV_BB') as THREE.Sprite | null;
@@ -1731,7 +2119,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         debugStateRef.current.avatar.position.set(you.position.x, 0.85, you.position.z);
       }
 
-      renderer!.render(scene!, cameraRef.current!);
+      renderer.render(scene, cam);
       // Throttle minimap redraw to reduce CPU during heavy load
       minimapHitsRef.current = [];
       if (now >= minimapNextAtRef.current) {
@@ -1755,14 +2143,18 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onKey, { capture: true } as any);
       window.removeEventListener('keyup', onKey, { capture: true } as any);
-      containerEl.removeEventListener('mousedown', onMouseDown);
+      targetEl.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mouseup', onMouseUp);
       window.removeEventListener('mousemove', onMouseMove);
-      const tgt: any = (rendererRef.current?.domElement as any) || containerEl;
-      tgt?.removeEventListener('mousemove', onMouseMoveHover);
-      tgt?.removeEventListener('wheel', onWheel);
-      tgt?.removeEventListener('click', onClick);
-      tgt?.removeEventListener('dblclick', onDblClick);
+      targetEl.removeEventListener('contextmenu', onContextMenu);
+      targetEl.removeEventListener('touchstart', onTouchStart as any);
+      targetEl.removeEventListener('touchmove', onTouchMove as any);
+      targetEl.removeEventListener('touchend', onTouchEnd as any);
+      targetEl.removeEventListener('touchcancel', onTouchCancel as any);
+      targetEl.removeEventListener('mousemove', onMouseMoveHover as any);
+      targetEl.removeEventListener('wheel', onWheel as any);
+      targetEl.removeEventListener('click', onClick as any);
+      targetEl.removeEventListener('dblclick', onDblClick as any);
       window.removeEventListener('blur', onBlur as any);
       minimapRef.current?.removeEventListener('click', onMinimapClick);
       minimapRef.current?.removeEventListener('mousemove', onMinimapMove);
@@ -1928,100 +2320,10 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     };
   }, [room, localSid]);
 
-  // —— FIXED: Robust de-dupe so you don't get "You" + duplicate participants —— 
-  function getUniqueParticipants() {
-    const arr = (participants || []) as any[];
-
-    // Get local participant info more reliably
-    const localParticipant = (room as any)?.localParticipant;
-    const localSidNorm = norm(localSid);
-    const localIdentityNorm = norm(localParticipant?.identity);
-    const localNameNorm = norm(localParticipant?.name).toLowerCase();
-
-    type Row = {
-      id: string;
-      name?: string;
-      sid?: string;
-      identity?: string;
-      isLocal: boolean;
-      score: number;
-    };
-
-    const rows: Row[] = [];
-    const seenKeys = new Set<string>();
-
-    // Process each participant
-    for (const p of arr) {
-      const sid = norm(p?.sid ?? p?.id);
-      const identity = norm(p?.identity);
-      const name = norm(p?.name);
-      const nameLower = name.toLowerCase();
-
-      // Determine if this is the local participant
-      const isLocal = Boolean(
-        (sid && sid === localSidNorm) ||
-        (identity && identity === localIdentityNorm) ||
-        (name && (nameLower === localNameNorm || nameLower === 'you'))
-      );
-
-      // Create unique key - prioritize identity over sid for stability
-      const key = isLocal
-        ? '__LOCAL__'
-        : (identity || sid || name || `unknown_${Math.random()}`);
-
-      // Skip if we've already processed this participant
-      if (seenKeys.has(key)) continue;
-      seenKeys.add(key);
-
-      // Calculate score for deduplication priority
-      const score =
-        (isLocal ? 1000 : 0) +
-        (identity ? 100 : 0) +
-        (sid ? 50 : 0) +
-        (name && nameLower !== 'you' ? 10 : 0);
-
-      rows.push({
-        id: key,
-        name: isLocal ? 'You' : (name || 'User'),
-        sid,
-        identity,
-        isLocal,
-        score
-      });
-    }
-
-    // Ensure we always have a local participant
-    const hasLocal = rows.some(r => r.isLocal);
-    if (!hasLocal) {
-      rows.unshift({
-        id: '__LOCAL__',
-        name: 'You',
-        sid: localSidNorm,
-        identity: localIdentityNorm,
-        isLocal: true,
-        score: 9999
-      });
-    }
-
-    // Sort: local first, then by score (highest first)
-    rows.sort((a, b) => {
-      if (a.isLocal && !b.isLocal) return -1;
-      if (!a.isLocal && b.isLocal) return 1;
-      return b.score - a.score;
-    });
-
-    return rows.map(r => ({ id: r.id, name: r.name }));
-  }
-
-  function getSeatDotsForMinimap() {
-    const uniq = getUniqueParticipants();
-    return uniq.map((p) => {
-      const idx = participantSeatMapRef.current.get(p.id);
-      if (idx == null) return null;
-      const s = seatTransformsRef.current[idx];
-      return { x: s.position.x, z: s.position.z, name: p.name, sid: p.id };
-    }).filter(Boolean) as Array<{ x: number; z: number; name?: string; sid: string }>;
-  }
+  const getSeatDotsForMinimap = useCallback(
+    () => minimapSeatDotsRef.current,
+    [],
+  );
 
   // Participants → desks/avatars/video (includes LOCAL only once)
   useEffect(() => {
@@ -2031,10 +2333,36 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     const prefab = deskPrefabRef.current;
     if (!scene || !avatars || !mgr || !prefab) return;
 
-    const uniq = getUniqueParticipants();
+    const uniq = uniqueParticipants;
+    const signature = uniq.map((p) => `${p.id}:${p.name ?? ''}`).join('|');
 
     const targetDeskCount = Math.max(10, uniq.length + 8);
     seatTransformsRef.current = mgr.ensureDeskCount(targetDeskCount);
+
+    const nextSeatMap = assignParticipantsToDesks(
+      uniq,
+      participantSeatMapRef.current,
+      seatTransformsRef.current.length,
+    );
+
+    const prevSignature = participantSignatureRef.current;
+    const prevSeatMap = participantSeatMapRef.current;
+    let seatChanged = nextSeatMap.size !== prevSeatMap.size;
+    if (!seatChanged) {
+      for (const [sid, seatIdx] of nextSeatMap.entries()) {
+        if (prevSeatMap.get(sid) !== seatIdx) {
+          seatChanged = true;
+          break;
+        }
+      }
+    }
+
+    if (!seatChanged && signature === prevSignature) {
+      return;
+    }
+
+    participantSignatureRef.current = signature;
+    participantSeatMapRef.current = nextSeatMap;
 
     // Refresh desk colliders in obstacles after re-layout
     try {
@@ -2059,12 +2387,19 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       if (debugStateRef.current.hitboxes) { removeColliderDebug(); addColliderDebug(); }
     } catch {}
 
-    // Update seat assignments
-    participantSeatMapRef.current = assignParticipantsToDesks(
-      uniq,
-      participantSeatMapRef.current,
-      seatTransformsRef.current.length
-    );
+    minimapSeatDotsRef.current = uniq
+      .map((participantRow) => {
+        const idx = participantSeatMapRef.current.get(participantRow.id);
+        if (idx == null) return null;
+        const transform = seatTransformsRef.current[idx];
+        return {
+          x: transform.position.x,
+          z: transform.position.z,
+          name: participantRow.name,
+          sid: participantRow.id,
+        };
+      })
+      .filter(Boolean) as Array<{ x: number; z: number; name?: string; sid: string }>;
 
     // Track existing avatars to avoid recreating them
     const existingAvatars = new Set(avatarBySidRef.current.keys());
@@ -2198,7 +2533,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         localAvatarSet = true;
       }
     }
-  }, [participants, localSid, room]);
+  }, [uniqueParticipants]);
 
   // Video textures: stage + local desk + seat monitors + head badges
   useEffect(() => {
@@ -2257,7 +2592,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     // Apply to monitors + head badges
     const seatMap = participantSeatMapRef.current;
     const monitors = monitorPlanesRef.current;
-    const uniq = getUniqueParticipants();
+    const uniq = uniqueParticipants;
     for (const p0 of uniq) {
       const sid = p0.id;
       const idx = seatMap.get(sid);
@@ -2302,7 +2637,7 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         } catch { }
       }
     };
-  }, [cameraRefs, screenRefs, participants, localSid]);
+  }, [cameraRefs, screenRefs, uniqueParticipants, localSid]);
 
   // Dice button action
   const rollDice = () => {
@@ -2378,32 +2713,37 @@ const Meeting3D: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   }, [micEnabled, screenShareEnabled, participants, perfLow]);
 
   // UI: collapsible 3D controls panel
-  const [controlsOpen, setControlsOpen] = useState(true);
+  const [controlsOpen, setControlsOpen] = useState(() =>
+    typeof window === 'undefined' ? true : window.innerWidth >= 768,
+  );
 
   const themeClass = theme === 'light' ? 'theme-light' : 'theme-dark';
   return (
-    <div className={`relative h-full w-full ns-meeting3d ${themeClass}`} >
+    <div className={`relative h-full w-full overflow-hidden ns-meeting3d ${themeClass}`}>
       <div
         ref={containerRef}
-        className="relative mx-auto h-full w-full"
+        className="relative mx-auto h-full w-full touch-none focus:outline-none"
+        tabIndex={0}
         style={{
-          paddingTop: topSafeAreaPx,
-          paddingBottom: bottomSafeAreaPx,
-          paddingRight: chatOpen ? 408 : undefined
+          paddingTop: paddingTopValue,
+          paddingBottom: paddingBottomValue,
+          paddingRight: containerPaddingRight,
         }}
       />
-      <canvas
-        ref={minimapRef}
-        width={300}
-        height={300}
-        className="absolute right-4 bottom-4 rounded-lg border"
-        style={{ zIndex: 5, borderColor: 'var(--panel-border)', background: 'var(--surface-1)' }}
-      />
+      {!isMobile && (
+        <canvas
+          ref={minimapRef}
+          width={minimapSize}
+          height={minimapSize}
+          className="absolute rounded-lg border pointer-events-auto"
+          style={minimapStyle}
+        />
+      )}
 
       {/* Controls Panel */}
       <div
-        className="absolute left-4 top-4 text-[11px] rounded-lg px-3 py-2"
-        style={{ background: 'var(--panel-bg)', color: 'var(--panel-text)', border: '1px solid var(--panel-border)', width: 320 }}
+        className="absolute text-[11px] rounded-lg px-3 py-2 backdrop-blur-sm"
+        style={controlsStyle}
       >
         {/* Header: title, help, collapse toggle */}
         <button

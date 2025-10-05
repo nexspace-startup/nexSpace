@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { MicIcon, MicDisabledIcon, CameraIcon, CameraDisabledIcon, ChatIcon } from "@livekit/components-react";
 import { useShallow } from "zustand/react/shallow";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -6,6 +6,7 @@ import { useUIStore } from "../stores/uiStore";
 import { fmtHMS } from "../utils/util";
 import { useTick } from "../hooks/useTick";
 import call_end from "../assets/call_end.svg"
+import { useViewportSize } from "../hooks/useViewportSize";
 
 const MeetingControls: React.FC = () => {
   const {
@@ -31,6 +32,9 @@ const MeetingControls: React.FC = () => {
   );
 
   const tick = useTick(connected);
+  const { width: viewportWidth } = useViewportSize();
+  const isMobile = viewportWidth <= 640;
+  const isDesktopWide = viewportWidth >= 1280;
   const isWorkspaceOpen = useUIStore((s) => s.isWorkspacePanelOpen);
   const isWorkspaceControlsOpen = useUIStore((s) => s.isWorkspaceControlsOpen);
 
@@ -42,18 +46,32 @@ const MeetingControls: React.FC = () => {
   const [moreOpen, setMoreOpen] = useState(false);
   const [deskOpen, setDeskOpen] = useState(false);
 
-  if (!connected) return null;
-
   // When chat is open, visually center controls in remaining width by shifting left ~ half chat width
-  const centerShift = chatOpen ? "translateX(calc(-50% - 204px))" : "translateX(-50%)";
-  const bothOpen = chatOpen && isWorkspaceOpen;
-  if (!isWorkspaceControlsOpen) {
+  const shouldOffset = chatOpen && isDesktopWide;
+  const centerShift = shouldOffset ? "translateX(calc(-50% - 204px))" : "translateX(-50%)";
+  const collapseDesktopExtras =
+    (!isMobile && isWorkspaceOpen) ||
+    (!isMobile && chatOpen && viewportWidth >= 1024);
+  const showOverflowMenu = isMobile || collapseDesktopExtras;
+  const containerStyle = useMemo<React.CSSProperties>(() => ({
+    transform: centerShift,
+    paddingBottom: isMobile ? "env(safe-area-inset-bottom, 0px)" : undefined,
+  }), [centerShift, isMobile]);
+
+  useEffect(() => {
+    if (!showOverflowMenu && moreOpen) {
+      setMoreOpen(false);
+    }
+  }, [moreOpen, showOverflowMenu]);
+
+  if (!connected || !isWorkspaceControlsOpen) {
     return null;
-  } else
-    return (
+  }
+
+  return (
       <div
-        className="absolute left-1/2 control-bar w-auto bottom-3 sm:bottom-6 min-h-[72px] sm:h-[60px] px-3 sm:px-4 py-3 sm:py-1"
-        style={{ transform: centerShift }}
+        className="absolute left-1/2 control-bar z-40 w-[calc(100%-1.5rem)] sm:w-auto max-w-[min(760px,calc(100%-1.5rem))] bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] sm:bottom-6 min-h-[72px] sm:h-[60px] px-3 sm:px-4 py-3 sm:py-1 flex-wrap"
+        style={containerStyle}
         role="region"
         aria-label="Meeting controls"
       >
@@ -96,6 +114,22 @@ const MeetingControls: React.FC = () => {
               </button>
             </div>
 
+            {/* View mode (mobile) */}
+            <div className="segmented sm:hidden" role="group" aria-label="View mode">
+              <button
+                className={`px-2 py-1 text-xs font-medium ${viewMode === 'grid' ? 'segmented-active' : 'segmented-inactive'}`}
+                onClick={() => setViewMode('grid')}
+              >
+                Grid
+              </button>
+              <button
+                className={`px-2 py-1 text-xs font-medium ${viewMode === '3d' ? 'segmented-active' : 'segmented-inactive'}`}
+                onClick={() => setViewMode('3d')}
+              >
+                3D
+              </button>
+            </div>
+
             {/* Mic */}
             <button
               onClick={toggleMic}
@@ -117,7 +151,7 @@ const MeetingControls: React.FC = () => {
             </button>
 
             {/* Screen share button on desktop; on mobile in more menu */}
-            {!bothOpen && (
+            {!collapseDesktopExtras && (
               <button
                 onClick={toggleScreenShare}
                 className={`ctrl-btn group hidden sm:grid ${screenShareEnabled ? 'ring-1 ring-[#3D93F8]' : ''}`}
@@ -135,7 +169,7 @@ const MeetingControls: React.FC = () => {
             )}
 
             {/* Chat beside presentation on desktop */}
-            {!bothOpen && (
+            {!collapseDesktopExtras && (
               <button className={`ctrl-btn group relative hidden sm:grid ${chatOpen ? 'ring-1 ring-[#3D93F8]' : ''}`} title="Chat" onClick={toggleChat} aria-pressed={chatOpen}>
                 <ChatIcon className="w-6 h-6 sm:w-5 sm:h-5 text-[#80889B] group-hover:text-white" />
                 {(!chatOpen && unreadCount > 0) && (
@@ -147,7 +181,7 @@ const MeetingControls: React.FC = () => {
             {/* Mobile 'more' (…): contains present + chat */}
             <button
               onClick={() => setMoreOpen((v) => !v)}
-              className="ctrl-btn group sm:hidden"
+              className={`ctrl-btn group ${showOverflowMenu ? '' : 'sm:hidden'}`}
               title="More"
               aria-haspopup="menu"
               aria-expanded={moreOpen}
@@ -196,18 +230,45 @@ const MeetingControls: React.FC = () => {
 
         {/* Mobile overflow menu */}
         {moreOpen && (
-          <div className="absolute right-2 bottom-[104px] sm:bottom-[72px] bg-[#202024] border border-[#26272B] rounded-xl shadow-lg w-52 py-1" role="menu">
+          <div
+            className="absolute right-2 bottom-[104px] sm:bottom-[72px] bg-[#202024] border border-[#26272B] rounded-xl shadow-lg w-52 py-1"
+            role="menu"
+            style={{ bottom: isMobile ? "calc(env(safe-area-inset-bottom, 0px) + 96px)" : undefined }}
+          >
             <button className="w-full text-left px-3 py-2 text-sm text-white/90 hover:bg-white/5 flex items-center gap-2" onClick={() => { toggleScreenShare(); setMoreOpen(false); }}>
               {screenShareEnabled ? 'Stop presenting' : 'Present screen'}
             </button>
             <button className="w-full text-left px-3 py-2 text-sm text-white/90 hover:bg-white/5" onClick={() => { toggleChat(); setMoreOpen(false); }}>
               {chatOpen ? 'Close chat' : 'Open chat'}
             </button>
+            {isMobile && (
+              <>
+                <div className="border-t border-white/5 mt-1 pt-2 text-[11px] uppercase tracking-wide text-white/50 px-3">View</div>
+                <div className="flex items-center justify-between px-3 py-2 gap-3">
+                  <button
+                    className={`flex-1 px-2 py-1 rounded border border-white/10 text-xs font-medium ${viewMode === 'grid' ? 'bg-white/10 text-white' : 'bg-transparent text-white/70'}`}
+                    onClick={() => { setViewMode('grid'); setMoreOpen(false); }}
+                  >
+                    Grid
+                  </button>
+                  <button
+                    className={`flex-1 px-2 py-1 rounded border border-white/10 text-xs font-medium ${viewMode === '3d' ? 'bg-white/10 text-white' : 'bg-transparent text-white/70'}`}
+                    onClick={() => { setViewMode('3d'); setMoreOpen(false); }}
+                  >
+                    3D
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
         {deskOpen && (
-          <div className="absolute right-2 bottom-[72px] hidden sm:block bg-[#202024] border border-[#26272B] rounded-xl shadow-lg w-56 py-1" role="menu">
+          <div
+            className="absolute right-2 bottom-[72px] hidden sm:block bg-[#202024] border border-[#26272B] rounded-xl shadow-lg w-56 py-1"
+            role="menu"
+            style={{ bottom: !isMobile ? "calc(env(safe-area-inset-bottom, 0px) + 72px)" : undefined }}
+          >
             <button className="w-full text-left px-3 py-2 text-sm text-white/90 hover:bg-white/5">
               Placeholder
             </button>
