@@ -7,6 +7,8 @@ import { useUserStore } from "../../stores/userStore";
 import { googleGetCode } from "../../lib/oauthClients";
 import { toast } from "../../stores/toastStore";
 import { AuthService, getMe, type MeResponse } from "../../services/authService";
+import microsoftIcon from '../../assets/Microsoft.svg'
+import googleIcon from '../../assets/Google.svg'
 
 type Provider = "google" | "microsoft";
 
@@ -305,7 +307,7 @@ export default function Signin() {
                                 ) : (
                                     <>
                                         <img
-                                            src="https://www.svgrepo.com/show/475656/google-color.svg"
+                                            src={googleIcon}
                                             alt="Google"
                                             className="w-5 h-5"
                                         />
@@ -320,7 +322,7 @@ export default function Signin() {
                                 className="w-full h-10 rounded-xl bg-[rgba(128,136,155,0.25)] text-white inline-flex items-center justify-center gap-3 hover:bg-[rgba(128,136,155,0.35)]"
                             >
                                 <img
-                                    src="https://www.svgrepo.com/show/452213/microsoft.svg"
+                                    src={microsoftIcon}
                                     alt="Microsoft"
                                     className="w-5 h-5"
                                 />

@@ -32,3 +32,22 @@ export async function deleteWorkspaceForUser(userId: string, workspaceUid: strin
   if (String(ws.createdById) !== String(userId)) throw new Error("FORBIDDEN");
   await prisma.workspace.delete({ where: { uid: workspaceUid } });
 }
+
+export async function updateWorkspaceForUser(userId: string, workspaceUid: string, name: string) {
+  const ws = await prisma.workspace.findUnique({
+    where: { uid: workspaceUid },
+    select: { uid: true, createdById: true },
+  });
+
+  if (!ws) throw new Error("NOT_FOUND");
+  if (String(ws.createdById) !== String(userId)) throw new Error("FORBIDDEN");
+
+  const updated = await prisma.workspace.update({
+    where: { uid: workspaceUid },
+    data: { name },
+    select: { uid: true, name: true },
+  });
+
+  return { id: updated.uid, name: updated.name };
+}
+

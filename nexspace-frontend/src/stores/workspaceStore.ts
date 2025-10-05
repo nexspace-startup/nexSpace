@@ -24,6 +24,7 @@ type WorkspaceState = {
   upsertWorkspace: (w: Workspace) => void; // handy for “Create workspace” flow
   deleteWorkspace: (uid: string) => Promise<void>;
   createWorkspace: (name: string) => Promise<Workspace>;
+  updateWorkspace: (id: string, name: string | null) => Promise<Workspace>
 };
 
 export const useWorkspaceStore = create<WorkspaceState>()(
@@ -145,6 +146,38 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       } catch (e: any) {
         const code = e?.response?.status;
         if (code === 409) toast.error('Workspace already exists'); else toast.error(e?.message ?? 'Failed to create workspace');
+        return null;
+      }
+    },
+
+    // added the function to update workspace from panel options (09/29/2025)
+    updateWorkspace: async (id: string, name: string) => {
+      debugger
+      const clean = String(name || '').trim();
+      if (!clean) { toast.warning('Enter a workspace name'); return null; }
+
+      try {
+        const res = await api.put(`/workspace/${id}`, { name: clean }, { withCredentials: true });
+
+        if ((res.data as any)?.success && (res.data as any)?.data) {
+          const w: Workspace = (res.data as any).data;
+          const existing = get().workspaces;
+          const idx = existing.findIndex(x => x.id === w.id);
+          const next = [...existing];
+          if (idx >= 0) next[idx] = w;
+          set({ workspaces: next, activeWorkspaceId: w.id });
+          toast.success('Workspace updated');
+          return w;
+        }
+
+        const msg = (res.data as any)?.errors?.[0]?.message ?? 'Failed to update workspace';
+        toast.error(msg);
+        return null;
+
+      } catch (e: any) {
+        const code = e?.response?.status;
+        if (code === 404) toast.error('Workspace not found');
+        else toast.error(e?.message ?? 'Failed to update workspace');
         return null;
       }
     },

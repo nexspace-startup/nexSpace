@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { joinMeeting, listMyWorkspaces, createWorkspace, deleteWorkspace, listWorkspaceMembersCtrl } from "../controllers/workspace.controller.js";
+import { joinMeeting, listMyWorkspaces, createWorkspace, deleteWorkspace, listWorkspaceMembersCtrl, updateWorkspace } from "../controllers/workspace.controller.js";
 import { createMessage, getMessages, removeMyMessage, adminRemoveAny, eraseMe, getDMThreads, markThreadReadCtrl } from "../controllers/chat.controller.js";
 import { requireUser } from "../middleware/auth.js";
 
@@ -14,12 +14,13 @@ interface workspaceResponse {
   name: string;
 }
 
-router.post( "/:workspaceUid/meeting/join", asyncHandler(joinMeeting) );
+router.post("/:workspaceUid/meeting/join", asyncHandler(joinMeeting));
 
 router.get("/", asyncHandler(listMyWorkspaces));
 router.post("/", asyncHandler(createWorkspace));
 router.delete("/:workspaceUid", asyncHandler(deleteWorkspace));
 router.get("/:workspaceUid/members", asyncHandler(listWorkspaceMembersCtrl));
+router.put("/:workspaceUid", updateWorkspace);
 
 // Chat endpoints (persistent)
 router.get("/:workspaceUid/chat/messages", asyncHandler(getMessages));

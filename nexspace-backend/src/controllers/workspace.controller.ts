@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { MeetingJoinParams, CreateWorkspaceBody } from "../validators/workspace.validators.js";
 import { buildMeetingJoinToken, listWorkspacesForUser } from "../services/meeting.service.js";
 import { listMembers } from "../services/workspace.service.js";
-import { createWorkspaceForUser, deleteWorkspaceForUser } from "../services/workspace.service.js";
+import { createWorkspaceForUser, deleteWorkspaceForUser, updateWorkspaceForUser } from "../services/workspace.service.js";
 
 export async function joinMeeting(req: Request, res: Response) {
   const userId = req.auth!.userId! as string;
@@ -95,3 +95,34 @@ export async function listWorkspaceMembersCtrl(req: Request, res: Response) {
     return res.fail?.([{ message: "Unable to list members", code: "INTERNAL_SERVER_ERROR" }], 500);
   }
 }
+
+export async function updateWorkspace(req: Request, res: Response) {
+  const userId = req.auth!.userId! as string;
+
+  const parsedParams = MeetingJoinParams.safeParse(req.params);
+  if (!parsedParams.success) {
+    return res.fail?.([{ message: "workspaceUid required", code: "VALIDATION_ERROR" }], 400);
+  }
+  const { workspaceUid } = parsedParams.data as any;
+
+  const parsedBody = CreateWorkspaceBody.safeParse(req.body);
+  if (!parsedBody.success) {
+    const details = parsedBody.error.issues.map((i) => ({ path: i.path.join("."), message: i.message }));
+    return res.fail?.([{ message: "Validation failed", code: "VALIDATION_ERROR", details }], 400);
+  }
+
+  try {
+    const updated = await updateWorkspaceForUser(userId, workspaceUid, parsedBody.data.name);
+    return res.success?.(updated, 200) ?? res.status(200).json({ success: true, data: updated, errors: [] });
+  } catch (e: any) {
+    const code = e?.message;
+    if (code === "NOT_FOUND")
+      return res.fail?.([{ message: "Workspace not found", code: "NOT_FOUND" }], 404);
+    if (code === "FORBIDDEN")
+      return res.fail?.([{ message: "Forbidden", code: "FORBIDDEN" }], 403);
+    return res.fail?.([{ message: "Unable to update workspace", code: "INTERNAL_SERVER_ERROR" }], 500);
+  }
+}
+
+
+
