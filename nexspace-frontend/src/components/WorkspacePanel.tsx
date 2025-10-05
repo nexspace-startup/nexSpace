@@ -155,7 +155,7 @@ const WorkspacePanel: React.FC = () => {
         type == 2 && editTarget?.id && editTarget?.name ? await updateWorkSpace(editTarget?.id, workspaceName.trim()) : ""
       if (res) {
         if (type == 1) {
-          setWorkspaceName(res.name); setCreateStep(2); setInviteInput(""); setSearchResults([]); setInvited([]); setInviteType(1)
+          setWorkspaceName(res.name); setCreateStep(2); setInviteInput(""); setSearchResults([]); setInvited([]); setInviteType(1); setcreatedWorkSpaceId(res)
         } else if (type == 2) {
           setCreateOpen(false); setWorkspaceName("")
         }
@@ -207,8 +207,9 @@ const WorkspacePanel: React.FC = () => {
     if (!res) {
       toast.warning(inviteInput + " does not exist")
     } else {
-      const res = await inviteUser({ email: inviteInput, workspaceUid: "" })
-      // const res = await inviteUser({ email: inviteInput, workspaceUid: InviteType == 2 ? panelInvite?.id : InviteType == 1 ? createdWorkSpaceId?.id : null })
+      // const inty = InviteType
+      // const res = await inviteUser({ email: inviteInput, workspaceUid: "" })
+      const res = await inviteUser({ email: inviteInput, workspaceUid: InviteType == 2 ? panelInvite?.id || "" : InviteType == 1 ? createdWorkSpaceId?.id || "" : "" })
 
       res ? [
         setInvited((prev) => [...prev, inviteInput]),
