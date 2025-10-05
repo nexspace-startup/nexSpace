@@ -19,6 +19,7 @@ type JoinResponse =
 export type MeetingAvatar = {
   id: string;
   name?: string;
+  email?: string;
   avatar?: string;
   status?: PresenceStatus;
 };
@@ -159,11 +160,13 @@ const computeParticipants = (room: Room | null): MeetingAvatar[] => {
   const list = [room.localParticipant, ...remote].filter(Boolean) as Participant[];
   return list.map((p) => {
     const json = parseParticipantMetadata((p as any)?.metadata);
-    const avatarUrl = json?.profile?.avatar;
     const presence = parsePresenceRecord(p, json ?? undefined);
+    const avatarUrl = json?.profile?.avatar;
+    const email = json?.profile?.email;
     return {
       id: (p as any)?.sid ?? p.identity,
       name: (p as any)?.name ?? p.identity,
+      email: email,
       avatar: avatarUrl,
       status: presence?.status,
     };

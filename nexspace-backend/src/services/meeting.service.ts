@@ -33,7 +33,8 @@ export async function buildMeetingJoinToken(userId: string, workspaceUid: string
   const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, { identity, name: displayName, ttl: "2h" });
   try {
     const avatar = sess?.avatar ?? undefined;
-    const meta = JSON.stringify({ profile: { name: displayName, avatar } });
+    const email = sess?.email ?? undefined;
+    const meta = JSON.stringify({ profile: { name: displayName, avatar, email } });
     (at as unknown as { metadata?: string }).metadata = meta;
     (at as unknown as { attributes?: Record<string, string> }).attributes = {
       presence_status: "IN_MEETING",
