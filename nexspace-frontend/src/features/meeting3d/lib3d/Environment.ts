@@ -1,464 +1,518 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import { MODE_PALETTE, type Mode, type ModePalette } from './themeConfig';
+import { getMaterial } from './materialCache';
+import { preloadEnvironmentMap, type EnvironmentVariant, type EnvironmentMapHandle } from './environmentMaps';
+import { mountRoomModules, type RoomModuleHandle } from './RoomModuleLoader';
+import { meeting3dFeatures } from '../config';
 
-// --- Util: set texture to sRGB across three versions
-function setSRGB(tex: THREE.Texture) {
-    const anyTex = tex as any;
-    if ('colorSpace' in anyTex && anyTex.colorSpace !== undefined) {
-        anyTex.colorSpace = (THREE as any).SRGBColorSpace ?? anyTex.colorSpace;
-    }
-}
+RectAreaLightUniformsLib.init();
 
-// Runtime guard for SSR environments (no window/document)
 const IS_BROWSER = typeof window !== 'undefined' && typeof document !== 'undefined';
 
-// --- Subtle, tileable wall texture (cached) ---------------------------------
-let WALL_TEX_LIGHT: THREE.Texture | null = null;
-let WALL_TEX_DARK: THREE.Texture | null = null;
+type BuiltEnvironment = {
+  obstacles: THREE.Box3[];
+  stageScreen: THREE.Mesh | null;
+  localMonitor: THREE.Mesh | null;
+  disposeEnv: () => void;
+  moduleHandles: Promise<RoomModuleHandle[]>;
+};
 
-function makeWallTexture(base: string, grain: string): THREE.Texture {
-    // SSR-safe fallback: return a tiny data texture with the base color
-    if (!IS_BROWSER) {
-        const col = new THREE.Color(base);
-        const data = new Uint8Array([
-            Math.round(col.r * 255),
-            Math.round(col.g * 255),
-            Math.round(col.b * 255),
-            255,
-        ]);
-        const tex = new THREE.DataTexture(data, 1, 1);
-        setSRGB(tex);
-        tex.needsUpdate = true;
-        return tex;
-    }
-    const S = 256;
-    const c = document.createElement('canvas');
-    c.width = c.height = S;
-    const g = c.getContext('2d')!;
-    // base coat
-    g.fillStyle = base; g.fillRect(0, 0, S, S);
-    // subtle noise speckles
-    const noise = g.createImageData(S, S);
-    for (let i = 0; i < noise.data.length; i += 4) {
-        const v = Math.random() * 16; // very light
-        noise.data[i] = v; noise.data[i + 1] = v; noise.data[i + 2] = v; noise.data[i + 3] = 24; // low alpha
-    }
-    g.putImageData(noise, 0, 0);
-    // faint vertical grain lines
-    g.strokeStyle = grain; g.globalAlpha = 0.08; g.lineWidth = 1;
-    for (let x = 0; x < S; x += 24) { g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, S); g.stroke(); }
-    g.globalAlpha = 1;
+const ENV_HANDLES: Partial<Record<EnvironmentVariant, EnvironmentMapHandle>> = {};
 
-    const tex = new THREE.CanvasTexture(c);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(4, 4);
-    setSRGB(tex);
-    tex.anisotropy = 2;
-    tex.needsUpdate = true;
-    return tex;
+function variantFromTheme(theme: Mode): EnvironmentVariant {
+  return theme === 'light' ? 'day' : 'night';
 }
 
-function getWallTexture(mode: 'light' | 'dark') {
-    if (mode === 'light') {
-        if (!WALL_TEX_LIGHT) WALL_TEX_LIGHT = makeWallTexture('#F6F8FB', '#D8DEE9');
-        return WALL_TEX_LIGHT;
-    }
-    if (!WALL_TEX_DARK) WALL_TEX_DARK = makeWallTexture('#1f2633', '#2d3544');
-    return WALL_TEX_DARK;
-}
-
-function makeGridTexture({
-    size = 1024,
-    cell = 64,
-    majorEvery = 4,
-    bg = '#202024',
-    minor = 'rgba(190,200,215,0.25)',
-    major = 'rgba(230,240,255,0.55)',
-} = {}) {
-    // SSR-safe fallback: solid background texture
-    if (!IS_BROWSER) {
-        const col = new THREE.Color(bg);
-        const data = new Uint8Array([
-            Math.round(col.r * 255),
-            Math.round(col.g * 255),
-            Math.round(col.b * 255),
-            255,
-        ]);
-        const tex = new THREE.DataTexture(data, 1, 1);
-        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        setSRGB(tex);
-        tex.needsUpdate = true;
-        return tex;
-    }
-    const c = document.createElement('canvas');
-    c.width = c.height = size;
-    const g = c.getContext('2d')!;
-    g.fillStyle = bg;
-    g.fillRect(0, 0, size, size);
-
-    // vertical lines
-    for (let x = 0; x <= size; x += cell) {
-        const isMajor = (x / cell) % majorEvery === 0;
-        g.strokeStyle = isMajor ? major : minor;
-        g.lineWidth = isMajor ? 2 : 1;
-        g.beginPath();
-        g.moveTo(x + 0.5, 0);
-        g.lineTo(x + 0.5, size);
-        g.stroke();
-    }
-    // horizontal lines
-    for (let y = 0; y <= size; y += cell) {
-        const isMajor = (y / cell) % majorEvery === 0;
-        g.strokeStyle = isMajor ? major : minor;
-        g.lineWidth = isMajor ? 2 : 1;
-        g.beginPath();
-        g.moveTo(0, y + 0.5);
-        g.lineTo(size, y + 0.5);
-        g.stroke();
-    }
-
-    const tex = new THREE.CanvasTexture(c);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.anisotropy = 8;
-    setSRGB(tex);
-    tex.needsUpdate = true;
-    return tex;
-}
-
-function makeRadialFade(size = 1024): THREE.Texture {
-    if (!IS_BROWSER) {
-        // Transparent 1x1 texture as a harmless placeholder during SSR
-        const data = new Uint8Array([255, 255, 255, 0]);
-        const tex = new THREE.DataTexture(data, 1, 1);
-        setSRGB(tex);
-        tex.needsUpdate = true;
-        return tex;
-    }
-    const c = document.createElement('canvas');
-    c.width = c.height = size;
-    const g = c.getContext('2d')!;
-    const grd = g.createRadialGradient(
-        size / 2, size / 2, size * 0.25,
-        size / 2, size / 2, size * 0.65
-    );
-    grd.addColorStop(0.0, 'rgba(0,0,0,0.0)');
-    grd.addColorStop(1.0, 'rgba(0,0,0,0.45)');
-    g.fillStyle = grd;
-    g.fillRect(0, 0, size, size);
-
-    const tex = new THREE.CanvasTexture(c);
-    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-    setSRGB(tex);
-    tex.needsUpdate = true;
-    return tex;
-}
-
-// Helper: update the grid material's map texture while preserving repeat/anisotropy
-function updateGridTexture(
-  mesh: THREE.Mesh | null | undefined,
-  pal: ModePalette
-) {
-  if (!mesh) return;
-  const mat: any = (mesh as any).material;
-  if (!mat) return;
-  const prev: THREE.Texture | undefined = mat.map as any;
-  const tex = makeGridTexture({
-    cell: 64,
-    majorEvery: 10,
-    bg: pal.gridBg,
-    minor: pal.gridMinor,
-    major: pal.gridMajor,
-  });
-  const geom: any = (mesh.geometry as any);
-  const width: number = geom?.parameters?.width ?? 0;
-  const height: number = geom?.parameters?.height ?? 0;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  if (width && height) {
-    tex.repeat.set((width / 2) / 10, (height / 2) / 10);
-  } else if ((prev as any)?.repeat) {
-    tex.repeat.copy((prev as any).repeat);
+function makeFloorTexture(palette: ModePalette): THREE.CanvasTexture {
+  const size = 1024;
+  const canvas = IS_BROWSER ? document.createElement('canvas') : null;
+  if (!canvas) {
+    const fallback = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
+    fallback.needsUpdate = true;
+    return fallback as unknown as THREE.CanvasTexture;
   }
-  tex.anisotropy = (prev as any)?.anisotropy ?? 8;
-  mat.map = tex;
-  mat.needsUpdate = true;
-  (mesh as any).visible = true;
-  try { prev?.dispose?.(); } catch { /* noop */ }
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  const tiles = palette.floorTiles.length ? palette.floorTiles : [palette.floorBase];
+  const tileSize = size / 8;
+  for (let y = 0; y < 8; y += 1) {
+    for (let x = 0; x < 8; x += 1) {
+      const idx = (x + y) % tiles.length;
+      ctx.fillStyle = `#${tiles[idx].toString(16).padStart(6, '0')}`;
+      ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+    }
+  }
+  ctx.strokeStyle = `#${palette.floorGrout.toString(16).padStart(6, '0')}`;
+  ctx.lineWidth = 8;
+  for (let i = 0; i <= 8; i += 1) {
+    ctx.beginPath();
+    ctx.moveTo(0, i * tileSize);
+    ctx.lineTo(size, i * tileSize);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(i * tileSize, 0);
+    ctx.lineTo(i * tileSize, size);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
 }
 
-// --- Public: add grid plane (surround) --------------------------------------
+function makeLightmap(size = 512, intensity = 0.85): THREE.Texture {
+  if (!IS_BROWSER) {
+    const tex = new THREE.DataTexture(new Float32Array([intensity]), 1, 1, THREE.RedFormat, THREE.FloatType);
+    tex.needsUpdate = true;
+    return tex;
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const gradient = ctx.createRadialGradient(size / 2, size / 2, size * 0.15, size / 2, size / 2, size * 0.48);
+  gradient.addColorStop(0, `rgba(255,255,255,${intensity})`);
+  gradient.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.flipY = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function addFloor(scene: THREE.Scene, width: number, depth: number, palette: ModePalette) {
+  const mat = getMaterial('floor-base', palette) as THREE.MeshStandardMaterial;
+  mat.map = makeFloorTexture(palette);
+  mat.map.repeat.set(width / 6, depth / 6);
+  mat.lightMap = makeLightmap(1024, 0.7);
+  mat.lightMapIntensity = 0.95;
+  mat.needsUpdate = true;
+
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), mat);
+  floor.name = 'ENV_FLOOR';
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  floor.userData.dimensions = { width, depth };
+  scene.add(floor);
+  return floor;
+}
+
+function addWalls(scene: THREE.Scene, width: number, depth: number, palette: ModePalette) {
+  const wallMat = getMaterial('wall-base', palette).clone() as THREE.MeshStandardMaterial;
+  wallMat.lightMap = makeLightmap(1024, 0.6);
+  wallMat.lightMapIntensity = 0.8;
+
+  const height = 3.6;
+  const thickness = 0.12;
+
+  const makeWall = (w: number, h: number, d: number) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat.clone());
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
+  };
+
+  const walls: THREE.Mesh[] = [];
+  const north = makeWall(width, height, thickness);
+  north.name = 'WALL_N';
+  north.position.set(0, height / 2, -depth / 2);
+  const south = north.clone();
+  south.name = 'WALL_S';
+  south.position.set(0, height / 2, depth / 2);
+
+  const east = makeWall(thickness, height, depth);
+  east.name = 'WALL_E';
+  east.position.set(width / 2, height / 2, 0);
+  const west = east.clone();
+  west.name = 'WALL_W';
+  west.position.set(-width / 2, height / 2, 0);
+
+  scene.add(north, south, east, west);
+  walls.push(north, south, east, west);
+
+  const glassMat = getMaterial('glass', palette);
+  const ribbon = new THREE.Mesh(new THREE.PlaneGeometry(width * 0.6, 1.8), glassMat);
+  ribbon.name = 'WINDOW_STRIP';
+  ribbon.position.set(0, 2.4, -depth / 2 + 0.05);
+  scene.add(ribbon);
+  return walls;
+}
+
+function addStage(scene: THREE.Scene, palette: ModePalette) {
+  const screenMat = getMaterial('screen', palette) as THREE.MeshBasicMaterial;
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(11.5, 4.2), screenMat);
+  screen.position.set(0, 2.5, -15.6);
+  screen.name = 'STAGE_SCREEN';
+  scene.add(screen);
+
+  const podium = new THREE.Mesh(
+    new RoundedBoxGeometry(3.2, 0.3, 1.0, 4, 0.08),
+    getMaterial('wood-accent', palette),
+  );
+  podium.position.set(0, 0.16, -14.6);
+  podium.receiveShadow = true;
+  podium.castShadow = true;
+  scene.add(podium);
+
+  const monitor = new THREE.Mesh(
+    new THREE.BoxGeometry(1.1, 0.7, 0.06),
+    getMaterial('metal-accent', palette),
+  );
+  monitor.position.set(19.1, 2.1, 14.4);
+  monitor.name = 'LOCAL_MONITOR';
+  monitor.castShadow = true;
+  monitor.receiveShadow = true;
+  scene.add(monitor);
+
+  return { screen, monitor };
+}
+
+function addPlanters(scene: THREE.Scene, palette: ModePalette) {
+  const potGeo = new RoundedBoxGeometry(0.5, 0.36, 0.5, 3, 0.08);
+  const potMat = new THREE.MeshStandardMaterial({
+    color: palette.furniture.plantPot,
+    roughness: 0.75,
+    metalness: 0.12,
+  });
+  const leafGeo = new THREE.ConeGeometry(0.28, 0.8, 12);
+  const leafMat = new THREE.MeshStandardMaterial({
+    color: palette.furniture.plantLeaf,
+    roughness: 0.55,
+    metalness: 0.05,
+  });
+
+  const planterGroup = new THREE.Group();
+  planterGroup.name = 'PLANTERS';
+
+  const positions: Array<[number, number, number]> = [
+    [-10.5, 0.18, -5.5],
+    [-12.2, 0.18, 4.0],
+    [14.5, 0.18, 2.5],
+    [10.4, 0.18, -8.0],
+  ];
+
+  positions.forEach(([x, y, z], idx) => {
+    const pot = new THREE.Mesh(potGeo, potMat);
+    pot.position.set(x, y, z);
+    pot.castShadow = true;
+    pot.receiveShadow = true;
+    pot.userData.materialToken = 'plantPot';
+    planterGroup.add(pot);
+
+    const leaf = new THREE.Mesh(leafGeo, leafMat);
+    leaf.position.set(x, y + 0.65, z);
+    leaf.castShadow = true;
+    leaf.userData.materialToken = 'plantLeaf';
+    planterGroup.add(leaf);
+
+    const collider = new THREE.Box3().setFromCenterAndSize(
+      new THREE.Vector3(x, 0.6, z),
+      new THREE.Vector3(0.6, 1.2, 0.6),
+    );
+    (planterGroup.userData.colliders ??= []).push(collider);
+  });
+
+  scene.add(planterGroup);
+  return planterGroup;
+}
+
+function addAmbientLights(scene: THREE.Scene) {
+  const hemi = new THREE.HemisphereLight(0xf0f4ff, 0x1a1f28, 0.6);
+  hemi.name = 'HEMI';
+  scene.add(hemi);
+
+  const dir = new THREE.DirectionalLight(0xfff3d1, 1.0);
+  dir.name = 'DIR_MAIN';
+  dir.position.set(10, 16, 8);
+  dir.castShadow = true;
+  dir.shadow.mapSize.set(2048, 2048);
+  dir.shadow.camera.near = 1;
+  dir.shadow.camera.far = 120;
+  dir.shadow.camera.left = -40;
+  dir.shadow.camera.right = 40;
+  dir.shadow.camera.top = 35;
+  dir.shadow.camera.bottom = -35;
+  scene.add(dir);
+
+  const fill = new THREE.RectAreaLight(0xbcd4ff, 0.35, 12, 6);
+  fill.position.set(-8, 4.5, 8);
+  fill.lookAt(0, 1.6, 0);
+  fill.name = 'AREA_FILL';
+  scene.add(fill);
+
+  const ambient = new THREE.AmbientLight(0x20263a, 0.2);
+  ambient.name = 'AMBIENT';
+  scene.add(ambient);
+}
+
+function updateEnvironmentVariant(scene: THREE.Scene, variant: EnvironmentVariant) {
+  if (!meeting3dFeatures.enableHdriEnvironment) {
+    scene.environment = null;
+    scene.background = new THREE.Color(variant === 'day' ? 0xf5f7fa : 0x06080d);
+    return;
+  }
+  const handle = ENV_HANDLES[variant];
+  if (handle) {
+    scene.environment = handle.target;
+    scene.background = handle.target;
+  } else {
+    scene.environment = null;
+    scene.background = new THREE.Color(variant === 'day' ? 0xf5f7fa : 0x06080d);
+  }
+}
+
 export function addSurroundingGrid(
-    scene: THREE.Scene,
-    ROOM_W: number,
-    ROOM_D: number,
-    renderer?: THREE.WebGLRenderer,
-    palette?: ModePalette
+  scene: THREE.Scene,
+  ROOM_W: number,
+  ROOM_D: number,
+  renderer?: THREE.WebGLRenderer,
+  palette?: ModePalette,
 ) {
-    const pal = palette ?? MODE_PALETTE.dark;
-    const gridTex = makeGridTexture({
-        cell: 64,
-        majorEvery: 10,
-        bg: pal.gridBg,
-        minor: pal.gridMinor,
-        major: pal.gridMajor,
-    });
+  const pal = palette ?? MODE_PALETTE.dark;
+  const size = Math.max(ROOM_W, ROOM_D) + 12;
+  const geometry = new THREE.PlaneGeometry(size, size);
+  const texture = makeFloorTexture(pal);
+  texture.repeat.set(size / 12, size / 12);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    opacity: 0.1,
+  });
+  const plane = new THREE.Mesh(geometry, material);
+  plane.name = 'SURROUND_GRID';
+  plane.rotation.x = -Math.PI / 2;
+  plane.position.y = -0.002;
+  scene.add(plane);
 
-    const W = ROOM_W * 6;
-    const D = ROOM_D * 6;
+  const fadeTex = (() => {
+    if (!IS_BROWSER) {
+      const tex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1, THREE.RGBAFormat);
+      tex.needsUpdate = true;
+      return tex;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1024;
+    const ctx = canvas.getContext('2d')!;
+    const gradient = ctx.createRadialGradient(512, 512, 60, 512, 512, 512);
+    gradient.addColorStop(0, 'rgba(0,0,0,0)');
+    gradient.addColorStop(1, 'rgba(0,0,0,0.7)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 1024, 1024);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    return tex;
+  })();
 
-    gridTex.repeat.set(W / 10, D / 10);
-    if (renderer) gridTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const fadeMat = new THREE.MeshBasicMaterial({ map: fadeTex, transparent: true, opacity: 0.75 });
+  const fadePlane = new THREE.Mesh(new THREE.CircleGeometry(size * 0.6, 64), fadeMat);
+  fadePlane.name = 'SURROUND_FADE';
+  fadePlane.rotation.x = -Math.PI / 2;
+  fadePlane.position.y = -0.001;
+  scene.add(fadePlane);
 
-    const gridMat = new THREE.MeshBasicMaterial({
-        map: gridTex,
-        transparent: true,
-        opacity: 1,
-        depthWrite: false,
-        toneMapped: false,
-        // no polygonOffset: prevents it from being pulled in front of the floor
-    });
+  if (!scene.fog) {
+    scene.fog = new THREE.FogExp2(0x0b0f16, 0.015);
+  }
 
-    const plane = new THREE.Mesh(new THREE.PlaneGeometry(W * 2, D * 2), gridMat);
-    plane.rotation.x = -Math.PI / 2;
-    plane.position.y = -0.12;     // pushed down to avoid z-fighting
-    plane.renderOrder = 0;
-    plane.name = 'SURROUND_GRID';
-    scene.add(plane);
-
-    const fadeTex = makeRadialFade();
-    const fadeMat = new THREE.MeshBasicMaterial({
-        map: fadeTex,
-        transparent: true,
-        depthWrite: false,
-        toneMapped: false,
-    });
-    const fade = new THREE.Mesh(new THREE.PlaneGeometry(W * 2, D * 2), fadeMat);
-    fade.rotation.x = -Math.PI / 2;
-    fade.position.y = -0.119;
-    fade.renderOrder = 0;
-    fade.name = 'SURROUND_FADE';
-    scene.add(fade);
-
-    if (!scene.fog) scene.fog = new THREE.FogExp2(0x0b0f16, 0.015);
-
-    return { gridPlane: plane, fadePlane: fade };
+  return { gridPlane: plane, fadePlane };
 }
 
 export function buildEnvironment(
-    scene: THREE.Scene,
-    opts: { ROOM_W: number; ROOM_D: number; palette?: ModePalette },
-    renderer?: THREE.WebGLRenderer
-) {
-    const { ROOM_W, ROOM_D } = opts;
+  scene: THREE.Scene,
+  opts: { ROOM_W: number; ROOM_D: number; palette?: ModePalette; theme?: Mode },
+  renderer?: THREE.WebGLRenderer,
+): BuiltEnvironment {
+  const palette = opts.palette ?? MODE_PALETTE.dark;
+  const theme = opts.theme ?? 'dark';
 
-    // Lights (cool shadows, warm hits)
-    const hemi = new THREE.HemisphereLight(0x9fb6ff, 0x1a1b20, 0.55); hemi.name = 'HEMI'; scene.add(hemi);
-    const dir = new THREE.DirectionalLight(0xfff1c2, 0.95); dir.name = 'DIR_MAIN';
-    dir.position.set(10, 14, 8); dir.castShadow = true;
-    dir.shadow.mapSize.set(2048, 2048);
-    dir.shadow.camera.near = 1; dir.shadow.camera.far = 140;
-    scene.add(dir);
-    const amb = new THREE.AmbientLight(0x223, 0.18); amb.name = 'AMBIENT'; scene.add(amb);
+  addAmbientLights(scene);
+  const floor = addFloor(scene, opts.ROOM_W, opts.ROOM_D, palette);
+  const walls = addWalls(scene, opts.ROOM_W, opts.ROOM_D, palette);
+  const stage = addStage(scene, palette);
+  const planters = addPlanters(scene, palette);
+  const surround = addSurroundingGrid(scene, opts.ROOM_W, opts.ROOM_D, renderer, palette);
 
-    const obstacles: THREE.Box3[] = [];
+  const obstacles: THREE.Box3[] = [];
+  obstacles.push(
+    new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(0, 1.6, -15.2), new THREE.Vector3(11.5, 3.2, 1.0)),
+  );
+  for (const collider of planters.userData.colliders ?? []) {
+    obstacles.push(collider);
+  }
 
-    // Surrounding grid
-    addSurroundingGrid(scene, ROOM_W, ROOM_D, renderer, opts.palette);
-
-    // Walls
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x3a3f4a, roughness: 1.0 });
-    const H = 3.3, T = 0.1;
-    const wallN = new THREE.Mesh(new THREE.BoxGeometry(ROOM_W, H, T), wallMat); wallN.position.set(0, H / 2, -ROOM_D / 2); wallN.name = 'WALL_N';
-    const wallS = wallN.clone(); wallS.position.set(0, H / 2, ROOM_D / 2); wallS.name = 'WALL_S';
-    const wallE = new THREE.Mesh(new THREE.BoxGeometry(T, H, ROOM_D), wallMat); wallE.position.set(ROOM_W / 2, H / 2, 0); wallE.name = 'WALL_E';
-    const wallW = wallE.clone(); wallW.position.set(-ROOM_W / 2, H / 2, 0); wallW.name = 'WALL_W';
-    scene.add(wallN, wallS, wallE, wallW);
-
-    // Window strip
-    let windowsMat: THREE.MeshBasicMaterial;
-    if (IS_BROWSER) {
-      const winCanvas = document.createElement('canvas'); winCanvas.width = 1024; winCanvas.height = 256;
-      const wctx = winCanvas.getContext('2d')!; const g = wctx.createLinearGradient(0, 0, 0, 256);
-      g.addColorStop(0, '#bcd5ff'); g.addColorStop(1, '#7fb0ff'); wctx.fillStyle = g; wctx.fillRect(0, 0, 1024, 256);
-      windowsMat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(winCanvas), toneMapped: false, opacity: 0.9, transparent: true });
-    } else {
-      windowsMat = new THREE.MeshBasicMaterial({ color: 0x7fb0ff, toneMapped: false, opacity: 0.9, transparent: true });
-    }
-    const windows = new THREE.Mesh(new THREE.PlaneGeometry(16, 2.2), windowsMat);
-    windows.name = 'WINDOWS';
-    windows.position.set(0, 2.4, -ROOM_D / 2 + 0.06); scene.add(windows);
-
-    // Huge presentation screen
-    const stageScreen = new THREE.Mesh(new THREE.PlaneGeometry(12.0, 4.5), new THREE.MeshBasicMaterial({ color: 0x111111 }));
-    stageScreen.position.set(0, 2.6, -ROOM_D / 2 + 0.08); scene.add(stageScreen);
-
-    // Local personal desk
-    const localGroup = new THREE.Group();
-    const deskTop = new THREE.Mesh(new RoundedBoxGeometry(1.4, 0.06, 0.8, 4, 0.05), new THREE.MeshStandardMaterial({ color: 0x6a6f7b, roughness: 0.8, metalness: 0.15 }));
-    deskTop.position.set(ROOM_W / 2 - 4.0, 0.75, ROOM_D / 2 - 5.2);
-    deskTop.castShadow = true; deskTop.receiveShadow = true; localGroup.add(deskTop);
-
-    const legGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.75, 12);
-    const legMat = new THREE.MeshStandardMaterial({ color: 0x2f333b, roughness: 0.9 });
-    const addLeg = (lx: number, lz: number) => { const leg = new THREE.Mesh(legGeo, legMat); leg.position.set(deskTop.position.x + lx, 0.375, deskTop.position.z + lz); scene.add(leg); };
-    [[-0.6, -0.35], [0.6, -0.35], [-0.6, 0.35], [0.6, 0.35]].forEach(([x, z]) => addLeg(x, z));
-
-    const monitorGeo = new THREE.BoxGeometry(1.2, 0.72, 0.06);
-    const monitorMat = new THREE.MeshStandardMaterial({
-        color: 0x111111,
-        roughness: 0.1,
-        metalness: 0.8
+  if (renderer && meeting3dFeatures.enableHdriEnvironment) {
+    (['day', 'night'] as EnvironmentVariant[]).forEach((variant) => {
+      void preloadEnvironmentMap(renderer, variant).then((handle) => {
+        ENV_HANDLES[variant] = handle;
+        if (variant === variantFromTheme(theme)) {
+          updateEnvironmentVariant(scene, variant);
+        }
+      }).catch(() => {});
     });
-    const monitor = new THREE.Mesh(monitorGeo, monitorMat);
-    monitor.position.set(deskTop.position.x, 2.2, deskTop.position.z);
-    monitor.castShadow = true;
-    localGroup.add(monitor);
-    scene.add(monitor);
+  }
 
+  const abortController = new AbortController();
+  const moduleHandles = meeting3dFeatures.useRoomModules
+    ? mountRoomModules(scene, palette, abortController.signal)
+    : Promise.resolve<RoomModuleHandle[]>([]);
 
-    // Lounge rug
-    const rug = new THREE.Mesh(new RoundedBoxGeometry(5.2, 0.02, 3.8, 4, 0.1), new THREE.MeshStandardMaterial({ color: 0x343845, roughness: 0.9, metalness: 0.05, emissive: 0x1b1e28, emissiveIntensity: 0.05 }));
-    rug.name = 'RUG';
-    rug.position.set(0, 0.01, 10.5); rug.receiveShadow = true; scene.add(rug);
+  const disposeEnv = () => {
+    abortController.abort();
+    [floor, ...walls, stage.screen, stage.monitor, surround.gridPlane, surround.fadePlane].forEach((mesh) => {
+      if (!mesh) return;
+      mesh.removeFromParent();
+      if ((mesh as any).geometry) {
+        (mesh as any).geometry.dispose?.();
+      }
+      const material = (mesh as any).material;
+      if (Array.isArray(material)) {
+        material.forEach((mat) => mat?.dispose?.());
+      } else {
+        material?.dispose?.();
+      }
+    });
+    planters.removeFromParent();
+    planters.traverse((obj) => {
+      if ((obj as any).isMesh) {
+        const mesh = obj as THREE.Mesh;
+        mesh.geometry.dispose();
+        const mat = mesh.material;
+        if (Array.isArray(mat)) {
+          mat.forEach((m) => m.dispose());
+        } else {
+          mat.dispose();
+        }
+      }
+    });
+    void moduleHandles.then((handles) => {
+      handles.forEach((handle) => {
+        handle.group.removeFromParent();
+        handle.dispose();
+      });
+    }).catch(() => {});
+  };
 
-    const disposeEnv = () => {
-        [wallN, wallS, wallE, wallW, windows, stageScreen, rug, deskTop, monitor].forEach(m => {
-            try { (m as any).geometry?.dispose?.(); const mat = (m as any).material; if (Array.isArray(mat)) mat.forEach((mm: any) => mm.dispose?.()); else mat?.dispose?.(); } catch { }
-        });
-        try { legGeo.dispose(); legMat.dispose(); } catch { }
-    };
-
-    return { obstacles, stageScreen, localMonitor: monitor, disposeEnv };
+  return {
+    obstacles,
+    stageScreen: stage.screen,
+    localMonitor: stage.monitor,
+    disposeEnv,
+    moduleHandles,
+  };
 }
 
-// Apply theme to environment objects (walls, grid, fog, lights)
+function updateWallMaterial(scene: THREE.Scene, palette: ModePalette) {
+  const walls = ['WALL_N', 'WALL_S', 'WALL_E', 'WALL_W']
+    .map((name) => scene.getObjectByName(name) as THREE.Mesh | null)
+    .filter(Boolean) as THREE.Mesh[];
+  walls.forEach((wall) => {
+    const mat = wall.material as THREE.MeshStandardMaterial;
+    if (!mat) return;
+    mat.color.set(palette.surroundWalls);
+    mat.needsUpdate = true;
+  });
+}
+
 export function applyEnvironmentTheme(
   scene: THREE.Scene,
-  theme: Mode
+  theme: Mode,
 ) {
-  const setMatColor = (obj: THREE.Object3D | undefined | null, color: number, opts?: Partial<THREE.MeshStandardMaterial>) => {
-    const m = obj as THREE.Mesh | undefined;
-    if (!m || !(m.material as any)) return;
-    const mat = m.material as any;
-    if (mat.color) mat.color.set(color);
-    // apply cached wall texture if applicable
-    if (m.name && m.name.startsWith('WALL_')) {
-      const wallTex = getWallTexture(theme);
-      mat.map = wallTex;
-      mat.toneMapped = true;
-    }
-    if (opts) {
-      for (const k of Object.keys(opts)) (mat as any)[k] = (opts as any)[k];
+  const palette = MODE_PALETTE[theme];
+  updateWallMaterial(scene, palette);
+  const floor = scene.getObjectByName('ENV_FLOOR') as THREE.Mesh | null;
+  if (floor) {
+    const mat = floor.material as THREE.MeshStandardMaterial;
+    if (mat?.map instanceof THREE.Texture) {
+      mat.map.dispose();
+      mat.map = makeFloorTexture(palette);
+      const dims = (floor.userData?.dimensions ?? {}) as { width?: number; depth?: number };
+      const repeatX = (dims.width ?? 48) / 6;
+      const repeatY = (dims.depth ?? 34) / 6;
+      mat.map.repeat.set(repeatX, repeatY);
     }
     mat.needsUpdate = true;
-  };
-  const pal = MODE_PALETTE[theme];
-  if (theme === 'light') {
-    // Softer light walls
-    setMatColor(scene.getObjectByName('WALL_N'), pal.surroundWalls, { roughness: 1.0, metalness: 0.0 });
-    setMatColor(scene.getObjectByName('WALL_S'), pal.surroundWalls, { roughness: 1.0, metalness: 0.0 });
-    setMatColor(scene.getObjectByName('WALL_E'), pal.surroundWalls, { roughness: 1.0, metalness: 0.0 });
-    setMatColor(scene.getObjectByName('WALL_W'), pal.surroundWalls, { roughness: 1.0, metalness: 0.0 });
-    // Rug under sofa: warm light gray-beige
-    setMatColor(scene.getObjectByName('RUG'), pal.rugLight, { emissive: 0x000000, emissiveIntensity: 0.0 } as any);
-    // Update surrounding grid texture but keep layout identical
-    const g = scene.getObjectByName('SURROUND_GRID') as THREE.Mesh | null;
-    if (g && (g.material as any)) { updateGridTexture(g, pal); }
-    const f = scene.getObjectByName('SURROUND_FADE'); if (f) f.visible = false;
-    // Lights: brighten, cooler ambient
-    const hemi = scene.getObjectByName('HEMI') as THREE.HemisphereLight | null; if (hemi) { hemi.intensity = 0.7; hemi.color.set(0xffffff); hemi.groundColor.set(0xbbbbbb); }
-    const dir = scene.getObjectByName('DIR_MAIN') as THREE.DirectionalLight | null; if (dir) { dir.intensity = 0.8; dir.color.set(0xffffff); }
-    const amb = scene.getObjectByName('AMBIENT') as THREE.AmbientLight | null; if (amb) { amb.intensity = 0.25; amb.color.set(0xffffff); }
-    // No fog in light mode
-    (scene as any).fog = null;
+  }
+  const variant = variantFromTheme(theme);
+  updateEnvironmentVariant(scene, variant);
+  const fogColor = variant === 'day' ? 0xf5f7fa : 0x0b0f16;
+  if (!scene.fog) {
+    scene.fog = new THREE.FogExp2(fogColor, variant === 'day' ? 0.006 : 0.015);
   } else {
-    // Dark defaults
-    setMatColor(scene.getObjectByName('WALL_N'), pal.surroundWalls, { roughness: 1.0, metalness: 0.0 });
-    setMatColor(scene.getObjectByName('WALL_S'), pal.surroundWalls, { roughness: 1.0, metalness: 0.0 });
-    setMatColor(scene.getObjectByName('WALL_E'), pal.surroundWalls, { roughness: 1.0, metalness: 0.0 });
-    setMatColor(scene.getObjectByName('WALL_W'), pal.surroundWalls, { roughness: 1.0, metalness: 0.0 });
-    // Rug: darker tone for contrast under sofa
-    setMatColor(scene.getObjectByName('RUG'), pal.rugDark, { emissive: 0x1b1e28, emissiveIntensity: 0.05 } as any);
-    const g2 = scene.getObjectByName('SURROUND_GRID') as THREE.Mesh | null;
-    if (g2 && (g2.material as any)) { updateGridTexture(g2, pal); }
-    const f = scene.getObjectByName('SURROUND_FADE'); if (f) f.visible = true;
-    const hemi = scene.getObjectByName('HEMI') as THREE.HemisphereLight | null; if (hemi) { hemi.intensity = 0.55; hemi.color.set(0x9fb6ff); hemi.groundColor.set(0x1a1b20); }
-    const dir = scene.getObjectByName('DIR_MAIN') as THREE.DirectionalLight | null; if (dir) { dir.intensity = 0.95; dir.color.set(0xfff1c2); }
-    const amb = scene.getObjectByName('AMBIENT') as THREE.AmbientLight | null; if (amb) { amb.intensity = 0.18; amb.color.set(0x222233); }
-    if (!scene.fog) scene.fog = new THREE.FogExp2(0x0b0f16, 0.015); else (scene.fog as any).color = new THREE.Color(0x0b0f16);
+    scene.fog.color.set(fogColor);
+    (scene.fog as THREE.FogExp2).density = variant === 'day' ? 0.006 : 0.015;
+  }
+  const planters = scene.getObjectByName('PLANTERS');
+  if (planters) {
+    planters.traverse((obj) => {
+      if (!(obj as any).isMesh) return;
+      const mesh = obj as THREE.Mesh;
+      const token = (mesh.userData?.materialToken ?? '') as string;
+      if (token === 'plantPot') {
+        (mesh.material as THREE.MeshStandardMaterial).color.set(palette.furniture.plantPot);
+      }
+      if (token === 'plantLeaf') {
+        (mesh.material as THREE.MeshStandardMaterial).color.set(palette.furniture.plantLeaf);
+      }
+      (mesh.material as THREE.Material).needsUpdate = true;
+    });
   }
 }
 
-// Smoothly animate between two palettes for environment pieces only
 let ENV_THEME_ANIM: number | null = null;
 export function animateEnvironmentTheme(
   scene: THREE.Scene,
   from: ModePalette,
   to: ModePalette,
-  durationMs: number = 220
+  durationMs: number = 260,
 ) {
-  if (ENV_THEME_ANIM) { cancelAnimationFrame(ENV_THEME_ANIM); ENV_THEME_ANIM = null; }
-  const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
-  const fromCol = (n: number) => new THREE.Color(n);
-  const toCol = (n: number) => new THREE.Color(n);
+  if (ENV_THEME_ANIM) {
+    cancelAnimationFrame(ENV_THEME_ANIM);
+    ENV_THEME_ANIM = null;
+  }
 
-  const fromRug = from === MODE_PALETTE.light ? from.rugLight : from.rugDark;
-  const toRug = to === MODE_PALETTE.light ? to.rugLight : to.rugDark;
-  const targets: Array<{ mesh: THREE.Mesh | null; from: THREE.Color; to: THREE.Color }> = [
-    { mesh: scene.getObjectByName('WALL_N') as THREE.Mesh, from: fromCol(from.surroundWalls), to: toCol(to.surroundWalls) },
-    { mesh: scene.getObjectByName('WALL_S') as THREE.Mesh, from: fromCol(from.surroundWalls), to: toCol(to.surroundWalls) },
-    { mesh: scene.getObjectByName('WALL_E') as THREE.Mesh, from: fromCol(from.surroundWalls), to: toCol(to.surroundWalls) },
-    { mesh: scene.getObjectByName('WALL_W') as THREE.Mesh, from: fromCol(from.surroundWalls), to: toCol(to.surroundWalls) },
-    { mesh: scene.getObjectByName('RUG') as THREE.Mesh, from: fromCol(fromRug), to: toCol(toRug) },
-  ];
-  const bg0 = new THREE.Color(from.sky);
-  const bg1 = new THREE.Color(to.sky);
+  const walls = ['WALL_N', 'WALL_S', 'WALL_E', 'WALL_W']
+    .map((name) => scene.getObjectByName(name) as THREE.Mesh | null)
+    .filter(Boolean) as THREE.Mesh[];
+  const rug = scene.getObjectByName('RUG') as THREE.Mesh | null;
+  const start = performance.now();
 
-  // Grid cross-fade: fade out old, swap, fade in
-  const grid = scene.getObjectByName('SURROUND_GRID') as THREE.Mesh | null;
-  let gridSwapped = false;
-  const gridMat: any = grid?.material;
-  if (gridMat) { gridMat.transparent = true; }
+  const lerpColor = (out: THREE.Color, a: THREE.Color, b: THREE.Color, t: number) => {
+    out.r = a.r + (b.r - a.r) * t;
+    out.g = a.g + (b.g - a.g) * t;
+    out.b = a.b + (b.b - a.b) * t;
+  };
 
-  const t0 = performance.now();
-  const step = () => {
+  const fromWall = new THREE.Color(from.surroundWalls);
+  const toWall = new THREE.Color(to.surroundWalls);
+  const fromRug = new THREE.Color(from.rugDark);
+  const toRug = new THREE.Color(to.rugDark);
+
+  const tick = () => {
     const now = performance.now();
-    const k = Math.min(1, (now - t0) / durationMs);
-    // Lerp colors
-    targets.forEach(t => {
-      if (!t.mesh) return;
-      const m: any = t.mesh.material; if (!m || !m.color) return;
-      m.color.r = lerp(t.from.r, t.to.r, k);
-      m.color.g = lerp(t.from.g, t.to.g, k);
-      m.color.b = lerp(t.from.b, t.to.b, k);
-      m.needsUpdate = true;
+    const t = Math.min(1, (now - start) / durationMs);
+    const wallColor = new THREE.Color();
+    lerpColor(wallColor, fromWall, toWall, t);
+    walls.forEach((wall) => {
+      const mat = wall.material as THREE.MeshStandardMaterial;
+      mat.color.copy(wallColor);
+      mat.needsUpdate = true;
     });
-    // Background
-    const bg = new THREE.Color(
-      lerp(bg0.r, bg1.r, k),
-      lerp(bg0.g, bg1.g, k),
-      lerp(bg0.b, bg1.b, k)
-    );
-    scene.background = bg;
-
-    // Grid fade out/in around mid point, preserving repeat/anisotropy
-    if (grid && gridMat) {
-      const half = 0.5;
-      if (k < half) {
-        gridMat.opacity = 1 - (k / half);
-      } else {
-        if (!gridSwapped) { updateGridTexture(grid, to); gridSwapped = true; }
-        gridMat.opacity = (k - half) / half;
-      }
+    if (rug) {
+      const mat = rug.material as THREE.MeshStandardMaterial;
+      const rugColor = new THREE.Color();
+      lerpColor(rugColor, fromRug, toRug, t);
+      mat.color.copy(rugColor);
+      mat.needsUpdate = true;
     }
-
-    if (k < 1) {
-      ENV_THEME_ANIM = requestAnimationFrame(step);
-    } else {
-      ENV_THEME_ANIM = null;
-      // Finalize
-      applyEnvironmentTheme(scene, (to === MODE_PALETTE.light ? 'light' : 'dark') as Mode);
+    if (t < 1) {
+      ENV_THEME_ANIM = requestAnimationFrame(tick);
     }
   };
-  step();
+
+  ENV_THEME_ANIM = requestAnimationFrame(tick);
 }

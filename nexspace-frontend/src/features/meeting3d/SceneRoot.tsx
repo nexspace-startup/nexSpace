@@ -1204,7 +1204,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     // Build static environment if not cached
     if (!GLOBAL_SCENE_CACHE) {
-      const env = buildEnvironment(scene!, { ROOM_W, ROOM_D, palette: MODE_PALETTE[theme] });
+      const env = buildEnvironment(scene!, { ROOM_W, ROOM_D, palette: MODE_PALETTE[theme], theme }, rendererRef.current ?? undefined);
       obstaclesRef.current = env.obstacles;
       stageScreenRef.current = env.stageScreen;
       try { applyEnvironmentTheme(scene!, theme); } catch {}
