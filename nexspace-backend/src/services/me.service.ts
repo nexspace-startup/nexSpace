@@ -2,7 +2,6 @@ import { findAuthIdentity } from "../repositories/auth.repository.js";
 import { getUserWithMemberships, type UserWithMembershipsResult } from "../repositories/user.repository.js";
 
 export type WorkspaceDTO = {
-  id: string;
   uid: string;
   name: string;
   memberCount: number;
@@ -49,7 +48,6 @@ export function toMeDTO(
     return { isAuthenticated: true, user: { email: sessionEmail }, workspaces: [] };
   }
   const workspaces: WorkspaceDTO[] = user.memberships.map((m) => ({
-    id: String(m.workspace.id),
     uid: m.workspace.uid,
     name: m.workspace.name,
     memberCount: m.workspace._count.members,

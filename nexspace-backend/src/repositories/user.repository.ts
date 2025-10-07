@@ -30,7 +30,6 @@ export async function upsertLocalAuthIdentity(userId: bigint, emailLc: string) {
 type WorkspaceMembershipRow = {
   role: string;
   workspace: {
-    id: string | bigint;
     uid: string;
     name: string;
     _count: { members: number };
@@ -47,7 +46,7 @@ type PrismaUserWithMemberships = {
 
 type CachedMembership = {
   role: string;
-  workspace: { id: string; uid: string; name: string; memberCount: number };
+  workspace: { uid: string; name: string; memberCount: number };
 };
 
 type CachedUserProfile = {
@@ -65,7 +64,7 @@ export type UserWithMembershipsResult = {
   email: string | null;
   memberships: Array<{
     role: string;
-    workspace: { id: string; uid: string; name: string; _count: { members: number } };
+    workspace: { uid: string; name: string; _count: { members: number } };
   }>;
 };
 
@@ -78,7 +77,6 @@ function hydrateUser(payload: CachedUserProfile): UserWithMembershipsResult {
     memberships: payload.memberships.map((m) => ({
       role: m.role,
       workspace: {
-        id: m.workspace.id,
         uid: m.workspace.uid,
         name: m.workspace.name,
         _count: { members: m.workspace.memberCount },
@@ -96,7 +94,6 @@ function serializeUser(row: PrismaUserWithMemberships): CachedUserProfile {
     memberships: row.memberships.map((m) => ({
       role: m.role,
       workspace: {
-        id: m.workspace.id.toString(),
         uid: m.workspace.uid,
         name: m.workspace.name,
         memberCount: m.workspace._count.members,

@@ -35,7 +35,6 @@ export async function withCache<T>(
 ): Promise<T | null> {
   const cached = await getCached<T>(key);
   if (cached !== null) return cached;
-
   const fresh = await loader();
   if (fresh !== undefined && fresh !== null) {
     await setCache(key, fresh, ttlSeconds);
