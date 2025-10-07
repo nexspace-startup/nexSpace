@@ -1,9 +1,13 @@
 import { prisma } from "../prisma.js";
-import { writeJson } from "../middleware/redis.js";
+import { readJsonMany, writeJson } from "../middleware/redis.js";
 import { RoomServiceClient } from "livekit-server-sdk";
 import { config } from "../config/env.js";
 
 export type PresenceStatusAPI = 'AVAILABLE' | 'BUSY' | 'IN_MEETING' | 'AWAY' | 'DO_NOT_DISTURB';
+
+type PresenceCachePayload = { status?: string | null; ts?: number | string | null; sid?: string | null };
+
+export type PresenceSnapshot = { status: PresenceStatusAPI; ts: number | null };
 
 function presenceKey(roomUid: string, identity: string) {
   return `presence:room:${roomUid}:identity:${identity}`;
@@ -81,5 +85,75 @@ export async function setUserPresenceStatus(args: { roomUid: string; identity: s
 
   // Update LiveKit metadata (best-effort)
   await updateParticipantPresenceAttributes(roomUid, identity, status);
+}
+
+function normalizeStatus(status?: string | null): PresenceStatusAPI {
+  if (!status) return 'AVAILABLE';
+  const upper = status.toUpperCase();
+  if (upper === 'OFFLINE') return 'AWAY';
+  const allowed: PresenceStatusAPI[] = ['AVAILABLE', 'BUSY', 'IN_MEETING', 'AWAY', 'DO_NOT_DISTURB'];
+  return (allowed.includes(upper as PresenceStatusAPI) ? upper : 'AVAILABLE') as PresenceStatusAPI;
+}
+
+function toPresenceSnapshot(payload: PresenceCachePayload | null | undefined): PresenceSnapshot | null {
+  if (!payload) return null;
+  const status = normalizeStatus(payload.status ?? undefined);
+  const tsRaw = payload.ts;
+  const ts = typeof tsRaw === 'number' ? tsRaw : tsRaw ? Number(tsRaw) : null;
+  return { status, ts: Number.isFinite(ts) ? Number(ts) : null };
+}
+
+export async function getPresenceSnapshot(roomUid: string, identities: string[]): Promise<Record<string, PresenceSnapshot>> {
+  if (!identities.length) return {};
+
+  const keys = identities.map((id) => presenceKey(roomUid, id));
+  const cached = await readJsonMany<PresenceCachePayload>(keys);
+  const result: Record<string, PresenceSnapshot> = {};
+  const missing: string[] = [];
+
+  cached.forEach((payload, idx) => {
+    const identity = identities[idx];
+    const snapshot = toPresenceSnapshot(payload);
+    if (snapshot) {
+      result[identity] = snapshot;
+    } else {
+      missing.push(identity);
+    }
+  });
+
+  if (!missing.length) return result;
+
+  const parsedIds: bigint[] = [];
+  for (const id of missing) {
+    try {
+      parsedIds.push(BigInt(id));
+    } catch {
+      // Skip invalid identifiers
+    }
+  }
+
+  if (!parsedIds.length) return result;
+
+  const rows = await prisma.userPresence.findMany({
+    where: { workspaceUid: roomUid, userId: { in: parsedIds } },
+    select: { userId: true, status: true, isOnline: true, lastActivity: true },
+  });
+
+  for (const row of rows) {
+    const identity = row.userId.toString();
+    const status = row.isOnline ? normalizeStatus(row.status) : 'AWAY';
+    const ts = row.lastActivity ? row.lastActivity.getTime() : null;
+    result[identity] = { status, ts };
+    try {
+      await writeJson(presenceKey(roomUid, identity), {
+        status: row.isOnline ? (row.status ?? 'AVAILABLE').toLowerCase() : 'offline',
+        ts: ts ?? Date.now(),
+      });
+    } catch {
+      // ignore cache prime failures
+    }
+  }
+
+  return result;
 }
 

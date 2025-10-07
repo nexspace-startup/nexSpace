@@ -1,9 +1,11 @@
 import { prisma, Prisma, WorkspaceRole, InvitationStatus } from "../prisma.js";
-import type { AuthProvider } from "@prisma/client";
 import type { OnboardingInput, InvitationInput } from "../validators/setup.validators.js";
 import { hashPassword } from "../utils/password.js";
 import { config } from "../config/env.js";
 import { sendInviteEmail } from "../utils/mailer.js";
+import { CacheKeys, CacheTTL, invalidateCache, setCache } from "../utils/cache.js";
+
+type AuthProvider = "google" | "microsoft" | "local";
 
 export type OnboardingResult = {
   user: { id: string; firstName: string; lastName: string; email: string };
@@ -18,6 +20,24 @@ async function resolveOAuthProvider(sub: string, hinted?: AuthProvider | string 
   const m = await prisma.authIdentity.findUnique({ where: { provider_providerId: { provider: "microsoft", providerId: sub } }, select: { userId: true } });
   if (m) return "microsoft";
   return "google";
+}
+
+async function refreshWorkspaceCachesForUser(
+  userId: bigint | string,
+  workspaceUid: string,
+  workspaceName: string,
+  role: WorkspaceRole
+) {
+  const userIdStr = typeof userId === "bigint" ? userId.toString() : String(userId);
+  await Promise.all([
+    setCache(CacheKeys.workspace(workspaceUid), { uid: workspaceUid, name: workspaceName }, CacheTTL.workspace),
+    setCache(CacheKeys.workspaceMember(workspaceUid, userIdStr), { role }, CacheTTL.workspaceMember),
+    invalidateCache(
+      CacheKeys.userProfile(userIdStr),
+      CacheKeys.userWorkspaces(userIdStr),
+      CacheKeys.workspaceMembers(workspaceUid)
+    ),
+  ]);
 }
 
 export async function onboardingLocal(input: OnboardingInput): Promise<{ payload: OnboardingResult; userId: bigint }> {
@@ -88,6 +108,8 @@ export async function onboardingLocal(input: OnboardingInput): Promise<{ payload
     return payload;
   });
 
+  await refreshWorkspaceCachesForUser(userId, result.workspace.uid, result.workspace.name, result.membership.role);
+
   return { payload: result, userId };
 }
 
@@ -126,6 +148,8 @@ export async function onboardingOAuth(input: OnboardingInput, sub: string, hinte
       membership: { role: membership.role },
     } satisfies OnboardingResult;
   });
+
+  await refreshWorkspaceCachesForUser(result.user.id, result.workspace.uid, result.workspace.name, result.membership.role);
 
   return result;
 }
@@ -200,6 +224,21 @@ export async function acceptInvitation(token: string, userId: string, email: str
     }
     return { alreadyMember: !!existing };
   });
+
+  if (!outcome.alreadyMember) {
+    await refreshWorkspaceCachesForUser(
+      BigInt(userId),
+      invite.workspace?.uid ?? invite.workspaceUid,
+      invite.workspace?.name ?? "",
+      invite.role ?? WorkspaceRole.MEMBER
+    );
+  } else {
+    await invalidateCache(
+      CacheKeys.userProfile(userId),
+      CacheKeys.userWorkspaces(userId),
+      CacheKeys.workspaceMembers(invite.workspaceUid)
+    );
+  }
 
   return {
     accepted: true,

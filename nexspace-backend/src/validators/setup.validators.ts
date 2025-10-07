@@ -1,6 +1,8 @@
 import { z } from "zod";
-import { WorkspaceRole } from "@prisma/client";
 import { nameSchemaWithoutSpaces, passwordSchema } from "../utils/common.js";
+
+const WorkspaceRoleValues = ["OWNER", "ADMIN", "MEMBER"] as const;
+export type WorkspaceRole = (typeof WorkspaceRoleValues)[number];
 
 export const OnboardingSchema = z.object({
   firstName: nameSchemaWithoutSpaces,
@@ -10,7 +12,7 @@ export const OnboardingSchema = z.object({
   workspaceName: z.string().min(1).max(120),
   company: z.string().optional(),
   teamSize: z.string().optional(),
-  role: z.nativeEnum(WorkspaceRole).default(WorkspaceRole.OWNER),
+  role: z.enum(WorkspaceRoleValues).default("OWNER"),
 });
 
 export type OnboardingInput = z.infer<typeof OnboardingSchema>;

@@ -182,6 +182,41 @@ export async function readJson<T>(key: string): Promise<T | null> {
   }
 }
 
+export async function readJsonMany<T>(keys: string[]): Promise<(T | null)[]> {
+  if (!keys.length) return [];
+  if (!isRedisWorking()) return keys.map(() => null);
+  try {
+    const c = getRedisClientOrThrow();
+    const namespacedKeys = keys.map((key) => k(key));
+    const raw = await c.mGet(namespacedKeys);
+    return raw.map((value, idx) => {
+      if (!value) return null;
+      try {
+        return JSON.parse(value) as T;
+      } catch (e) {
+        console.error(`[redis] failed to parse JSON for key=${keys[idx]}`, e);
+        return null;
+      }
+    });
+  } catch (e) {
+    console.error(`[redis] failed to mget keys=${keys.join(",")}`, e);
+    return keys.map(() => null);
+  }
+}
+
+export async function deleteKeys(keys: string | string[]): Promise<void> {
+  const list = Array.isArray(keys) ? keys : [keys];
+  const filtered = list.filter((key): key is string => typeof key === "string" && key.length > 0);
+  if (!filtered.length) return;
+  if (!isRedisWorking()) return;
+  try {
+    const c = getRedisClientOrThrow();
+    await c.del(filtered.map((key) => k(key)));
+  } catch (e) {
+    console.error(`[redis] failed to delete keys=${filtered.join(",")}`, e);
+  }
+}
+
 /** Graceful shutdown (call from your app's shutdown hook). */
 export async function closeRedis(): Promise<void> {
   if (client && client.isOpen) {
