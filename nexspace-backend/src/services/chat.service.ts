@@ -9,7 +9,7 @@ export type ChatDTO = {
   id: string;
   text: string;
   ts: string; // ISO
-  sender: { id: string; name: string };
+  sender: { id: string; name: string; avatar?: string };
   recipientId?: string | null; // present for private messages
 };
 
@@ -79,7 +79,7 @@ export async function listChatMessages(workspaceUid: string, userId: string, lim
       id: String(r.id),
       text: maybeDecrypt(r.content),
       ts: r.createdAt.toISOString(),
-      sender: { id: String(r.senderId), name: toName(r.sender as any) },
+      sender: { id: String(r.senderId), name: toName(r.sender as any), avatar: (r.sender as any)?.avatar || undefined },
       recipientId: r.recipientId ? String(r.recipientId) : undefined,
     }))
     .reverse(); // chronological ascending
@@ -137,13 +137,17 @@ export async function listDMThreads(workspaceUid: string, userId: string) {
   const peerIds = Array.from(map.keys()).map((id) => BigInt(id));
   const users = await prisma.user.findMany({
     where: { id: { in: peerIds } },
-    select: { id: true, first_name: true, last_name: true, displayName: true, email: true },
+    select: { id: true, first_name: true, last_name: true, displayName: true, email: true, avatar: true},
   });
   const nameMap = new Map<string, string>();
-  for (const u of users) nameMap.set(String(u.id), toName(u as any));
+  const avatarMap = new Map<string, string | null | undefined>();
+  for (const u of users) {
+    nameMap.set(String(u.id), toName(u as any));
+    avatarMap.set(String(u.id), (u as any)?.avatar ?? undefined);
+  }
 
   return Array.from(map.values()).map((p) => ({
-    peer: { id: p.peerId, name: nameMap.get(p.peerId) || p.peerId },
+    peer: { id: p.peerId, name: nameMap.get(p.peerId) || p.peerId, avatar: avatarMap.get(p.peerId) || undefined },
     last: p.text ? { text: p.text, ts: p.ts! } : undefined,
     unread: unread[p.peerId] || 0,
   }));

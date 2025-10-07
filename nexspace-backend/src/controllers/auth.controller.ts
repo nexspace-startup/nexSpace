@@ -5,6 +5,7 @@ import { GoogleCallbackSchema, SigninSchema, CheckEmailSchema } from "../validat
 import type { z } from "zod";
 import { googleExchangeAndVerify, googleVerifyIdToken, signInWithEmailPassword, ensureOAuthUser } from "../services/auth.service.js";
 import { findUserByEmail, seachByUsernameEmail, type UserSearchResult } from "../repositories/user.repository.js";
+import { findAuthIdentity } from "../repositories/auth.repository.js";
 
 export async function googleCallback(req: Request, res: Response) {
   // Coerce input to support both code and id token shapes; allow body or query
@@ -37,7 +38,7 @@ export async function googleCallback(req: Request, res: Response) {
     const isInviteFlow = typeof data.next === 'string' && /^\s*\/invite\//.test(data.next);
     let sess;
     if (isInviteFlow) {
-      const userIdBn = await ensureOAuthUser({ provider: "google", sub, email, firstName: given_name, lastName: family_name });
+      const userIdBn = await ensureOAuthUser({ provider: "google", sub, email, firstName: given_name, lastName: family_name, avatarUrl: profile.picture });
       sess = await createSession({
         userId: String(userIdBn),
         sub,
@@ -49,7 +50,9 @@ export async function googleCallback(req: Request, res: Response) {
       }, DEFAULT_TTL);
     } else {
       // OAuth-first session, no DB user yet
+      const ident = await findAuthIdentity("google", sub);
       sess = await createSession({
+        userId: String(ident?.userId ?? ""),
         sub,
         email,
         firstName: given_name,

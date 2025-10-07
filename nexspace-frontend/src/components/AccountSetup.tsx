@@ -43,7 +43,7 @@ export default function AccountSetup({ defaultValues, onNext, onCancel }: Props)
         .string()
         .min(1, "Last name is required")
         .regex(/^[A-Za-z\-']+$/, "Only letters, hyphens, apostrophes"),
-      email: z.string().email("Enter a valid email"),
+      email: z.email("Enter a valid email"),
       role: z.enum(["OWNER", "ADMIN", "MEMBER"]),
       company: z.string().max(60).optional().or(z.literal("")),
     });
@@ -128,7 +128,7 @@ export default function AccountSetup({ defaultValues, onNext, onCancel }: Props)
             autoComplete="email"
             {...register("email")}
             disabled={!!user?.email}
-            className={`h-10 rounded-2xl px-4 bg-[rgba(128,136,155,0.25)] border ${errors.email ? "border-[#FF6060]" : "border-[#26272B]"}`}
+            className={`h-10 rounded-2xl ${!!user?.email ? "cursor-not-allowed bg-[#1C1F26] text-white/50" : "bg-[rgba(128,136,155,0.25)]"} px-4  border ${errors.email ? "border-[#FF6060]" : "border-[#26272B]"}`}
           />
           {errors.email && <p className="text-[#FF6060] text-xs">{String(errors.email.message)}</p>}
         </div>

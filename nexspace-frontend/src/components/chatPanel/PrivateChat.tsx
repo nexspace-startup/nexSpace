@@ -96,13 +96,13 @@ const PrivateChat: React.FC<PrivateChatProps> = ({
                             const accent = colorForParticipant(u.id, u.name);
                             const textOnAccent = isLight(accent) ? '#0F1216' : '#FFFFFF';
                             const nameInitials = initialsFrom(u.name);
-                            const avatar = avatarById[String(u.id)];
+                            const avatar = u.avatar || avatarById[String(u.id)];
                             return (
                                 <button
                                     key={u.id}
                                     type="button"
                                     onClick={() => {
-                                        const thread: DMThreadPreview = { peerId: u.id, peerName: u.name, text: '', ts: undefined, unread: 0 };
+                                        const thread: DMThreadPreview = { peerId: u.id, peerName: u.name, peerAvatar: u.avatar, text: '', ts: undefined, unread: 0 };
                                         onThreadSelect?.(thread);
                                         setResults([]);
                                         setQuery('');

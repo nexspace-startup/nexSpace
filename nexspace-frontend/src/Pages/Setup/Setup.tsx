@@ -68,7 +68,7 @@ export default function Setup() {
         {step === "account" ? (
           <AccountSetup
             defaultValues={account}
-            onCancel={() => navigate(-1)}
+            onCancel={() => navigate("/signin", { replace: true })}
             onNext={(data) => {
               setAccount(data);
               setStep("workspace");

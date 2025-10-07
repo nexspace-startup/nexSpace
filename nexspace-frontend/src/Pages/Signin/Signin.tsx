@@ -94,7 +94,7 @@ export default function Signin() {
             const first = me.user.first_name || "";
             const last = me.user.last_name || "";
             const name = [first, last].filter(Boolean).join(" ") || undefined;
-            setUser({ id: me.user.id, name, email: me.user.email });
+            setUser({ id: me.user?.id, name, email: me.user?.email, avatar: me?.user?.avatar || "" });
         }
         if (target && target !== "/signin") {
             navigate(target, { replace: true });

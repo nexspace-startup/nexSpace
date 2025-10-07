@@ -39,7 +39,7 @@ export async function listWorkspaceMembers(workspaceUid: string, query?: string)
   const rows = await prisma.workspaceMember.findMany({
     where: { workspaceUid, ...(whereUser ? { user: whereUser } : {}) },
     select: {
-      user: { select: { id: true, first_name: true, last_name: true, displayName: true, email: true } },
+      user: { select: { id: true, first_name: true, last_name: true, displayName: true, email: true, avatar: true } },
     },
   });
   return rows.map((r) => ({
@@ -48,5 +48,6 @@ export async function listWorkspaceMembers(workspaceUid: string, query?: string)
       r.user.displayName?.trim() ||
       [r.user.first_name, r.user.last_name].filter(Boolean).join(" ") ||
       r.user.email,
+    avatar: (r.user as any)?.avatar ?? undefined,
   }));
 }

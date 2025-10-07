@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MicIcon, MicDisabledIcon, CameraIcon, CameraDisabledIcon, ChatIcon } from "@livekit/components-react";
 import { useShallow } from "zustand/react/shallow";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -44,6 +44,7 @@ const MeetingControls: React.FC = () => {
   }, [connected, startedAt, tick]);
 
   const [moreOpen, setMoreOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
 
   // When chat is open, visually center controls in remaining width by shifting left ~ half chat width
   const shouldOffset = chatOpen && isDesktopWide;
@@ -61,6 +62,29 @@ const MeetingControls: React.FC = () => {
       setMoreOpen(false);
     }
   }, [moreOpen, showOverflowMenu]);
+
+  // outside click + Escape to close
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onDocDown = (e: MouseEvent | TouchEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (ref.current?.contains(t)) return;
+      setMoreOpen(false);
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMoreOpen(false);;
+    };
+    document.addEventListener("mousedown", onDocDown);
+    document.addEventListener("touchstart", onDocDown, { passive: true });
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocDown);
+      document.removeEventListener("touchstart", onDocDown as any);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen]);
 
   if (!connected || !isWorkspaceControlsOpen) {
     return null;

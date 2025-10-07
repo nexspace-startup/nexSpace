@@ -58,6 +58,7 @@ const ProfileFlyout: React.FC<ProfileFlyoutProps> = ({
   // Prefer in-room avatar if available (from LiveKit metadata), fallback to userStore avatar
   const avatarUrl = useMemo(() => {
     const fromMeeting = localSid ? getAvatarFor(localSid as string) : undefined;
+    console.log(fromMeeting, user?.avatar);
     return fromMeeting || (user as any)?.avatar || undefined;
   }, [getAvatarFor, localSid, user]);
 

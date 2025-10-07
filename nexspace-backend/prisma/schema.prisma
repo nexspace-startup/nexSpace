@@ -28,6 +28,7 @@ model User {
   first_name  String  @db.VarChar(100)
   last_name   String  @db.VarChar(100)
   displayName String? @db.VarChar(120)
+  avatar      String? @db.VarChar(400)
 
   // canonical email (case-insensitive at DB level with CITEXT)
   email           String    @unique @db.Citext

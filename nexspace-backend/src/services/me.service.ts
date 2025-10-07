@@ -58,7 +58,7 @@ export function toMeDTO(user: any, sessionEmail?: string, sessProvider?: string,
       last_name: user.last_name ?? undefined,
       email: user.email ?? sessionEmail,
       provider: sessProvider as "google" | "microsoft" | undefined,
-      avatar: sessionAvatar,
+      avatar: (user as any)?.avatar ?? sessionAvatar,
     },
     workspaces,
   };

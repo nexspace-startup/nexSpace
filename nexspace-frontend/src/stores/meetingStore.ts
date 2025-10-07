@@ -1085,13 +1085,14 @@ export const useMeetingStore = create<MeetingState>()(
               id: string;
               text: string;
               ts: string;
-              sender: { id: string; name: string };
+              sender: { id: string; name: string; avatar?: string };
               recipientId?: string | null;
             }> = (data as any).data;
 
             const room: any = get().room;
             const currentId = room?.localParticipant?.identity;
 
+            const avatarPatch: Record<string, string | undefined> = {};
             const processedMessages = items.map((m) => {
               const messageType: 'group' | 'dm' = m.recipientId ? 'dm' : 'group';
               const dmPeerId = messageType === 'dm' && currentId
@@ -1100,6 +1101,11 @@ export const useMeetingStore = create<MeetingState>()(
                   currentId
                 )
                 : undefined;
+
+              // Collect any known avatars from history
+              if (m.sender?.id && m.sender?.avatar !== undefined) {
+                avatarPatch[m.sender.id] = m.sender.avatar;
+              }
 
               return {
                 id: m.id,
@@ -1125,6 +1131,9 @@ export const useMeetingStore = create<MeetingState>()(
                 ]
                 : processedMessages,
               unreadCount: s.chatOpen ? 0 : s.unreadCount,
+              avatarById: Object.keys(avatarPatch).length
+                ? { ...s.avatarById, ...avatarPatch }
+                : s.avatarById,
             }));
           }
         } catch {
@@ -1144,20 +1153,32 @@ export const useMeetingStore = create<MeetingState>()(
 
           if ((data as any)?.success && Array.isArray((data as any).data)) {
             const rows: Array<{
-              peer: { id: string; name: string };
+              peer: { id: string; name: string; avatar?: string };
               last?: { text: string; ts: string };
               unread?: number;
             }> = (data as any).data;
 
-            set({
-              dmThreads: rows.map((r) => ({
+            const avatarPatch: Record<string, string | undefined> = {};
+            const threads = rows.map((r) => {
+              if (r.peer?.id && r.peer?.avatar !== undefined) {
+                avatarPatch[r.peer.id] = r.peer.avatar;
+              }
+              return ({
                 peerId: r.peer.id,
                 peerName: r.peer.name,
+                peerAvatar: r.peer.avatar,
                 text: r.last?.text,
                 ts: r.last ? new Date(r.last.ts).getTime() : undefined,
                 unread: r.unread || 0,
-              })),
+              });
             });
+
+            set((s) => ({
+              dmThreads: threads,
+              avatarById: Object.keys(avatarPatch).length
+                ? { ...s.avatarById, ...avatarPatch }
+                : s.avatarById,
+            }));
           }
         } catch {
           // Ignore errors

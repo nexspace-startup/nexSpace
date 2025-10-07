@@ -9,7 +9,7 @@ import type { ApiEnvelope } from "../types/api"
 import { firstApiError, isApiSuccess } from "../types/api"
 
 export type Workspace = { id: string; name: string; role: WorkSpaceRole }
-export type WorkspaceMember = { id: string; workspaceId?: string; name: string; role?: WorkSpaceRole }
+export type WorkspaceMember = { id: string; workspaceId?: string; name: string; role?: WorkSpaceRole; avatar?: string }
 
 type WorkspaceListResponse = Workspace[]
 type WorkspaceMembersResponse = WorkspaceMember[]

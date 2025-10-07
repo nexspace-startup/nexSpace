@@ -78,6 +78,7 @@ export async function ensureOAuthUser(args: {
   email: string;
   firstName?: string;
   lastName?: string;
+  avatarUrl?: string;
 }): Promise<bigint> {
   const provider = args.provider;
   const sub = args.sub;
@@ -87,7 +88,13 @@ export async function ensureOAuthUser(args: {
 
   // 1) If identity already exists, return its userId
   const ident = await findAuthIdentity(provider, sub);
-  if (ident?.userId) return ident.userId;
+  if (ident?.userId) {
+    // Optionally refresh user profile details
+    if (args.avatarUrl) {
+      try { await prisma.user.update({ where: { id: ident.userId }, data: { avatar: args.avatarUrl } }); } catch { /* ignore */ }
+    }
+    return ident.userId;
+  }
 
   // 2) If a user exists by email, link identity and refresh names/verifiedAt
   const existing = await prisma.user.findUnique({ where: { email: emailLc }, select: { id: true } });
@@ -99,7 +106,7 @@ export async function ensureOAuthUser(args: {
         update: { lastLoginAt: new Date() },
         create: { userId, provider, providerId: sub, lastLoginAt: new Date() },
       });
-      await tx.user.update({ where: { id: userId }, data: { first_name: first || undefined, last_name: last || undefined, displayName: [first, last].filter(Boolean).join(" ") || undefined, email: emailLc, emailVerifiedAt: new Date() } });
+      await tx.user.update({ where: { id: userId }, data: { first_name: first || undefined, last_name: last || undefined, displayName: [first, last].filter(Boolean).join(" ") || undefined, email: emailLc, emailVerifiedAt: new Date(), ...(args.avatarUrl ? { avatar: args.avatarUrl } : {}) } });
     });
     return userId;
   }
@@ -108,6 +115,9 @@ export async function ensureOAuthUser(args: {
   const created = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const user = await tx.user.create({ data: { first_name: first || "", last_name: last || "", displayName: [first, last].filter(Boolean).join(" ") || null, email: emailLc, emailVerifiedAt: new Date() } });
     await tx.authIdentity.create({ data: { userId: user.id, provider, providerId: sub, lastLoginAt: new Date() } });
+    if (args.avatarUrl) {
+      try { await tx.user.update({ where: { id: user.id }, data: { avatar: args.avatarUrl } }); } catch { /* ignore */ }
+    }
     return user;
   });
   return created.id;

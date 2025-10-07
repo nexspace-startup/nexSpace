@@ -63,7 +63,7 @@ export async function listChatMessages(
       roomUid: true,
       content: true,
       createdAt: true,
-      sender: { select: { id: true, first_name: true, last_name: true, displayName: true, email: true } },
+      sender: { select: { id: true, first_name: true, last_name: true, displayName: true, email: true, avatar: true } },
     },
   });
 }

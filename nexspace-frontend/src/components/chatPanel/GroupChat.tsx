@@ -3,6 +3,7 @@ import DaySeparator from '../DateSeperator';
 import { shouldShowDaySeparator, getDayLabel, isMessageMine } from '../../utils/util';
 import MessageItem from './MessageItem';
 import type { ChatMessage } from '../../stores/meetingStore';
+import { useMeetingStore } from '../../stores/meetingStore';
 
 interface GroupChatProps {
     messages: ChatMessage[];
@@ -15,7 +16,7 @@ interface GroupChatProps {
     retryMessage: (messageId: string) => void;
 }
 
-const GroupChat = forwardRef<HTMLDivElement, GroupChatProps>(({
+const GroupChat = forwardRef<HTMLDivElement, GroupChatProps>(({ 
     messages,
     myLivekitId,
     myUserId,
@@ -25,6 +26,8 @@ const GroupChat = forwardRef<HTMLDivElement, GroupChatProps>(({
     isLight,
     retryMessage,
 }, ref) => {
+    // Live avatar mapping hydrated from presence/profile broadcasts
+    const avatarById = useMeetingStore((s) => s.avatarById);
     const scrollTimer = useRef<number | null>(null);
     const [scrolling, setScrolling] = useState(false);
     const [stickToBottom, setStickToBottom] = useState(true);
@@ -71,7 +74,8 @@ const GroupChat = forwardRef<HTMLDivElement, GroupChatProps>(({
                     const previousMessage = index > 0 ? groupMessages[index - 1] : undefined;
                     const showDaySeparator = shouldShowDaySeparator(message, previousMessage);
                     const isMine = isMessageMine({ message, myLivekitId, myUserId }) || false;
-                    const avatarUrl = isMine ? selfAvatar : undefined;
+                    // Prefer self avatar for my messages, otherwise look up sender's avatar from store
+                    const avatarUrl = isMine ? selfAvatar : avatarById?.[String(message.senderSid)];
 
                     return (
                         <React.Fragment key={message.id}>
