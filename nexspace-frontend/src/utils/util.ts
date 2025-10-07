@@ -32,10 +32,9 @@ export const getDayLabel = (timestamp: number): string => {
     return 'Yesterday';
   } else {
     return messageDate.toLocaleDateString('en-US', {
-      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
       year: 'numeric',
-      month: 'long',
-      day: 'numeric'
     });
   }
 };

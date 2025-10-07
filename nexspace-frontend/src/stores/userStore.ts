@@ -3,6 +3,7 @@ import { checkSession, getMe } from "../services/authService";
 import type { MeResponse } from "../services/authService";
 import { api } from "../services/httpService";
 import { ENDPOINTS } from "../constants/endpoints";
+import { useMeetingStore } from "./meetingStore";
 
 export type AuthStatus = "idle" | "checking" | "authed" | "guest";
 
@@ -88,6 +89,8 @@ export const useUserStore = create<UserState>((set, get) => ({
 
   logout: async () => {
     try {
+      const leave = useMeetingStore.getState().leave;
+      await leave();
       await api.post(ENDPOINTS.AUTH_LOGOUT); // revoke session + clear cookie
     } catch {
       /* ignore network hiccups */
