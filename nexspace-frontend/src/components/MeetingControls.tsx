@@ -54,7 +54,7 @@ const MeetingControls: React.FC = () => {
   const showOverflowMenu = isMobile || collapseDesktopExtras;
   const containerStyle = useMemo<React.CSSProperties>(() => ({
     transform: centerShift,
-    paddingBottom: isMobile ? "env(safe-area-inset-bottom, 0px)" : undefined,
+    paddingBottom: isMobile ? "env(safe-area-inset-bottom, 0px)" : undefined
   }), [centerShift, isMobile]);
 
   useEffect(() => {
@@ -69,7 +69,7 @@ const MeetingControls: React.FC = () => {
 
   return (
     <div
-      className="absolute left-1/2 control-bar z-40 w-[calc(100%-1.5rem)] sm:w-auto max-w-[min(760px,calc(100%-1.5rem))] bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] sm:bottom-6 min-h-[72px] sm:h-[60px] px-3 sm:px-4 py-3 sm:py-1 flex-wrap"
+      className={`absolute ${isWorkspaceOpen ? "left-[40%]" : "left-[45%]"} control-bar z-40 w-auto sm:w-auto bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] sm:bottom-6 min-h-[72px] sm:min-h-[64px]`}
       style={containerStyle}
       role="region"
       aria-label="Meeting controls"
@@ -181,7 +181,7 @@ const MeetingControls: React.FC = () => {
         </div>
 
         {/* Separator between controls and settings */}
-        <div className="hidden sm:block h-8 w-px bg-[#26272B]" />
+        {!collapseDesktopExtras && <div className="hidden sm:block h-8 w-px bg-[#26272B]" />}
 
         {/* Right: settings + leave (mobile) */}
         <div className="flex items-center gap-3 sm:gap-5">
