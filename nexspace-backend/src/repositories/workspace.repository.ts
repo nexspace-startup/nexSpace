@@ -16,7 +16,7 @@ export async function isWorkspaceMember(workspaceUid: string, userId: bigint) {
   return withCache(key, CacheTTL.workspaceMember, async () => {
     const row = await prisma.workspaceMember.findFirst({
       where: { workspaceUid, userId },
-      select: { role: true, status: true },
+      select: { role: true },
     });
     return row ?? null;
   });
