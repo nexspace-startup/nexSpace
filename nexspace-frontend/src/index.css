@@ -160,6 +160,23 @@
   --surface-1: #18181B;
   --surface-2: #202024;
   --accent: #3D93F8;
+  --minimap-bg: rgba(18,22,34,0.94);
+  --minimap-border: #2e3342;
+  --minimap-room-fill: rgba(122,162,255,0.18);
+  --minimap-room-stroke: rgba(122,162,255,0.54);
+  --minimap-active-bg: rgba(122,162,255,0.22);
+  --minimap-suggested-bg: rgba(122,162,255,0.12);
+  --minimap-door: rgba(122,162,255,0.9);
+  --minimap-landmark: rgba(203,213,225,0.88);
+  --minimap-label: rgba(224,231,255,0.9);
+  --minimap-stage-fill: rgba(26,29,36,0.92);
+  --minimap-stage-fill-strong: rgba(42,47,57,0.96);
+  --minimap-stage-stroke: rgba(122,162,255,0.55);
+  --minimap-remote: #8ea0c8;
+  --minimap-remote-glow: rgba(142,160,200,0.35);
+  --minimap-remote-label: rgba(224,231,255,0.9);
+  --minimap-you: #f6a968;
+  --minimap-you-glow: rgba(246,169,104,0.42);
 }
 .ns-meeting3d.theme-light {
   --text-1: #0f172a;
@@ -171,6 +188,23 @@
   --surface-1: #ffffff;
   --surface-2: #f8fafc;
   --accent: #2563eb;
+  --minimap-bg: rgba(245,247,250,0.92);
+  --minimap-border: #d7dee9;
+  --minimap-room-fill: rgba(43,106,246,0.16);
+  --minimap-room-stroke: rgba(43,106,246,0.5);
+  --minimap-active-bg: rgba(43,106,246,0.16);
+  --minimap-suggested-bg: rgba(43,106,246,0.08);
+  --minimap-door: rgba(14,116,144,0.9);
+  --minimap-landmark: rgba(55,65,81,0.85);
+  --minimap-label: rgba(31,41,55,0.9);
+  --minimap-stage-fill: rgba(226,232,240,0.94);
+  --minimap-stage-fill-strong: rgba(237,242,250,0.96);
+  --minimap-stage-stroke: rgba(43,106,246,0.35);
+  --minimap-remote: #94a3b8;
+  --minimap-remote-glow: rgba(148,163,184,0.26);
+  --minimap-remote-label: rgba(31,41,55,0.9);
+  --minimap-you: #f59f0b;
+  --minimap-you-glow: rgba(245,159,11,0.32);
 }
 
 :root {

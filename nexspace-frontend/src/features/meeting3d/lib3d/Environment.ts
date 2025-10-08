@@ -1,13 +1,22 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
-import { MODE_PALETTE, type Mode, type ModePalette } from './themeConfig';
+import {
+  MODE_PALETTE,
+  getRoomPalette,
+  numberToHex,
+  numberToRgba,
+  resolveRoomPaletteKey,
+  type Mode,
+  type ModePalette,
+} from './themeConfig';
 import { getMaterial } from './materialCache';
 import { preloadEnvironmentMap, type EnvironmentVariant, type EnvironmentMapHandle } from './environmentMaps';
 import { mountRoomModules, type RoomModuleHandle } from './RoomModuleLoader';
 import { meeting3dFeatures } from '../config';
 import { ROOM_DEFINITIONS, ROOM_PORTALS, getRoomById } from '../rooms/definitions';
-import type { RoomBounds, RoomDefinition, RoomPortal } from '../rooms/types';
+import { resolveRoomLayout, type ResolvedRoomLayout } from '../rooms/layout';
+import type { RoomBounds, RoomDefinition, RoomPortal, RoomId } from '../rooms/types';
 
 RectAreaLightUniformsLib.init();
 
@@ -121,6 +130,51 @@ function makeFloorTexture(palette: ModePalette): THREE.CanvasTexture {
   return tex;
 }
 
+function makeCirculationTexture(palette: ModePalette): THREE.Texture {
+  if (!IS_BROWSER) {
+    const tex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1, THREE.RGBAFormat);
+    tex.needsUpdate = true;
+    return tex;
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    const tex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1, THREE.RGBAFormat);
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const base = numberToRgba(palette.floorZoneTint, palette.floorZoneOpacity);
+  const mid = numberToRgba(palette.floorZoneTint, palette.floorZoneOpacity * 1.35);
+
+  const horizontal = ctx.createLinearGradient(0, canvas.height * 0.25, 0, canvas.height * 0.75);
+  horizontal.addColorStop(0, 'rgba(0,0,0,0)');
+  horizontal.addColorStop(0.32, base);
+  horizontal.addColorStop(0.5, mid);
+  horizontal.addColorStop(0.68, base);
+  horizontal.addColorStop(1, 'rgba(0,0,0,0)');
+
+  ctx.fillStyle = horizontal;
+  ctx.fillRect(0, canvas.height * 0.18, canvas.width, canvas.height * 0.64);
+
+  const vertical = ctx.createLinearGradient(canvas.width * 0.22, 0, canvas.width * 0.78, 0);
+  vertical.addColorStop(0, 'rgba(0,0,0,0)');
+  vertical.addColorStop(0.28, base);
+  vertical.addColorStop(0.5, mid);
+  vertical.addColorStop(0.72, base);
+  vertical.addColorStop(1, 'rgba(0,0,0,0)');
+
+  ctx.fillStyle = vertical;
+  ctx.fillRect(canvas.width * 0.12, 0, canvas.width * 0.76, canvas.height);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+  return texture;
+}
+
 function makeLightmap(size = 512, intensity = 0.85): THREE.Texture {
   if (!IS_BROWSER) {
     const tex = new THREE.DataTexture(new Float32Array([intensity]), 1, 1, THREE.RedFormat, THREE.FloatType);
@@ -155,7 +209,22 @@ function addFloor(scene: THREE.Scene, width: number, depth: number, palette: Mod
   floor.receiveShadow = true;
   floor.userData.dimensions = { width, depth };
   scene.add(floor);
-  return floor;
+
+  const zoneTexture = makeCirculationTexture(palette);
+  const zoneMaterial = new THREE.MeshBasicMaterial({
+    map: zoneTexture,
+    transparent: true,
+    toneMapped: false,
+  });
+  zoneMaterial.userData = { ...(zoneMaterial.userData ?? {}), token: 'floor-zone' };
+  const overlay = new THREE.Mesh(new THREE.PlaneGeometry(width * 0.94, depth * 0.94), zoneMaterial);
+  overlay.name = 'FLOOR_CIRCULATION';
+  overlay.rotation.x = -Math.PI / 2;
+  overlay.position.y = 0.011;
+  overlay.renderOrder = 2;
+  scene.add(overlay);
+
+  return { floor, overlay };
 }
 
 function addWalls(scene: THREE.Scene, width: number, depth: number, palette: ModePalette) {
@@ -177,19 +246,45 @@ function addWalls(scene: THREE.Scene, width: number, depth: number, palette: Mod
   const north = makeWall(width, height, thickness);
   north.name = 'WALL_N';
   north.position.set(0, height / 2, -depth / 2);
-  const south = north.clone();
+  const south = makeWall(width, height, thickness);
   south.name = 'WALL_S';
   south.position.set(0, height / 2, depth / 2);
 
   const east = makeWall(thickness, height, depth);
   east.name = 'WALL_E';
   east.position.set(width / 2, height / 2, 0);
-  const west = east.clone();
+  const west = makeWall(thickness, height, depth);
   west.name = 'WALL_W';
   west.position.set(-width / 2, height / 2, 0);
 
   scene.add(north, south, east, west);
   walls.push(north, south, east, west);
+
+  const trimMat = new THREE.MeshStandardMaterial({
+    color: palette.wallTrim,
+    roughness: 0.5,
+    metalness: 0.12,
+  });
+  const trimHeight = 0.18;
+  const trimDepth = 0.06;
+
+  const makeTrim = (w: number, d: number) => new THREE.Mesh(new THREE.BoxGeometry(w, trimHeight, d), trimMat.clone());
+
+  const trimNorth = makeTrim(width, trimDepth);
+  trimNorth.position.set(0, trimHeight / 2, -depth / 2 + trimDepth / 2);
+  trimNorth.name = 'TRIM_N';
+  const trimSouth = makeTrim(width, trimDepth);
+  trimSouth.position.set(0, trimHeight / 2, depth / 2 - trimDepth / 2);
+  trimSouth.name = 'TRIM_S';
+  const trimEast = makeTrim(trimDepth, depth);
+  trimEast.position.set(width / 2 - trimDepth / 2, trimHeight / 2, 0);
+  trimEast.name = 'TRIM_E';
+  const trimWest = makeTrim(trimDepth, depth);
+  trimWest.position.set(-width / 2 + trimDepth / 2, trimHeight / 2, 0);
+  trimWest.name = 'TRIM_W';
+
+  scene.add(trimNorth, trimSouth, trimEast, trimWest);
+  walls.push(trimNorth, trimSouth, trimEast, trimWest);
 
   const glassMat = getMaterial('glass', palette);
   const ribbon = new THREE.Mesh(new THREE.PlaneGeometry(width * 0.6, 1.8), glassMat);
@@ -299,35 +394,48 @@ function addPlanters(scene: THREE.Scene, palette: ModePalette) {
 
 function createRoomSign(
   room: RoomDefinition,
-  accent: THREE.Color,
+  palette: ModePalette,
   centerX: number,
   centerZ: number,
   depth: number,
 ): THREE.Mesh {
   const width = Math.min(3.4, Math.max(2.2, depth * 0.6));
   const height = 0.9;
+  const roomColors = getRoomPalette(palette, room.id);
   let material: THREE.MeshBasicMaterial;
   if (IS_BROWSER) {
     const canvas = document.createElement('canvas');
     canvas.width = 512;
     canvas.height = 192;
-    const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = 'rgba(10,16,24,0.88)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = accent.getStyle();
-    ctx.lineWidth = 6;
-    ctx.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
-    ctx.fillStyle = '#f8fafc';
-    ctx.font = 'bold 64px "Inter", "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(room.title, canvas.width / 2, canvas.height / 2);
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = palette.signage.panel;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = palette.signage.border || numberToHex(roomColors.accent);
+      ctx.lineWidth = 6;
+      ctx.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
+      ctx.fillStyle = palette.signage.text;
+      ctx.font = '600 64px "Inter", "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = palette.signage.glow;
+      ctx.shadowBlur = 18;
+      ctx.shadowOffsetY = 6;
+      ctx.fillText(room.title, canvas.width / 2, canvas.height / 2);
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+
+      ctx.fillStyle = numberToRgba(roomColors.accent, 0.35);
+      ctx.fillRect(36, canvas.height - 32, canvas.width - 72, 12);
+    }
     const texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
     material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false });
+    material.userData = { ...(material.userData ?? {}), roomId: room.id, canvas };
   } else {
     material = new THREE.MeshBasicMaterial({
-      color: accent.getHex(),
+      color: roomColors.accent,
       transparent: true,
       opacity: 0.82,
       toneMapped: false,
@@ -340,6 +448,7 @@ function createRoomSign(
   sign.lookAt(new THREE.Vector3(centerX, 1.9, centerZ + depth / 2));
   sign.renderOrder = 3;
   sign.name = `room-sign-${room.id}`;
+  sign.userData.roomId = room.id;
   return sign;
 }
 
@@ -349,8 +458,9 @@ function buildPartitionsForRoom(room: RoomDefinition, palette: ModePalette): Par
   const meshes: THREE.Mesh[] = [];
   const obstacles: THREE.Box3[] = [];
   const bounds = room.bounds;
-  const accent = new THREE.Color(room.accentColor);
-  const baseColor = accent.clone().lerp(new THREE.Color(palette.surroundWalls), 0.45);
+  const roomColors = getRoomPalette(palette, room.id);
+  const baseColor = new THREE.Color(roomColors.base);
+  const accentColor = roomColors.accent;
   const material = new THREE.MeshStandardMaterial({
     color: baseColor.getHex(),
     roughness: 0.72,
@@ -699,9 +809,14 @@ function buildFurnitureForRoom(room: RoomDefinition, palette: ModePalette): Furn
   return { objects, obstacles };
 }
 
-function createPortalLabel(portal: RoomPortal): THREE.Sprite {
+function createPortalLabel(portal: RoomPortal, palette: ModePalette): THREE.Sprite {
   if (!IS_BROWSER) {
-    const material = new THREE.SpriteMaterial({ color: 0xffffff, opacity: 0.85, transparent: true, depthWrite: false });
+    const material = new THREE.SpriteMaterial({
+      color: palette.accent,
+      opacity: 0.85,
+      transparent: true,
+      depthWrite: false,
+    });
     const sprite = new THREE.Sprite(material);
     sprite.scale.set(2.4, 0.8, 1);
     sprite.name = `portal-label-${portal.id}`;
@@ -711,22 +826,26 @@ function createPortalLabel(portal: RoomPortal): THREE.Sprite {
   canvas.width = 384;
   canvas.height = 144;
   const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = 'rgba(12,18,28,0.9)';
+  ctx.fillStyle = palette.signage.panel;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = 'rgba(148,163,184,0.6)';
+  ctx.strokeStyle = palette.signage.border || numberToHex(palette.accent);
   ctx.lineWidth = 4;
   ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
-  ctx.fillStyle = '#e2e8f0';
-  ctx.font = 'bold 48px "Inter", "Segoe UI", sans-serif';
+  ctx.fillStyle = palette.signage.text;
+  ctx.font = '600 48px "Inter", "Segoe UI", sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(portal.label ?? 'Portal', canvas.width / 2, canvas.height / 2);
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+  material.userData = { ...(material.userData ?? {}), canvas };
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(2.6, 0.86, 1);
   sprite.name = `portal-label-${portal.id}`;
+  sprite.userData.portalId = portal.id;
+  sprite.userData.label = portal.label ?? 'Portal';
+  sprite.userData.canvas = canvas;
   return sprite;
 }
 
@@ -746,16 +865,23 @@ function createPortalMarkers(palette: ModePalette): THREE.Group {
     ring.rotation.x = -Math.PI / 2;
     ring.position.set(portal.position.x, 0.04, portal.position.z);
     ring.renderOrder = 1;
+    ring.name = 'PORTAL_RING';
+    (ring.material as THREE.Material).userData = { ...(ring.material as any).userData, token: 'portal-ring' };
     group.add(ring);
 
     const beacon = new THREE.Mesh(
       new THREE.CylinderGeometry(0.06, 0.06, 2.2, 16),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3, toneMapped: false }),
+      new THREE.MeshBasicMaterial({
+        color: palette.accent,
+        transparent: true,
+        opacity: 0.28,
+        toneMapped: false,
+      }),
     );
     beacon.position.set(portal.position.x, 1.1, portal.position.z);
     group.add(beacon);
 
-    const label = createPortalLabel(portal);
+    const label = createPortalLabel(portal, palette);
     label.position.set(portal.position.x, 1.95, portal.position.z);
     group.add(label);
   });
@@ -765,10 +891,11 @@ function createPortalMarkers(palette: ModePalette): THREE.Group {
 type RoomLayoutHandle = { group: THREE.Group; ceilings: THREE.Group; obstacles: THREE.Box3[]; dispose: () => void };
 
 function createCeilingMaterial(palette: ModePalette): THREE.MeshStandardMaterial {
+  const baseColor = palette.ceiling;
   const canvas = IS_BROWSER ? document.createElement('canvas') : null;
   if (!canvas) {
     return new THREE.MeshStandardMaterial({
-      color: 0xf4f3ef,
+      color: baseColor,
       roughness: 0.9,
       metalness: 0.02,
       side: THREE.DoubleSide,
@@ -777,9 +904,9 @@ function createCeilingMaterial(palette: ModePalette): THREE.MeshStandardMaterial
   canvas.width = canvas.height = 512;
   const ctx = canvas.getContext('2d');
   if (ctx) {
-    ctx.fillStyle = '#f4f3ef';
+    ctx.fillStyle = numberToHex(baseColor);
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = 'rgba(90, 90, 90, 0.2)';
+    ctx.strokeStyle = palette.ceilingGrid;
     ctx.lineWidth = 4;
     const step = canvas.width / 6;
     for (let i = 0; i <= canvas.width; i += step) {
@@ -799,7 +926,7 @@ function createCeilingMaterial(palette: ModePalette): THREE.MeshStandardMaterial
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.needsUpdate = true;
   return new THREE.MeshStandardMaterial({
-    color: 0xffffff,
+    color: baseColor,
     map: tex,
     roughness: 0.92,
     metalness: 0.02,
@@ -807,7 +934,7 @@ function createCeilingMaterial(palette: ModePalette): THREE.MeshStandardMaterial
   });
 }
 
-function addRoomLayout(scene: THREE.Scene, palette: ModePalette): RoomLayoutHandle {
+function addRoomLayout(scene: THREE.Scene, palette: ModePalette, layout: ResolvedRoomLayout): RoomLayoutHandle {
   const layoutGroup = new THREE.Group();
   layoutGroup.name = 'ROOM_LAYOUT';
   const ceilingsGroup = new THREE.Group();
@@ -819,14 +946,16 @@ function addRoomLayout(scene: THREE.Scene, palette: ModePalette): RoomLayoutHand
   for (const room of ROOM_DEFINITIONS) {
     const roomGroup = new THREE.Group();
     roomGroup.name = `layout-${room.id}`;
-    const bounds = room.bounds;
+    const resolved = layout.get(room.id);
+    const bounds = resolved?.bounds ?? room.bounds;
     const centerX = (bounds.minX + bounds.maxX) / 2;
     const centerZ = (bounds.minZ + bounds.maxZ) / 2;
     const width = bounds.maxX - bounds.minX;
     const depth = bounds.maxZ - bounds.minZ;
-    const accent = new THREE.Color(room.accentColor);
-
-    const floorColor = accent.clone().lerp(new THREE.Color(palette.floorBase), 0.55);
+    const roomColors = getRoomPalette(palette, room.id);
+    const accent = new THREE.Color(roomColors.accent);
+    const floorBase = new THREE.Color(roomColors.base);
+    const floorColor = floorBase.clone().lerp(new THREE.Color(palette.floorBase), 0.4);
     const floorMaterial = new THREE.MeshStandardMaterial({
       color: floorColor.getHex(),
       roughness: 0.82,
@@ -847,14 +976,20 @@ function addRoomLayout(scene: THREE.Scene, palette: ModePalette): RoomLayoutHand
     border.position.set(centerX, 0.01, centerZ);
     roomGroup.add(border);
 
-    const sign = createRoomSign(room, accent, centerX, centerZ, depth);
+    const themedRoom: RoomDefinition = {
+      ...room,
+      bounds,
+      accentColor: numberToHex(roomColors.accent),
+    };
+
+    const sign = createRoomSign(themedRoom, palette, centerX, centerZ, depth);
     roomGroup.add(sign);
 
-    const partitions = buildPartitionsForRoom(room, palette);
+    const partitions = buildPartitionsForRoom(themedRoom, palette);
     partitions.meshes.forEach((mesh) => roomGroup.add(mesh));
     obstacles.push(...partitions.obstacles);
 
-    const furniture = buildFurnitureForRoom(room, palette);
+    const furniture = buildFurnitureForRoom(themedRoom, palette);
     furniture.objects.forEach((obj) => roomGroup.add(obj));
     obstacles.push(...furniture.obstacles);
 
@@ -887,14 +1022,15 @@ function addRoomLayout(scene: THREE.Scene, palette: ModePalette): RoomLayoutHand
   return { group: layoutGroup, ceilings: ceilingsGroup, obstacles, dispose };
 }
 
-function addAmbientLights(scene: THREE.Scene) {
-  const hemi = new THREE.HemisphereLight(0xf0f4ff, 0x1a1f28, 0.6);
+function addAmbientLights(scene: THREE.Scene, palette: ModePalette) {
+  const lighting = palette.lighting;
+  const hemi = new THREE.HemisphereLight(lighting.hemiSky, lighting.hemiGround, lighting.hemiIntensity);
   hemi.name = 'HEMI';
   scene.add(hemi);
 
-  const dir = new THREE.DirectionalLight(0xfff3d1, 1.0);
+  const dir = new THREE.DirectionalLight(lighting.dirColor, lighting.dirIntensity);
   dir.name = 'DIR_MAIN';
-  dir.position.set(10, 16, 8);
+  dir.position.set(lighting.dirPosition.x, lighting.dirPosition.y, lighting.dirPosition.z);
   dir.castShadow = true;
   dir.shadow.mapSize.set(2048, 2048);
   dir.shadow.camera.near = 1;
@@ -905,21 +1041,34 @@ function addAmbientLights(scene: THREE.Scene) {
   dir.shadow.camera.bottom = -35;
   scene.add(dir);
 
-  const fill = new THREE.RectAreaLight(0xbcd4ff, 0.35, 12, 6);
+  const fill = new THREE.RectAreaLight(lighting.fillColor, lighting.fillIntensity, lighting.fillSize.width, lighting.fillSize.height);
   fill.position.set(-8, 4.5, 8);
   fill.lookAt(0, 1.6, 0);
   fill.name = 'AREA_FILL';
   scene.add(fill);
 
-  const ambient = new THREE.AmbientLight(0x20263a, 0.2);
+  const ambient = new THREE.AmbientLight(lighting.ambientColor, lighting.ambientIntensity);
   ambient.name = 'AMBIENT';
   scene.add(ambient);
 }
 
-function updateEnvironmentVariant(scene: THREE.Scene, variant: EnvironmentVariant) {
+function updateEnvironmentVariant(scene: THREE.Scene, palette: ModePalette, variant: EnvironmentVariant) {
+  const fog = (() => {
+    if (scene.fog instanceof THREE.FogExp2) {
+      scene.fog.color.set(palette.fogColor);
+      scene.fog.density = palette.fogDensity;
+      return scene.fog;
+    }
+    const created = new THREE.FogExp2(palette.fogColor, palette.fogDensity);
+    scene.fog = created;
+    return created;
+  })();
+  fog.color.set(palette.fogColor);
+  fog.density = palette.fogDensity;
+
   if (!meeting3dFeatures.enableHdriEnvironment) {
     scene.environment = null;
-    scene.background = new THREE.Color(variant === 'day' ? 0xf5f7fa : 0x06080d);
+    scene.background = new THREE.Color(palette.sky);
     return;
   }
   const handle = ENV_HANDLES[variant];
@@ -928,7 +1077,7 @@ function updateEnvironmentVariant(scene: THREE.Scene, variant: EnvironmentVarian
     scene.background = handle.target;
   } else {
     scene.environment = null;
-    scene.background = new THREE.Color(variant === 'day' ? 0xf5f7fa : 0x06080d);
+    scene.background = new THREE.Color(palette.sky);
   }
 }
 
@@ -974,34 +1123,36 @@ export function addSurroundingGrid(
     return tex;
   })();
 
-  const fadeMat = new THREE.MeshBasicMaterial({ map: fadeTex, transparent: true, opacity: 0.75 });
+  const fadeMat = new THREE.MeshBasicMaterial({ map: fadeTex, transparent: true, opacity: 0.65, color: pal.fogColor });
   const fadePlane = new THREE.Mesh(new THREE.CircleGeometry(size * 0.6, 64), fadeMat);
   fadePlane.name = 'SURROUND_FADE';
   fadePlane.rotation.x = -Math.PI / 2;
   fadePlane.position.y = -0.001;
   scene.add(fadePlane);
 
-  if (!scene.fog) {
-    scene.fog = new THREE.FogExp2(0x0b0f16, 0.015);
-  }
-
   return { gridPlane: plane, fadePlane };
 }
 
 export function buildEnvironment(
   scene: THREE.Scene,
-  opts: { ROOM_W: number; ROOM_D: number; palette?: ModePalette; theme?: Mode },
+  opts: { ROOM_W: number; ROOM_D: number; palette?: ModePalette; theme?: Mode; layout?: ResolvedRoomLayout },
   renderer?: THREE.WebGLRenderer,
 ): BuiltEnvironment {
   const palette = opts.palette ?? MODE_PALETTE.dark;
   const theme = opts.theme ?? 'dark';
 
-  addAmbientLights(scene);
-  const floor = addFloor(scene, opts.ROOM_W, opts.ROOM_D, palette);
+  const layout = opts.layout ?? resolveRoomLayout({
+    roomWidth: opts.ROOM_W,
+    roomDepth: opts.ROOM_D,
+    rooms: ROOM_DEFINITIONS,
+  });
+
+  addAmbientLights(scene, palette);
+  const { floor, overlay: floorOverlay } = addFloor(scene, opts.ROOM_W, opts.ROOM_D, palette);
   const walls = addWalls(scene, opts.ROOM_W, opts.ROOM_D, palette);
   const stage = addStage(scene, palette);
   const planters = addPlanters(scene, palette);
-  const roomLayoutHandle = addRoomLayout(scene, palette);
+  const roomLayoutHandle = addRoomLayout(scene, palette, layout);
   const setCeilingsVisible = (visible: boolean) => {
     if (roomLayoutHandle.ceilings) {
       roomLayoutHandle.ceilings.visible = visible;
@@ -1027,11 +1178,13 @@ export function buildEnvironment(
       void preloadEnvironmentMap(renderer, variant).then((handle) => {
         ENV_HANDLES[variant] = handle;
         if (variant === variantFromTheme(theme)) {
-          updateEnvironmentVariant(scene, variant);
+          updateEnvironmentVariant(scene, palette, variant);
         }
       }).catch(() => {});
     });
   }
+
+  updateEnvironmentVariant(scene, palette, variantFromTheme(theme));
 
   const abortController = new AbortController();
   const moduleHandles = meeting3dFeatures.useRoomModules
@@ -1040,7 +1193,7 @@ export function buildEnvironment(
 
   const disposeEnv = () => {
     abortController.abort();
-    [floor, ...walls, stage.screen, stage.monitor, surround.gridPlane, surround.fadePlane].forEach((mesh) => {
+    [floor, floorOverlay, ...walls, stage.screen, stage.monitor, surround.gridPlane, surround.fadePlane].forEach((mesh) => {
       if (!mesh) return;
       mesh.removeFromParent();
       if ((mesh as any).geometry) {
@@ -1053,6 +1206,10 @@ export function buildEnvironment(
         material?.dispose?.();
       }
     });
+    const overlayMat = floorOverlay.material as THREE.MeshBasicMaterial | undefined;
+    if (overlayMat?.map) {
+      overlayMat.map.dispose?.();
+    }
     planters.removeFromParent();
     planters.traverse((obj) => {
       if ((obj as any).isMesh) {
@@ -1104,6 +1261,14 @@ export function applyEnvironmentTheme(
 ) {
   const palette = MODE_PALETTE[theme];
   updateWallMaterial(scene, palette);
+  const trims = ['TRIM_N', 'TRIM_S', 'TRIM_E', 'TRIM_W']
+    .map((name) => scene.getObjectByName(name) as THREE.Mesh | null)
+    .filter(Boolean) as THREE.Mesh[];
+  trims.forEach((trim) => {
+    const mat = trim.material as THREE.MeshStandardMaterial;
+    mat.color.set(palette.wallTrim);
+    mat.needsUpdate = true;
+  });
   const floor = scene.getObjectByName('ENV_FLOOR') as THREE.Mesh | null;
   if (floor) {
     const mat = floor.material as THREE.MeshStandardMaterial;
@@ -1117,15 +1282,17 @@ export function applyEnvironmentTheme(
     }
     mat.needsUpdate = true;
   }
-  const variant = variantFromTheme(theme);
-  updateEnvironmentVariant(scene, variant);
-  const fogColor = variant === 'day' ? 0xf5f7fa : 0x0b0f16;
-  if (!scene.fog) {
-    scene.fog = new THREE.FogExp2(fogColor, variant === 'day' ? 0.006 : 0.015);
-  } else {
-    scene.fog.color.set(fogColor);
-    (scene.fog as THREE.FogExp2).density = variant === 'day' ? 0.006 : 0.015;
+  const overlay = scene.getObjectByName('FLOOR_CIRCULATION') as THREE.Mesh | null;
+  if (overlay) {
+    const mat = overlay.material as THREE.MeshBasicMaterial;
+    if (mat?.map instanceof THREE.Texture) {
+      mat.map.dispose();
+    }
+    mat.map = makeCirculationTexture(palette);
+    mat.needsUpdate = true;
   }
+  const variant = variantFromTheme(theme);
+  updateEnvironmentVariant(scene, palette, variant);
   const planters = scene.getObjectByName('PLANTERS');
   if (planters) {
     planters.traverse((obj) => {
@@ -1141,6 +1308,75 @@ export function applyEnvironmentTheme(
       (mesh.material as THREE.Material).needsUpdate = true;
     });
   }
+
+  const portalGroup = scene.getObjectByName('ROOM_PORTALS_MARKERS');
+  if (portalGroup) {
+    portalGroup.traverse((obj) => {
+      if ((obj as any).name === 'PORTAL_RING') {
+        const mat = (obj as THREE.Mesh).material as THREE.MeshBasicMaterial;
+        mat.color.set(palette.accent);
+        mat.needsUpdate = true;
+      }
+      if ((obj as any).isSprite && (obj.name ?? '').startsWith('portal-label-')) {
+        const sprite = obj as THREE.Sprite;
+        const canvas = (sprite.material as any)?.userData?.canvas as HTMLCanvasElement | undefined;
+        const ctx = canvas?.getContext('2d');
+        if (canvas && ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = palette.signage.panel;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.strokeStyle = palette.signage.border || numberToHex(palette.accent);
+          ctx.lineWidth = 4;
+          ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
+          ctx.fillStyle = palette.signage.text;
+          ctx.font = '600 48px "Inter", "Segoe UI", sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const label = (sprite.userData?.label as string) ?? 'Portal';
+          ctx.fillText(label, canvas.width / 2, canvas.height / 2);
+          const tex = (sprite.material as THREE.SpriteMaterial).map as THREE.CanvasTexture | undefined;
+          if (tex) tex.needsUpdate = true;
+          (sprite.material as THREE.Material).needsUpdate = true;
+        }
+      }
+    });
+  }
+
+  scene.traverse((obj) => {
+    if (!(obj as any).isMesh) return;
+    if (!obj.name.startsWith('room-sign-')) return;
+    const mesh = obj as THREE.Mesh;
+    const roomId = mesh.userData?.roomId as RoomId | undefined;
+    if (!roomId) return;
+    const material = mesh.material as THREE.MeshBasicMaterial;
+    const canvas = (material.userData?.canvas ?? mesh.userData?.canvas) as HTMLCanvasElement | undefined;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const roomColors = getRoomPalette(palette, roomId);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = palette.signage.panel;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = palette.signage.border || numberToHex(roomColors.accent);
+    ctx.lineWidth = 6;
+    ctx.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
+    ctx.fillStyle = palette.signage.text;
+    ctx.font = '600 64px "Inter", "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = palette.signage.glow;
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 6;
+    const title = getRoomById(roomId)?.title ?? roomId;
+    ctx.fillText(title, canvas.width / 2, canvas.height / 2);
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = numberToRgba(roomColors.accent, 0.35);
+    ctx.fillRect(36, canvas.height - 32, canvas.width - 72, 12);
+    const tex = material.map as THREE.CanvasTexture | undefined;
+    if (tex) tex.needsUpdate = true;
+    material.needsUpdate = true;
+  });
 }
 
 let ENV_THEME_ANIM: number | null = null;

@@ -55,8 +55,8 @@ const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
         className="pointer-events-auto overflow-hidden rounded-2xl border"
         style={{
           width: size,
-          borderColor: 'var(--panel-border)',
-          background: 'var(--surface-1)',
+          borderColor: 'var(--minimap-border, var(--panel-border))',
+          background: 'var(--minimap-bg, var(--surface-1))',
           boxShadow: '0 18px 42px rgba(0,0,0,0.3)',
         }}
       >
@@ -65,8 +65,8 @@ const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
       <div
         className="pointer-events-auto w-full rounded-2xl border px-4 py-3 text-xs shadow-xl"
         style={{
-          borderColor: 'var(--panel-border)',
-          background: 'var(--surface-1)',
+          borderColor: 'var(--minimap-border, var(--panel-border))',
+          background: 'var(--minimap-bg, var(--surface-1))',
           color: 'var(--text-2, #d1d5db)',
           backdropFilter: 'blur(14px)',
           opacity: 0.96,
@@ -87,8 +87,12 @@ const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
                   onClick={() => onJump(room.id)}
                   className="flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                   style={{
-                    borderColor: active || suggested ? room.accentColor : 'var(--panel-border)',
-                    background: active ? 'rgba(255,255,255,0.08)' : suggested ? 'rgba(255,255,255,0.04)' : 'transparent',
+                    borderColor: active || suggested ? room.accentColor : 'var(--minimap-border, var(--panel-border))',
+                    background: active
+                      ? 'var(--minimap-active-bg, rgba(255,255,255,0.08))'
+                      : suggested
+                        ? 'var(--minimap-suggested-bg, rgba(255,255,255,0.04))'
+                        : 'transparent',
                     color: 'var(--text-1, #f1f5f9)',
                     boxShadow: active ? `0 0 0 1px ${room.accentColor}` : undefined,
                   }}
