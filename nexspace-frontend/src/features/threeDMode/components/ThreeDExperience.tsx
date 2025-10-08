@@ -7,9 +7,11 @@ import JoinNudgePanel from './JoinNudgePanel';
 import QualitySelector from './QualitySelector';
 import { useThreeDAvatarSync } from '../hooks/useThreeDAvatarSync';
 import ThreeDScene from './ThreeDScene';
+import { useSpatialAudioRouting } from '../hooks/useSpatialAudioRouting';
 
 const ThreeDExperience: React.FC = () => {
   useThreeDAvatarSync();
+  useSpatialAudioRouting();
   const theme = useUIStore((s) => s.theme);
   const tokens = getThemeTokens(theme);
   const quality = useThreeDStore((s) => s.quality);

@@ -22,10 +22,13 @@ It now renders the live campus scene plus supporting UI chrome:
 
 - A performant Three.js scene with baked ambient lighting, room floor meshes, labels, and avatar
   capsules that gently bob to signal presence.
-- Deterministic room-aware avatar layout so occupants distribute evenly across each zone.
+- Deterministic room-aware avatar layout for remote peers plus smooth WASD controls for the local
+  user with collision bounds that keep everyone on campus.
 - A minimap with per-room occupancy counts.
 - Join-nudge surface that deduplicates entries with a cooldown.
 - Quality selector with Low/Medium/High presets that map to renderer fidelity and shadows.
+- Live spatial audio routing tied to room boundaries and proximity falloff so conversations fade as
+  people move away or enter other rooms.
 
 ## Persistence & Settings
 
@@ -36,10 +39,10 @@ It now renders the live campus scene plus supporting UI chrome:
 
 ## Next Steps
 
-1. Connect room boundaries to spatial audio attenuation & voice isolation rules.
-2. Layer in navigation controls (WASD, click-to-move) and proximity-based falloff for avatars.
-3. Wire the join-nudge actions (wave, invite, DM) into the communication stack.
-4. Extend tests to cover proximity calculations once movement updates land.
+1. Wire the join-nudge actions (wave, invite, DM) into the communication stack.
+2. Add click-to-move navigation, waypoint cues, and on-floor wayfinding arrows.
+3. Model interactive room objects (whiteboards, seating, game tables) and connect them to the store.
+4. Integrate room media surfaces with screen share, spotlight mode, and embedded slides/video.
 
 ## Development Notes
 

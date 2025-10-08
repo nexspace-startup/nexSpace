@@ -3,6 +3,7 @@ import { devtools } from 'zustand/middleware';
 import type { PresenceStatus } from '../../../constants/enums';
 import { defaultRooms, fallbackRoomId, type RoomDefinition } from '../config/rooms';
 import { computeRoomLayout } from '../utils/layout';
+import { clampToCampusBounds, resolveRoomForPosition } from '../utils/spatial';
 
 export type Vector2 = { x: number; y: number };
 export type QualityLevel = 'low' | 'medium' | 'high';
@@ -53,6 +54,7 @@ type ThreeDState = {
   popJoinNudge: () => JoinNudge | null;
   clearJoinNudges: () => void;
   setQuality: (quality: QualityLevel) => void;
+  setAvatarPosition: (id: string, position: Vector2) => void;
   getOccupantsForRoom: (roomId: string) => AvatarRuntimeState[];
 };
 
@@ -69,10 +71,21 @@ const applyRoomLayout = (
   const layout = computeRoomLayout(rooms, avatars);
 
   return Object.entries(avatars).reduce<Record<string, AvatarRuntimeState>>((acc, [id, avatar]) => {
+    if (avatar.isLocal) {
+      acc[id] = avatar;
+      return acc;
+    }
+
     const nextPosition = layout[id] ?? avatar.position ?? FALLBACK_POSITION;
     acc[id] = { ...avatar, position: nextPosition };
     return acc;
   }, {});
+};
+
+const positionsEqual = (a: Vector2, b: Vector2): boolean => {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001;
 };
 
 export const useThreeDStore = create<ThreeDState>()(
@@ -92,7 +105,14 @@ export const useThreeDStore = create<ThreeDState>()(
         avatars: applyRoomLayout(state.avatars, rooms),
       })),
 
-    setLocalAvatarId: (id) => set({ localAvatarId: id }),
+    setLocalAvatarId: (id) =>
+      set((state) => {
+        if (state.localAvatarId === id) {
+          return state;
+        }
+
+        return { localAvatarId: id };
+      }),
 
     setQuality: (quality) => set({ quality }),
 
@@ -100,6 +120,49 @@ export const useThreeDStore = create<ThreeDState>()(
       set((state) => ({
         minimapWaypoints: { ...state.minimapWaypoints, [avatarId]: waypoint },
       })),
+
+    setAvatarPosition: (id, position) =>
+      set((state) => {
+        const avatar = state.avatars[id];
+        if (!avatar) return state;
+
+        const clamped = clampToCampusBounds(position, state.rooms);
+        const nextRoomId = resolveRoomForPosition(clamped, state.rooms, fallbackRoomId);
+
+        if (positionsEqual(avatar.position, clamped) && avatar.roomId === nextRoomId) {
+          return state;
+        }
+
+        const nextAvatar: AvatarRuntimeState = {
+          ...avatar,
+          position: clamped,
+          roomId: nextRoomId,
+          lastActiveTs: Date.now(),
+        };
+
+        const patch: Partial<ThreeDState> = {
+          avatars: { ...state.avatars, [id]: nextAvatar },
+        };
+
+        if (avatar.roomId !== nextRoomId && id !== state.localAvatarId) {
+          const now = Date.now();
+          if (now - (state.lastNudgeByAvatar[id] ?? 0) >= state.joinNudgeCooldownMs) {
+            patch.joinNudges = [
+              ...state.joinNudges,
+              {
+                id: `${id}:${now}`,
+                avatarId: id,
+                roomId: nextRoomId,
+                displayName: avatar.displayName,
+                timestamp: now,
+              },
+            ];
+            patch.lastNudgeByAvatar = { ...state.lastNudgeByAvatar, [id]: now };
+          }
+        }
+
+        return patch;
+      }),
 
     popJoinNudge: () => {
       const queue = get().joinNudges;
@@ -184,12 +247,17 @@ export const useThreeDStore = create<ThreeDState>()(
         const nextAvatars = { ...state.avatars, [input.id]: updated };
         const avatarsWithLayout = applyRoomLayout(nextAvatars, state.rooms);
 
-        return {
+        const patch: Partial<ThreeDState> = {
           avatars: avatarsWithLayout,
-          localAvatarId: localId,
           joinNudges,
           lastNudgeByAvatar,
         };
+
+        if (state.localAvatarId !== localId) {
+          patch.localAvatarId = localId;
+        }
+
+        return patch;
       }),
 
     getOccupantsForRoom: (roomId) => {

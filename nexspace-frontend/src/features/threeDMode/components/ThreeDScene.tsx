@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { useThreeDStore } from '../store/threeDStore';
 import { useUIStore } from '../../../stores/uiStore';
 import { getThemeTokens } from '../../../constants/themeTokens';
+import { useThreeDMovement } from '../hooks/useThreeDMovement';
 
 const FLOOR_HEIGHT = 0.08;
 const AVATAR_HEIGHT = 1.65;
@@ -231,6 +232,8 @@ const ThreeDScene: React.FC = () => {
   const avatarGroupRef = useRef<THREE.Group>();
   const roomsGroupRef = useRef<THREE.Group>();
   const clockRef = useRef(new THREE.Clock());
+
+  useThreeDMovement();
 
   const theme = useUIStore((state) => state.theme);
   const tokens = getThemeTokens(theme);

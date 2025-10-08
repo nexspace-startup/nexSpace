@@ -16,6 +16,7 @@ export const useThreeDAvatarSync = (): void => {
   useEffect(() => {
     const fallback = rooms[0]?.id ?? fallbackRoomId;
     const seen = new Set<string>();
+    const existing = useThreeDStore.getState().avatars;
 
     participants.forEach((participant, index) => {
       if (!participant?.id) return;
@@ -24,12 +25,13 @@ export const useThreeDAvatarSync = (): void => {
 
       const presenceRecord = presenceById[participant.id];
       const status = presenceRecord?.status ?? (isLocal ? localPresence : undefined);
+      const previous = existing[participant.id];
 
       upsertAvatar({
         id: participant.id,
         displayName: participant.name ?? participant.email ?? 'Guest',
         avatarUrl: participant.avatar,
-        roomId: fallback,
+        roomId: previous?.roomId ?? fallback,
         status,
         isLocal,
       });
@@ -37,7 +39,6 @@ export const useThreeDAvatarSync = (): void => {
       seen.add(participant.id);
     });
 
-    const existing = useThreeDStore.getState().avatars;
     Object.keys(existing).forEach((id) => {
       if (!seen.has(id)) removeAvatar(id);
     });
