@@ -1,0 +1,60 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { useThreeDStore } from '../store/threeDStore';
+import { defaultRooms } from '../config/rooms';
+
+const openWork = defaultRooms[0];
+
+describe('threeDStore avatar updates', () => {
+  beforeEach(() => {
+    useThreeDStore.setState({
+      rooms: defaultRooms,
+      avatars: {},
+      localAvatarId: null,
+      joinNudges: [],
+      lastNudgeByAvatar: {},
+      minimapWaypoints: {},
+    });
+  });
+
+  it('avoids unnecessary avatar mutations when data is unchanged', () => {
+    if (!openWork) throw new Error('expected open work area');
+    const store = useThreeDStore.getState();
+    store.upsertAvatar({
+      id: 'local',
+      displayName: 'Alex',
+      roomId: openWork.id,
+      isLocal: true,
+    });
+
+    const first = useThreeDStore.getState().avatars;
+    store.upsertAvatar({
+      id: 'local',
+      displayName: 'Alex',
+      roomId: openWork.id,
+      isLocal: true,
+    });
+    const second = useThreeDStore.getState().avatars;
+
+    expect(second).toBe(first);
+  });
+
+  it('keeps the local avatar id stable across duplicate updates', () => {
+    if (!openWork) throw new Error('expected open work area');
+    const store = useThreeDStore.getState();
+    store.upsertAvatar({
+      id: 'local',
+      displayName: 'Alex',
+      roomId: openWork.id,
+      isLocal: true,
+    });
+    expect(useThreeDStore.getState().localAvatarId).toBe('local');
+
+    store.upsertAvatar({
+      id: 'local',
+      displayName: 'Alex',
+      roomId: openWork.id,
+      isLocal: true,
+    });
+    expect(useThreeDStore.getState().localAvatarId).toBe('local');
+  });
+});

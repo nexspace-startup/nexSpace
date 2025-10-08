@@ -41,8 +41,19 @@ export const resolveRoomForPosition = (
   return fallbackRoomId;
 };
 
-export const clampToCampusBounds = (position: Vector2, rooms: RoomDefinition[]): Vector2 => {
-  if (!rooms.length) return position;
+export type CampusBounds = {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  width: number;
+  height: number;
+};
+
+export const computeCampusBounds = (rooms: RoomDefinition[]): CampusBounds | null => {
+  if (!rooms.length) {
+    return null;
+  }
 
   let minX = Number.POSITIVE_INFINITY;
   let maxX = Number.NEGATIVE_INFINITY;
@@ -66,9 +77,23 @@ export const clampToCampusBounds = (position: Vector2, rooms: RoomDefinition[]):
     }
   });
 
+  return {
+    minX,
+    maxX,
+    minY,
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+};
+
+export const clampToCampusBounds = (position: Vector2, rooms: RoomDefinition[]): Vector2 => {
+  const bounds = computeCampusBounds(rooms);
+  if (!bounds) return position;
+
   const padding = 4;
   return {
-    x: clamp(position.x, minX - padding, maxX + padding),
-    y: clamp(position.y, minY - padding, maxY + padding),
+    x: clamp(position.x, bounds.minX - padding, bounds.maxX + padding),
+    y: clamp(position.y, bounds.minY - padding, bounds.maxY + padding),
   };
 };

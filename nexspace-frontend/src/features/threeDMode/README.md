@@ -24,11 +24,14 @@ It now renders the live campus scene plus supporting UI chrome:
   capsules that gently bob to signal presence.
 - Deterministic room-aware avatar layout for remote peers plus smooth WASD controls for the local
   user with collision bounds that keep everyone on campus.
-- A minimap with per-room occupancy counts.
+- An interactive minimap with per-room occupancy counts, click-to-waypoint navigation, and
+  Alt-click clearing so teammates can plot paths without breaking flow.
 - Join-nudge surface that deduplicates entries with a cooldown.
 - Quality selector with Low/Medium/High presets that map to renderer fidelity and shadows.
 - Live spatial audio routing tied to room boundaries and proximity falloff so conversations fade as
   people move away or enter other rooms.
+- Dynamic floor cues and in-scene waypoint markers that guide the local avatar toward selected
+  destinations while rendering shared guidance for remote teammates.
 
 ## Persistence & Settings
 
@@ -40,9 +43,9 @@ It now renders the live campus scene plus supporting UI chrome:
 ## Next Steps
 
 1. Wire the join-nudge actions (wave, invite, DM) into the communication stack.
-2. Add click-to-move navigation, waypoint cues, and on-floor wayfinding arrows.
-3. Model interactive room objects (whiteboards, seating, game tables) and connect them to the store.
-4. Integrate room media surfaces with screen share, spotlight mode, and embedded slides/video.
+2. Model interactive room objects (whiteboards, seating, game tables) and connect them to the store.
+3. Integrate room media surfaces with screen share, spotlight mode, and embedded slides/video.
+4. Layer in moderation controls (locks, invite-only huddles) and scheduling reminders tied to rooms.
 
 ## Development Notes
 

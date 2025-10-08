@@ -12,6 +12,20 @@ const AVATAR_BODY_RADIUS = 0.28;
 
 type AvatarSnapshot = ReturnType<typeof useThreeDStore.getState>['avatars'][string];
 
+const toThreeColor = (value: string): THREE.Color => {
+  if (/rgba?\(/i.test(value)) {
+    const match = value.match(/rgba?\(([^)]+)\)/i);
+    if (match) {
+      const [r, g, b] = match[1]
+        .split(',')
+        .slice(0, 3)
+        .map((component) => Number.parseFloat(component.trim()) || 0);
+      return new THREE.Color(r / 255, g / 255, b / 255);
+    }
+  }
+  return new THREE.Color(value);
+};
+
 const createLabelTexture = (text: string, color: string, accent: string): THREE.CanvasTexture => {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
@@ -70,7 +84,7 @@ const buildRoomMesh = (
   if (room.boundary.type === 'rect') {
     const geometry = new THREE.BoxGeometry(room.boundary.size[0], FLOOR_HEIGHT, room.boundary.size[1]);
     const material = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(room.themeColor).lerp(new THREE.Color(tokens.surfaceAlt), 0.35),
+      color: toThreeColor(room.themeColor).clone().lerp(toThreeColor(tokens.surfaceAlt), 0.35),
       transparent: true,
       opacity: 0.85,
     });
@@ -84,7 +98,7 @@ const buildRoomMesh = (
 
     const edges = new THREE.EdgesGeometry(geometry);
     const edgeMaterial = new THREE.LineBasicMaterial({
-      color: new THREE.Color(room.themeColor).lerp(new THREE.Color(tokens.textMuted), 0.2),
+      color: toThreeColor(room.themeColor).clone().lerp(toThreeColor(tokens.textMuted), 0.2),
       linewidth: 1,
     });
     const edgeLines = new THREE.LineSegments(edges, edgeMaterial);
@@ -103,7 +117,7 @@ const buildRoomMesh = (
       false,
     );
     const material = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(room.themeColor).lerp(new THREE.Color(tokens.surfaceAlt), 0.25),
+      color: toThreeColor(room.themeColor).clone().lerp(toThreeColor(tokens.surfaceAlt), 0.25),
       transparent: true,
       opacity: 0.9,
       side: THREE.DoubleSide,
@@ -119,7 +133,7 @@ const buildRoomMesh = (
       64,
     );
     const rimMaterial = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(room.themeColor),
+      color: toThreeColor(room.themeColor),
       side: THREE.DoubleSide,
     });
     const rim = new THREE.Mesh(rimGeometry, rimMaterial);
@@ -149,8 +163,10 @@ const buildAvatarMesh = (
   group.name = avatar.id;
 
   const baseColor = avatar.isLocal
-    ? new THREE.Color(tokens.accent)
-    : new THREE.Color(tokens.textSecondary).lerp(new THREE.Color(avatar.avatarUrl ? '#ffffff' : tokens.textPrimary), 0.25);
+    ? toThreeColor(tokens.accent)
+    : toThreeColor(tokens.textSecondary)
+        .clone()
+        .lerp(toThreeColor(avatar.avatarUrl ? '#ffffff' : tokens.textPrimary), 0.25);
 
   const bodyMaterial = new THREE.MeshStandardMaterial({
     color: baseColor,
@@ -165,7 +181,7 @@ const buildAvatarMesh = (
   group.add(body);
 
   const headMaterial = new THREE.MeshStandardMaterial({
-    color: avatar.isLocal ? new THREE.Color(tokens.surface) : baseColor.clone().offsetHSL(0, 0, 0.1),
+    color: avatar.isLocal ? toThreeColor(tokens.surface) : baseColor.clone().offsetHSL(0, 0, 0.1),
     metalness: 0.05,
     roughness: 0.4,
   });
@@ -241,11 +257,21 @@ const ThreeDScene: React.FC = () => {
   const rooms = useThreeDStore((state) => state.rooms);
   const avatars = useThreeDStore((state) => Object.values(state.avatars));
   const waypoints = useThreeDStore((state) => state.minimapWaypoints);
+  const localAvatarId = useThreeDStore((state) => state.localAvatarId);
 
   const sortedAvatars = useMemo(
     () =>
       [...avatars].sort((a, b) => (a.isLocal === b.isLocal ? a.id.localeCompare(b.id) : a.isLocal ? -1 : 1)),
     [avatars],
+  );
+
+  const avatarsById = useMemo(
+    () =>
+      sortedAvatars.reduce<Record<string, AvatarSnapshot>>((acc, avatar) => {
+        acc[avatar.id] = avatar;
+        return acc;
+      }, {}),
+    [sortedAvatars],
   );
 
   useEffect(() => {
@@ -291,7 +317,7 @@ const ThreeDScene: React.FC = () => {
 
     const groundGeometry = new THREE.PlaneGeometry(120, 120, 1, 1);
     const groundMaterial = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(tokens.background).lerp(new THREE.Color(tokens.surfaceAlt), 0.2),
+      color: toThreeColor(tokens.background).clone().lerp(toThreeColor(tokens.surfaceAlt), 0.2),
       roughness: 0.9,
       metalness: 0.05,
     });
@@ -357,8 +383,8 @@ const ThreeDScene: React.FC = () => {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    scene.background = new THREE.Color(tokens.background).lerp(
-      new THREE.Color(theme === 'dark' ? '#080912' : '#f1f5ff'),
+    scene.background = toThreeColor(tokens.background).clone().lerp(
+      toThreeColor(theme === 'dark' ? '#080912' : '#f1f5ff'),
       0.35,
     );
     scene.fog = new THREE.Fog(scene.background.getHex(), 40, 120);
@@ -367,8 +393,8 @@ const ThreeDScene: React.FC = () => {
       | THREE.Mesh
       | undefined;
     if (ground) {
-      (ground.material as THREE.MeshStandardMaterial).color = new THREE.Color(tokens.background).lerp(
-        new THREE.Color(tokens.surfaceAlt),
+      (ground.material as THREE.MeshStandardMaterial).color = toThreeColor(tokens.background).clone().lerp(
+        toThreeColor(tokens.surfaceAlt),
         0.2,
       );
     }
@@ -489,15 +515,85 @@ const ThreeDScene: React.FC = () => {
 
     Object.entries(waypoints).forEach(([avatarId, waypoint]) => {
       if (!waypoint) return;
-      const material = new THREE.MeshBasicMaterial({ color: tokens.accent, transparent: true, opacity: 0.7 });
-      const geometry = new THREE.ConeGeometry(0.45, 1.1, 16);
-      const cone = new THREE.Mesh(geometry, material);
+
+      const avatar = avatarsById[avatarId];
+      const accent = avatar?.isLocal ? tokens.accent : tokens.textSecondary;
+      const container = new THREE.Group();
+      container.name = `waypoint:${avatarId}`;
+
+      const coneMaterial = new THREE.MeshBasicMaterial({
+        color: toThreeColor(accent),
+        transparent: true,
+        opacity: avatar?.isLocal ? 0.85 : 0.65,
+      });
+      const coneGeometry = new THREE.ConeGeometry(0.45, 1.1, 16);
+      const cone = new THREE.Mesh(coneGeometry, coneMaterial);
       cone.position.set(waypoint.x, 0.55, waypoint.y);
       cone.rotation.x = Math.PI;
-      cone.name = `waypoint:${avatarId}`;
-      waypointGroup.add(cone);
+      container.add(cone);
+
+      if (avatar?.isLocal) {
+        const dx = waypoint.x - avatar.position.x;
+        const dy = waypoint.y - avatar.position.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance > 0.1) {
+          const steps = Math.min(7, Math.max(3, Math.ceil(distance / 2)));
+          const arrowMaterial = new THREE.MeshBasicMaterial({
+            color: toThreeColor(tokens.accent),
+            transparent: true,
+            opacity: 0.55,
+          });
+          const arrowGeometry = new THREE.ConeGeometry(0.22, 0.7, 12);
+          const heading = Math.atan2(dx, dy);
+
+          for (let i = 1; i <= steps; i += 1) {
+            const t = i / (steps + 1);
+            const arrow = new THREE.Mesh(arrowGeometry.clone(), arrowMaterial.clone());
+            arrow.position.set(
+              avatar.position.x + dx * t,
+              0.18 + (i % 2 === 0 ? 0.06 : 0),
+              avatar.position.y + dy * t,
+            );
+            arrow.rotation.x = Math.PI;
+            arrow.rotation.y = heading;
+            container.add(arrow);
+          }
+
+          arrowGeometry.dispose();
+          arrowMaterial.dispose();
+        }
+      } else if (localAvatarId) {
+        const localAvatar = avatarsById[localAvatarId];
+        if (localAvatar) {
+          const dx = waypoint.x - localAvatar.position.x;
+          const dy = waypoint.y - localAvatar.position.y;
+          const distance = Math.hypot(dx, dy);
+          if (distance > 0.1) {
+            const guideMaterial = new THREE.MeshBasicMaterial({
+              color: toThreeColor(tokens.textSecondary),
+              transparent: true,
+              opacity: 0.35,
+            });
+            const guideGeometry = new THREE.CylinderGeometry(0.04, 0.04, distance, 6);
+            const guide = new THREE.Mesh(guideGeometry, guideMaterial);
+            guide.position.set(
+              (waypoint.x + localAvatar.position.x) / 2,
+              0.02,
+              (waypoint.y + localAvatar.position.y) / 2,
+            );
+            const direction = new THREE.Vector3(dx, 0, dy);
+            if (direction.lengthSq() > 0) {
+              direction.normalize();
+              guide.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+            }
+            container.add(guide);
+          }
+        }
+      }
+
+      waypointGroup.add(container);
     });
-  }, [tokens, waypoints]);
+  }, [avatarsById, localAvatarId, tokens, waypoints]);
 
   return <div ref={containerRef} className="absolute inset-0" />;
 };

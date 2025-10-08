@@ -203,6 +203,25 @@ export const useThreeDStore = create<ThreeDState>()(
         const resolvedAvatarUrl = input.avatarUrl ?? previous?.avatarUrl;
         const resolvedIsLocal = input.isLocal ?? previous?.isLocal ?? false;
 
+        let joinNudges = state.joinNudges;
+        let lastNudgeByAvatar = state.lastNudgeByAvatar;
+
+        const localId = state.localAvatarId ?? (resolvedIsLocal ? input.id : null);
+
+        const noChange =
+          !!previous &&
+          previous.roomId === resolvedRoomId &&
+          previous.displayName === resolvedDisplayName &&
+          previous.status === resolvedStatus &&
+          previous.avatarUrl === resolvedAvatarUrl &&
+          previous.isLocal === resolvedIsLocal &&
+          positionsEqual(previous.position, resolvedPosition) &&
+          state.localAvatarId === localId;
+
+        if (noChange) {
+          return state;
+        }
+
         const updated: AvatarRuntimeState = {
           id: input.id,
           roomId: resolvedRoomId,
@@ -213,11 +232,6 @@ export const useThreeDStore = create<ThreeDState>()(
           isLocal: resolvedIsLocal,
           lastActiveTs: Date.now(),
         };
-
-        let joinNudges = state.joinNudges;
-        let lastNudgeByAvatar = state.lastNudgeByAvatar;
-
-        const localId = state.localAvatarId ?? (resolvedIsLocal ? input.id : null);
         const localAvatar = localId
           ? input.id === localId
             ? updated

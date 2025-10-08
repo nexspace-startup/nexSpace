@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { clampToCampusBounds, pointInCircle, pointInRect, resolveRoomForPosition } from '../utils/spatial';
+import {
+  clampToCampusBounds,
+  computeCampusBounds,
+  pointInCircle,
+  pointInRect,
+  resolveRoomForPosition,
+} from '../utils/spatial';
 import { defaultRooms } from '../config/rooms';
 
 const fallbackRoomId = defaultRooms[0]?.id ?? 'open-work-area';
@@ -36,5 +42,19 @@ describe('spatial utils', () => {
     const clamped = clampToCampusBounds({ x: 999, y: -999 }, defaultRooms);
     expect(clamped.x).toBeLessThan(40);
     expect(clamped.y).toBeGreaterThan(-40);
+  });
+
+  it('computes campus bounds extents', () => {
+    const bounds = computeCampusBounds(defaultRooms);
+    expect(bounds).not.toBeNull();
+    if (!bounds) return;
+    expect(bounds.minX).toBeLessThan(bounds.maxX);
+    expect(bounds.width).toBeCloseTo(bounds.maxX - bounds.minX);
+    expect(bounds.height).toBeCloseTo(bounds.maxY - bounds.minY);
+  });
+
+  it('returns null bounds when rooms are empty', () => {
+    const bounds = computeCampusBounds([]);
+    expect(bounds).toBeNull();
   });
 });
