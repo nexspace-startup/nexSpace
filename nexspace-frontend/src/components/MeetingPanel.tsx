@@ -5,7 +5,6 @@ import "@livekit/components-styles";
 import { useShallow } from "zustand/react/shallow";
 import MeetingControls from "./MeetingControls";
 import MeetingGrid from "./MeetingGrid";
-import Meeting3D from "./Meeting3D";
 import TopWidget from "./TopWidget";
 import ChatPanel from "./ChatPanel";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -156,7 +155,9 @@ const MeetingPanel: React.FC = () => {
 
           {/* Stage: Grid or 3D */}
           {viewMode === '3d' ? (
-            <Meeting3D bottomSafeAreaPx={0} topSafeAreaPx={0} />
+
+            <div className="grid place-items-center h-full text-white">3D View Coming Soon!</div>
+
           ) : (
             <MeetingGrid pageSize={24} bottomSafeAreaPx={isMobile ? 96 : 120} topSafeAreaPx={showTop ? 96 : 16} />
           )}
