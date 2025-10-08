@@ -7,6 +7,7 @@ import MeetingControls from "./MeetingControls";
 import MeetingGrid from "./MeetingGrid";
 import TopWidget from "./TopWidget";
 import ChatPanel from "./ChatPanel";
+import ThreeDExperience from "../features/threeDMode/components/ThreeDExperience";
 import { useMeetingStore } from "../stores/meetingStore";
 import { useUIStore } from "../stores/uiStore";
 import { useMediaQuery } from "../hooks/useMedia";
@@ -155,9 +156,7 @@ const MeetingPanel: React.FC = () => {
 
           {/* Stage: Grid or 3D */}
           {viewMode === '3d' ? (
-
-            <div className="grid place-items-center h-full text-white">3D View Coming Soon!</div>
-
+            <ThreeDExperience />
           ) : (
             <MeetingGrid pageSize={24} bottomSafeAreaPx={isMobile ? 96 : 120} topSafeAreaPx={showTop ? 96 : 16} />
           )}

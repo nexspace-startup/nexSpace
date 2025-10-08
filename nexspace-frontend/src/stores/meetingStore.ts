@@ -118,6 +118,7 @@ export type MeetingState = {
 const PRESENCE_STATUS_KEY = "presence_status";
 const PRESENCE_TS_KEY = "presence_ts";
 const VALID_PRESENCE_STATUSES = new Set<PresenceStatus>(Object.values(PresenceStatusConstants));
+const VIEW_MODE_STORAGE_KEY = 'meeting:viewMode';
 
 const normalizePresenceStatus = (value?: unknown): PresenceStatus | null => {
   if (typeof value !== "string") return null;
@@ -792,7 +793,15 @@ export const useMeetingStore = create<MeetingState>()(
       unreadCount: 0,
       messages: [],
       activeDMPeer: null,
-      viewMode: 'grid',
+      viewMode: (() => {
+        if (typeof window === 'undefined') return 'grid';
+        try {
+          const stored = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+          return stored === '3d' ? '3d' : 'grid';
+        } catch {
+          return 'grid';
+        }
+      })(),
 
       // Actions
       setRoom: (room) => {
@@ -809,7 +818,14 @@ export const useMeetingStore = create<MeetingState>()(
         }
       },
 
-      setViewMode: (mode) => set({ viewMode: mode }),
+      setViewMode: (mode) => {
+        try {
+          window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+        } catch {
+          // Ignore storage failures (e.g. Safari private mode)
+        }
+        set({ viewMode: mode });
+      },
 
       toggleMic: async () => {
         const room = get().room;
