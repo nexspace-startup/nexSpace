@@ -20,18 +20,23 @@ layouts that future milestones can wire into realtime audio/video, huddles, and 
 The `ThreeDExperience` component is wired into `MeetingPanel` when the view mode is set to `3d`.
 It now renders the live campus scene plus supporting UI chrome:
 
-- A performant Three.js scene with baked ambient lighting, room floor meshes, labels, and avatar
-  capsules that gently bob to signal presence.
+- A performant Three.js scene with baked ambient lighting, themed room builds, and avatar capsules
+  that gently bob to signal presence.
 - Deterministic room-aware avatar layout for remote peers plus smooth WASD controls for the local
   user with collision bounds that keep everyone on campus.
 - An interactive minimap with per-room occupancy counts, click-to-waypoint navigation, and
   Alt-click clearing so teammates can plot paths without breaking flow.
-- Join-nudge surface that deduplicates entries with a cooldown.
+- A collapsible control dock that houses room status, the minimap, quality presets, and the new
+  first-person/third-person view toggle.
+- Join-nudge surface that deduplicates entries with a cooldown and now triggers wave, huddle, and
+  DM actions via the meeting store.
 - Quality selector with Low/Medium/High presets that map to renderer fidelity and shadows.
 - Live spatial audio routing tied to room boundaries and proximity falloff so conversations fade as
   people move away or enter other rooms.
 - Dynamic floor cues and in-scene waypoint markers that guide the local avatar toward selected
   destinations while rendering shared guidance for remote teammates.
+- Distinct room decor for each zone (desks in the open area, lounge seating, conference tables,
+  event stage, etc.) to reinforce sense of place without sacrificing performance.
 
 ## Persistence & Settings
 
@@ -42,10 +47,9 @@ It now renders the live campus scene plus supporting UI chrome:
 
 ## Next Steps
 
-1. Wire the join-nudge actions (wave, invite, DM) into the communication stack.
-2. Model interactive room objects (whiteboards, seating, game tables) and connect them to the store.
-3. Integrate room media surfaces with screen share, spotlight mode, and embedded slides/video.
-4. Layer in moderation controls (locks, invite-only huddles) and scheduling reminders tied to rooms.
+1. Model interactive room objects (whiteboards, seating, game tables) and connect them to the store.
+2. Integrate room media surfaces with screen share, spotlight mode, and embedded slides/video.
+3. Layer in moderation controls (locks, invite-only huddles) and scheduling reminders tied to rooms.
 
 ## Development Notes
 

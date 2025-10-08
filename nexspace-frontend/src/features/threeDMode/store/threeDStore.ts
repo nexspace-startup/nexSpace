@@ -8,6 +8,8 @@ import { clampToCampusBounds, resolveRoomForPosition } from '../utils/spatial';
 export type Vector2 = { x: number; y: number };
 export type QualityLevel = 'low' | 'medium' | 'high';
 
+export type CameraMode = 'first-person' | 'third-person';
+
 export type AvatarRuntimeState = {
   id: string;
   displayName: string;
@@ -17,6 +19,7 @@ export type AvatarRuntimeState = {
   isLocal: boolean;
   avatarUrl?: string;
   lastActiveTs: number;
+  heading: number;
 };
 
 export type JoinNudge = {
@@ -43,6 +46,7 @@ type ThreeDState = {
   avatars: Record<string, AvatarRuntimeState>;
   minimapWaypoints: Record<string, Vector2 | null>;
   quality: QualityLevel;
+  cameraMode: CameraMode;
   joinNudges: JoinNudge[];
   lastNudgeByAvatar: Record<string, number>;
   joinNudgeCooldownMs: number;
@@ -54,6 +58,7 @@ type ThreeDState = {
   popJoinNudge: () => JoinNudge | null;
   clearJoinNudges: () => void;
   setQuality: (quality: QualityLevel) => void;
+  setCameraMode: (mode: CameraMode) => void;
   setAvatarPosition: (id: string, position: Vector2) => void;
   syncRoster: (payload: {
     participants: Array<Pick<PartialAvatarInput, 'id' | 'displayName' | 'avatarUrl' | 'status' | 'isLocal'>>;
@@ -82,7 +87,7 @@ const applyRoomLayout = (
     }
 
     const nextPosition = layout[id] ?? avatar.position ?? FALLBACK_POSITION;
-    acc[id] = { ...avatar, position: nextPosition };
+    acc[id] = { ...avatar, position: nextPosition, heading: avatar.heading ?? 0 };
     return acc;
   }, {});
 };
@@ -100,6 +105,7 @@ export const useThreeDStore = create<ThreeDState>()(
     avatars: {},
     minimapWaypoints: {},
     quality: 'medium',
+    cameraMode: 'third-person',
     joinNudges: [],
     lastNudgeByAvatar: {},
     joinNudgeCooldownMs: 45_000,
@@ -121,6 +127,14 @@ export const useThreeDStore = create<ThreeDState>()(
 
     setQuality: (quality) => set({ quality }),
 
+    setCameraMode: (mode) =>
+      set((state) => {
+        if (state.cameraMode === mode) {
+          return state;
+        }
+        return { cameraMode: mode };
+      }),
+
     markWaypoint: (avatarId, waypoint) =>
       set((state) => ({
         minimapWaypoints: { ...state.minimapWaypoints, [avatarId]: waypoint },
@@ -134,7 +148,16 @@ export const useThreeDStore = create<ThreeDState>()(
         const clamped = clampToCampusBounds(position, state.rooms);
         const nextRoomId = resolveRoomForPosition(clamped, state.rooms, fallbackRoomId);
 
-        if (positionsEqual(avatar.position, clamped) && avatar.roomId === nextRoomId) {
+        const dx = clamped.x - avatar.position.x;
+        const dy = clamped.y - avatar.position.y;
+        const delta = Math.hypot(dx, dy);
+        const nextHeading = delta < 0.001 ? avatar.heading : Math.atan2(dx, dy);
+
+        if (
+          positionsEqual(avatar.position, clamped) &&
+          avatar.roomId === nextRoomId &&
+          Math.abs((avatar.heading ?? 0) - nextHeading) < 0.001
+        ) {
           return state;
         }
 
@@ -143,6 +166,7 @@ export const useThreeDStore = create<ThreeDState>()(
           position: clamped,
           roomId: nextRoomId,
           lastActiveTs: Date.now(),
+          heading: Number.isFinite(nextHeading) ? nextHeading : avatar.heading,
         };
 
         const patch: Partial<ThreeDState> = {
@@ -229,6 +253,7 @@ export const useThreeDStore = create<ThreeDState>()(
             avatarUrl: resolvedAvatarUrl,
             isLocal: resolvedIsLocal,
             lastActiveTs: changed ? now : previous?.lastActiveTs ?? now,
+            heading: previous?.heading ?? 0,
           };
         });
 
@@ -318,7 +343,8 @@ export const useThreeDStore = create<ThreeDState>()(
               prevAvatar.avatarUrl !== nextAvatar.avatarUrl ||
               prevAvatar.isLocal !== nextAvatar.isLocal ||
               prevAvatar.lastActiveTs !== nextAvatar.lastActiveTs ||
-              !positionsEqual(prevAvatar.position, nextAvatar.position)
+              !positionsEqual(prevAvatar.position, nextAvatar.position) ||
+              Math.abs((prevAvatar.heading ?? 0) - (nextAvatar.heading ?? 0)) > 0.001
             );
           });
 
@@ -364,6 +390,7 @@ export const useThreeDStore = create<ThreeDState>()(
         const resolvedStatus = input.status ?? previous?.status;
         const resolvedAvatarUrl = input.avatarUrl ?? previous?.avatarUrl;
         const resolvedIsLocal = input.isLocal ?? previous?.isLocal ?? false;
+        const resolvedHeading = previous?.heading ?? 0;
 
         let joinNudges = state.joinNudges;
         let lastNudgeByAvatar = state.lastNudgeByAvatar;
@@ -378,6 +405,7 @@ export const useThreeDStore = create<ThreeDState>()(
           previous.avatarUrl === resolvedAvatarUrl &&
           previous.isLocal === resolvedIsLocal &&
           positionsEqual(previous.position, resolvedPosition) &&
+          Math.abs((previous.heading ?? 0) - resolvedHeading) < 0.001 &&
           state.localAvatarId === localId;
 
         if (noChange) {
@@ -393,6 +421,7 @@ export const useThreeDStore = create<ThreeDState>()(
           avatarUrl: resolvedAvatarUrl,
           isLocal: resolvedIsLocal,
           lastActiveTs: Date.now(),
+          heading: resolvedHeading,
         };
         const localAvatar = localId
           ? input.id === localId

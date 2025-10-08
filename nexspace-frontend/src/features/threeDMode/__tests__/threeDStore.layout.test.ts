@@ -11,6 +11,7 @@ describe('threeDStore layout distribution', () => {
       joinNudges: [],
       lastNudgeByAvatar: {},
       minimapWaypoints: {},
+      cameraMode: 'third-person',
     });
   });
 

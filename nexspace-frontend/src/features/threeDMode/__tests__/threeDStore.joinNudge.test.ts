@@ -14,6 +14,7 @@ describe('threeDStore join nudge logic', () => {
       lastNudgeByAvatar: {},
       minimapWaypoints: {},
       joinNudgeCooldownMs: 3_000,
+      cameraMode: 'third-person',
     });
 
     useThreeDStore.getState().upsertAvatar({
@@ -21,6 +22,7 @@ describe('threeDStore join nudge logic', () => {
       displayName: 'You',
       roomId: fallbackRoom,
       isLocal: true,
+      position: { x: 0, y: 0 },
     });
   });
 

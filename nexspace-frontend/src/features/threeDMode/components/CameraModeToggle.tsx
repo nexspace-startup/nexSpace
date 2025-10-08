@@ -1,21 +1,16 @@
 import React from 'react';
-import { useThreeDStore, type QualityLevel } from '../store/threeDStore';
+import { useThreeDStore, type CameraMode } from '../store/threeDStore';
 import { useUIStore } from '../../../stores/uiStore';
 import { getThemeTokens } from '../../../constants/themeTokens';
 
-const QUALITY_OPTIONS: Array<{ value: QualityLevel; label: string; hint: string }> = [
-  { value: 'low', label: 'Low', hint: 'Best for battery & low-end GPUs' },
-  { value: 'medium', label: 'Balanced', hint: 'Default visual fidelity' },
-  { value: 'high', label: 'High', hint: 'Max shadows & post effects' },
+const CAMERA_OPTIONS: Array<{ value: CameraMode; label: string; hint: string }> = [
+  { value: 'third-person', label: 'Third-person', hint: 'Wide, over-the-shoulder campus view' },
+  { value: 'first-person', label: 'First-person', hint: 'Immersive, eye-level walk mode' },
 ];
 
-type QualitySelectorProps = {
-  showHeading?: boolean;
-};
-
-const QualitySelector: React.FC<QualitySelectorProps> = ({ showHeading = true }) => {
-  const quality = useThreeDStore((s) => s.quality);
-  const setQuality = useThreeDStore((s) => s.setQuality);
+const CameraModeToggle: React.FC = () => {
+  const mode = useThreeDStore((s) => s.cameraMode);
+  const setMode = useThreeDStore((s) => s.setCameraMode);
   const theme = useUIStore((s) => s.theme);
   const tokens = getThemeTokens(theme);
 
@@ -24,18 +19,16 @@ const QualitySelector: React.FC<QualitySelectorProps> = ({ showHeading = true })
       className="w-full rounded-3xl border px-4 py-3 shadow-lg backdrop-blur-xl"
       style={{ background: tokens.surface, borderColor: tokens.borderSoft }}
     >
-      {showHeading && (
-        <p className="text-xs uppercase tracking-[0.28em]" style={{ color: tokens.textMuted }}>
-          Quality & Performance
-        </p>
-      )}
-      <div className={`${showHeading ? 'mt-2' : 'mt-1'} flex flex-col gap-2`}>
-        {QUALITY_OPTIONS.map((option) => {
-          const isActive = quality === option.value;
+      <p className="text-xs uppercase tracking-[0.28em]" style={{ color: tokens.textMuted }}>
+        View Mode
+      </p>
+      <div className="mt-2 flex flex-col gap-2">
+        {CAMERA_OPTIONS.map((option) => {
+          const isActive = option.value === mode;
           return (
             <button
               key={option.value}
-              onClick={() => setQuality(option.value)}
+              onClick={() => setMode(option.value)}
               className="flex items-start gap-3 rounded-2xl px-3 py-2 text-left transition"
               style={{
                 background: isActive ? tokens.accentSoft : tokens.surfaceAlt,
@@ -60,4 +53,4 @@ const QualitySelector: React.FC<QualitySelectorProps> = ({ showHeading = true })
   );
 };
 
-export default QualitySelector;
+export default CameraModeToggle;

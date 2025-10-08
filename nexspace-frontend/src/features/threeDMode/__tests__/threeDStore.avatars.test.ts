@@ -13,6 +13,7 @@ describe('threeDStore avatar updates', () => {
       joinNudges: [],
       lastNudgeByAvatar: {},
       minimapWaypoints: {},
+      cameraMode: 'third-person',
     });
   });
 
@@ -93,5 +94,21 @@ describe('threeDStore avatar updates', () => {
 
     expect(secondAvatars).toBe(firstAvatars);
     expect(secondLocalId).toBe(firstLocalId);
+  });
+
+  it('updates heading when the local avatar moves', () => {
+    if (!openWork) throw new Error('expected open work area');
+    const store = useThreeDStore.getState();
+    store.upsertAvatar({
+      id: 'local',
+      displayName: 'Alex',
+      roomId: openWork.id,
+      isLocal: true,
+      position: { x: 0, y: 0 },
+    });
+
+    useThreeDStore.getState().setAvatarPosition('local', { x: 1, y: 0 });
+    const updated = useThreeDStore.getState().avatars['local'];
+    expect(updated.heading).toBeCloseTo(Math.atan2(1, 0));
   });
 });

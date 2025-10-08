@@ -12,7 +12,11 @@ const roomColorFor = (rooms: RoomDefinition[], roomId: string | undefined, fallb
   return rooms.find((room) => room.id === roomId)?.themeColor ?? fallback;
 };
 
-const ThreeDMinimap: React.FC = () => {
+type ThreeDMinimapProps = {
+  showHeader?: boolean;
+};
+
+const ThreeDMinimap: React.FC<ThreeDMinimapProps> = ({ showHeader = true }) => {
   const rooms = useThreeDStore((s) => s.rooms);
   const avatars = useThreeDStore((s) => s.avatars);
   const localAvatarId = useThreeDStore((s) => s.localAvatarId);
@@ -85,27 +89,29 @@ const ThreeDMinimap: React.FC = () => {
 
   return (
     <div
-      className="rounded-3xl border shadow-2xl backdrop-blur-xl"
+      className="w-full rounded-3xl border shadow-2xl backdrop-blur-xl"
       style={{
         borderColor: tokens.borderSoft,
         background: tokens.surface,
       }}
     >
-      <div className="flex items-center justify-between px-4 pt-3">
-        <div>
-          <p className="text-xs uppercase tracking-[0.28em]" style={{ color: tokens.textMuted }}>
-            Minimap
-          </p>
-          <p className="text-sm font-semibold" style={{ color: tokens.textPrimary }}>
-            Live campus overview
-          </p>
+      {showHeader && (
+        <div className="flex items-center justify-between px-4 pt-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.28em]" style={{ color: tokens.textMuted }}>
+              Minimap
+            </p>
+            <p className="text-sm font-semibold" style={{ color: tokens.textPrimary }}>
+              Live campus overview
+            </p>
+          </div>
+          <span className="text-xs font-medium" style={{ color: tokens.textSecondary }}>
+            {totalAvatars} online
+          </span>
         </div>
-        <span className="text-xs font-medium" style={{ color: tokens.textSecondary }}>
-          {totalAvatars} online
-        </span>
-      </div>
+      )}
       <div
-        className="mx-4 mt-3 rounded-2xl border"
+        className={`mx-4 ${showHeader ? 'mt-3' : 'mt-4'} rounded-2xl border`}
         style={{
           borderColor: tokens.borderSoft,
           background: tokens.surfaceAlt,

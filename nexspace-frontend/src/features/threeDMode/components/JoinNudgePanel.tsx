@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { useThreeDStore } from '../store/threeDStore';
 import { useUIStore } from '../../../stores/uiStore';
 import { getThemeTokens } from '../../../constants/themeTokens';
+import { useMeetingStore } from '../../../stores/meetingStore';
 
 const JoinNudgePanel: React.FC = () => {
   const joinNudge = useThreeDStore((s) => s.joinNudges[0] ?? null);
@@ -17,7 +18,29 @@ const JoinNudgePanel: React.FC = () => {
 
   if (!joinNudge) return null;
 
-  const handleAction = () => {
+  const handleWave = () => {
+    const meeting = useMeetingStore.getState();
+    const message = `👋 says hi to ${joinNudge.displayName}${roomName ? ` in ${roomName}` : ''}!`;
+    void meeting.sendMessage(message);
+    popJoinNudge();
+  };
+
+  const handleInvite = () => {
+    const meeting = useMeetingStore.getState();
+    void meeting.startWhisper(joinNudge.avatarId);
+    popJoinNudge();
+  };
+
+  const handleDM = () => {
+    const meeting = useMeetingStore.getState();
+    if (!meeting.chatOpen) {
+      meeting.toggleChat();
+    }
+    meeting.setActiveDMPeer(joinNudge.avatarId);
+    popJoinNudge();
+  };
+
+  const handleDismiss = () => {
     popJoinNudge();
   };
 
@@ -46,28 +69,45 @@ const JoinNudgePanel: React.FC = () => {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {[
-            { label: 'Wave hello', icon: '🖐️' },
-            { label: 'Invite to huddle', icon: '🎯' },
-            { label: 'Send DM', icon: '💬' },
-          ].map((action) => (
-            <button
-              key={action.label}
-              onClick={handleAction}
-              className="flex flex-1 min-w-[120px] items-center justify-center gap-2 rounded-2xl px-3 py-2 text-sm font-medium transition"
-              style={{
-                background: tokens.surfaceAlt,
-                color: tokens.textPrimary,
-                border: `1px solid ${tokens.borderSoft}`,
-              }}
-            >
-              <span aria-hidden>{action.icon}</span>
-              {action.label}
-            </button>
-          ))}
+          <button
+            onClick={handleWave}
+            className="flex flex-1 min-w-[120px] items-center justify-center gap-2 rounded-2xl px-3 py-2 text-sm font-medium transition"
+            style={{
+              background: tokens.surfaceAlt,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.borderSoft}`,
+            }}
+          >
+            <span aria-hidden>🖐️</span>
+            Wave hello
+          </button>
+          <button
+            onClick={handleInvite}
+            className="flex flex-1 min-w-[120px] items-center justify-center gap-2 rounded-2xl px-3 py-2 text-sm font-medium transition"
+            style={{
+              background: tokens.surfaceAlt,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.borderSoft}`,
+            }}
+          >
+            <span aria-hidden>🎯</span>
+            Invite to huddle
+          </button>
+          <button
+            onClick={handleDM}
+            className="flex flex-1 min-w-[120px] items-center justify-center gap-2 rounded-2xl px-3 py-2 text-sm font-medium transition"
+            style={{
+              background: tokens.surfaceAlt,
+              color: tokens.textPrimary,
+              border: `1px solid ${tokens.borderSoft}`,
+            }}
+          >
+            <span aria-hidden>💬</span>
+            Send DM
+          </button>
         </div>
         <button
-          onClick={handleAction}
+          onClick={handleDismiss}
           className="self-end text-xs font-semibold uppercase tracking-[0.3em]"
           style={{ color: tokens.textMuted }}
         >
