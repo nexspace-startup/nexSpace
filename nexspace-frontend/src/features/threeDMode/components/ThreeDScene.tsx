@@ -575,6 +575,13 @@ const ThreeDScene: React.FC = () => {
   const avatarGroupRef = useRef<THREE.Group | null>(null);
   const roomsGroupRef = useRef<THREE.Group | null>(null);
   const clockRef = useRef(new THREE.Clock());
+  const orbitStateRef = useRef({
+    yaw: Math.PI / 4,
+    pitch: 0.32,
+    distance: 18,
+    target: new THREE.Vector3(0, AVATAR_HEIGHT * 0.75, 0),
+  });
+  const firstPersonPitchRef = useRef(0);
 
   useThreeDMovement();
 
@@ -614,6 +621,27 @@ const ThreeDScene: React.FC = () => {
     latestCameraStateRef.current.avatars = avatarsById;
     latestCameraStateRef.current.mode = cameraMode;
   }, [avatarsById, cameraMode, localAvatarId]);
+
+  useEffect(() => {
+    const camera = cameraRef.current;
+    if (!camera) return;
+    if (cameraMode === 'first-person') {
+      firstPersonPitchRef.current = 0;
+      camera.fov = 60;
+      camera.updateProjectionMatrix();
+    } else {
+      camera.fov = 48;
+      camera.updateProjectionMatrix();
+    }
+  }, [cameraMode]);
+
+  useEffect(() => {
+    if (!localAvatarId) return;
+    const avatar = avatarsById[localAvatarId];
+    if (!avatar) return;
+    const orbit = orbitStateRef.current;
+    orbit.target.set(avatar.position.x, AVATAR_HEIGHT * 0.75, avatar.position.y);
+  }, [avatarsById, localAvatarId]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -679,6 +707,115 @@ const ThreeDScene: React.FC = () => {
     waypointGroup.name = 'waypoints';
     scene.add(waypointGroup);
 
+    const element = renderer.domElement;
+    element.style.cursor = 'grab';
+    const pointerLast = { x: 0, y: 0 };
+    let pointerActive = false;
+    let pointerId: number | null = null;
+    let pointerButton: number | null = null;
+    const panForward = new THREE.Vector3();
+    const panRight = new THREE.Vector3();
+    const panUp = new THREE.Vector3(0, 1, 0);
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (![0, 1, 2].includes(event.button)) return;
+      pointerActive = true;
+      pointerId = event.pointerId;
+      pointerButton = event.button;
+      pointerLast.x = event.clientX;
+      pointerLast.y = event.clientY;
+      element.setPointerCapture(event.pointerId);
+      element.style.cursor = 'grabbing';
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!pointerActive || pointerId === null || event.pointerId !== pointerId) return;
+      const dx = event.clientX - pointerLast.x;
+      const dy = event.clientY - pointerLast.y;
+      pointerLast.x = event.clientX;
+      pointerLast.y = event.clientY;
+      if (dx === 0 && dy === 0) return;
+
+      const cameraState = latestCameraStateRef.current;
+      const store = useThreeDStore.getState();
+
+      if (cameraState.mode === 'first-person') {
+        const localId = cameraState.localAvatarId;
+        if (!localId) return;
+        const avatar = store.avatars[localId];
+        if (!avatar) return;
+        const sensitivity = 0.0045;
+        const nextHeading = (avatar.heading ?? 0) - dx * sensitivity;
+        const nextPitch = THREE.MathUtils.clamp(
+          firstPersonPitchRef.current - dy * sensitivity * 0.75,
+          -Math.PI / 3,
+          Math.PI / 3,
+        );
+        firstPersonPitchRef.current = nextPitch;
+        store.setAvatarHeading(localId, nextHeading);
+      } else {
+        const orbit = orbitStateRef.current;
+        const rotate = (pointerButton ?? 0) === 0 && !event.shiftKey;
+        const activeCamera = cameraRef.current;
+        if (!activeCamera) return;
+        if (rotate) {
+          orbit.yaw -= dx * 0.0045;
+          orbit.pitch = THREE.MathUtils.clamp(orbit.pitch - dy * 0.003, 0.05, Math.PI / 2 - 0.1);
+          const localId = cameraState.localAvatarId;
+          if (localId && store.avatars[localId]) {
+            store.setAvatarHeading(localId, orbit.yaw + Math.PI);
+          }
+        } else {
+          const panSpeed = orbit.distance * 0.0025;
+          activeCamera.getWorldDirection(panForward);
+          panForward.y = 0;
+          if (panForward.lengthSq() > 0) {
+            panForward.normalize();
+          }
+          panRight.crossVectors(panUp, panForward).normalize();
+          orbit.target.addScaledVector(panRight, -dx * panSpeed);
+          orbit.target.addScaledVector(panUp, dy * panSpeed);
+        }
+      }
+    };
+
+    const resetPointerState = (event: PointerEvent) => {
+      if (pointerId === null || event.pointerId !== pointerId) return;
+      pointerActive = false;
+      pointerId = null;
+      pointerButton = null;
+      element.releasePointerCapture(event.pointerId);
+      element.style.cursor = 'grab';
+    };
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const cameraState = latestCameraStateRef.current;
+      if (cameraState.mode === 'first-person') {
+        const activeCamera = cameraRef.current;
+        if (!activeCamera) return;
+        activeCamera.fov = THREE.MathUtils.clamp(activeCamera.fov + event.deltaY * 0.02, 40, 80);
+        activeCamera.updateProjectionMatrix();
+      } else {
+        const orbit = orbitStateRef.current;
+        orbit.distance = THREE.MathUtils.clamp(orbit.distance + event.deltaY * 0.01, 6, 60);
+      }
+    };
+
+    const preventContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+
+    const wheelListener: EventListener = (event) => handleWheel(event as WheelEvent);
+
+    element.addEventListener('pointerdown', handlePointerDown);
+    element.addEventListener('pointermove', handlePointerMove);
+    element.addEventListener('pointerup', resetPointerState);
+    element.addEventListener('pointerleave', resetPointerState);
+    element.addEventListener('pointercancel', resetPointerState);
+    element.addEventListener('wheel', wheelListener, { passive: false });
+    element.addEventListener('contextmenu', preventContextMenu);
+
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         if (entry.target !== containerRef.current) continue;
@@ -710,38 +847,49 @@ const ThreeDScene: React.FC = () => {
       });
 
       const trackedCamera = cameraRef.current;
-      if (trackedCamera && cameraState.localAvatarId) {
-        const focusAvatar = cameraState.avatars[cameraState.localAvatarId];
-        if (focusAvatar) {
+      if (trackedCamera) {
+        const orbitState = orbitStateRef.current;
+        const focusAvatar = cameraState.localAvatarId
+          ? cameraState.avatars[cameraState.localAvatarId]
+          : undefined;
+
+        if (cameraState.mode === 'first-person' && focusAvatar) {
           const heading = focusAvatar.heading ?? 0;
-          const forward = new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading));
-          const baseTarget = new THREE.Vector3(
-            focusAvatar.position.x,
-            AVATAR_HEIGHT * 0.85,
-            focusAvatar.position.y,
+          const pitch = THREE.MathUtils.clamp(firstPersonPitchRef.current, -Math.PI / 3, Math.PI / 3);
+          const forward = new THREE.Vector3(
+            Math.sin(heading) * Math.cos(pitch),
+            Math.sin(pitch),
+            Math.cos(heading) * Math.cos(pitch),
+          );
+          const eye = new THREE.Vector3(focusAvatar.position.x, AVATAR_HEIGHT * 0.92, focusAvatar.position.y);
+          const lookTarget = eye.clone().add(forward.clone().multiplyScalar(6));
+          const desired = eye.clone().sub(forward.clone().multiplyScalar(0.2));
+          trackedCamera.position.lerp(desired, 0.25);
+          trackedCamera.lookAt(lookTarget);
+        } else {
+          const target = focusAvatar
+            ? new THREE.Vector3(focusAvatar.position.x, AVATAR_HEIGHT * 0.75, focusAvatar.position.y)
+            : orbitState.target;
+
+          if (focusAvatar) {
+            orbitState.target.lerp(target, 0.2);
+          }
+
+          const distance = THREE.MathUtils.clamp(orbitState.distance, 6, 60);
+          orbitState.distance = distance;
+          const yaw = orbitState.yaw;
+          const pitch = THREE.MathUtils.clamp(orbitState.pitch, 0.1, Math.PI / 2 - 0.12);
+          orbitState.pitch = pitch;
+
+          const offset = new THREE.Vector3(
+            Math.sin(yaw) * Math.cos(pitch) * distance,
+            Math.sin(pitch) * distance,
+            Math.cos(yaw) * Math.cos(pitch) * distance,
           );
 
-          if (cameraState.mode === 'first-person') {
-            const eye = new THREE.Vector3(focusAvatar.position.x, AVATAR_HEIGHT * 0.92, focusAvatar.position.y);
-            const lookTarget = eye.clone().add(forward.clone().multiplyScalar(6));
-            const desired = eye
-              .clone()
-              .sub(forward.clone().multiplyScalar(0.18))
-              .add(new THREE.Vector3(0, 0.04, 0));
-            trackedCamera.position.lerp(desired, 0.22);
-            trackedCamera.lookAt(lookTarget);
-          } else {
-            const side = new THREE.Vector3(-forward.z, 0, forward.x);
-            const desired = new THREE.Vector3(
-              focusAvatar.position.x,
-              AVATAR_HEIGHT * 0.9 + 4.6,
-              focusAvatar.position.y,
-            )
-              .add(forward.clone().multiplyScalar(-7.2))
-              .add(side.multiplyScalar(1.8));
-            trackedCamera.position.lerp(desired, 0.12);
-            trackedCamera.lookAt(baseTarget.clone().add(new THREE.Vector3(0, 0.4, 0)));
-          }
+          const desired = orbitState.target.clone().add(offset);
+          trackedCamera.position.lerp(desired, 0.12);
+          trackedCamera.lookAt(orbitState.target.clone().add(new THREE.Vector3(0, 0.6, 0)));
         }
       }
 
@@ -753,6 +901,14 @@ const ThreeDScene: React.FC = () => {
     return () => {
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
+      element.removeEventListener('pointerdown', handlePointerDown);
+      element.removeEventListener('pointermove', handlePointerMove);
+      element.removeEventListener('pointerup', resetPointerState);
+      element.removeEventListener('pointerleave', resetPointerState);
+      element.removeEventListener('pointercancel', resetPointerState);
+      element.removeEventListener('wheel', wheelListener);
+      element.removeEventListener('contextmenu', preventContextMenu);
+      element.style.cursor = '';
       renderer.dispose();
       if (renderer.domElement.parentElement === containerRef.current) {
         containerRef.current?.removeChild(renderer.domElement);

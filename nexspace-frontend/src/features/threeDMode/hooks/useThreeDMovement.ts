@@ -67,13 +67,34 @@ export const useThreeDMovement = (): void => {
         }
       });
 
+      let worldX = 0;
+      let worldY = 0;
+
       if (inputX !== 0 || inputY !== 0) {
         const length = Math.hypot(inputX, inputY) || 1;
-        inputX /= length;
-        inputY /= length;
+        const normalizedX = inputX / length;
+        const normalizedY = inputY / length;
 
-        velocityRef.current.x = velocityRef.current.x + (inputX * MOVEMENT_SPEED - velocityRef.current.x) * Math.min(1, ACCELERATION * delta);
-        velocityRef.current.y = velocityRef.current.y + (inputY * MOVEMENT_SPEED - velocityRef.current.y) * Math.min(1, ACCELERATION * delta);
+        const state = useThreeDStore.getState();
+        const useRelative = state.cameraMode === 'first-person' || state.cameraMode === 'third-person';
+
+        if (useRelative) {
+          const heading = avatar.heading ?? 0;
+          const forwardX = Math.sin(heading);
+          const forwardY = Math.cos(heading);
+          const rightX = Math.cos(heading);
+          const rightY = -Math.sin(heading);
+          const forwardInput = -normalizedY;
+          const strafeInput = normalizedX;
+          worldX = forwardX * forwardInput + rightX * strafeInput;
+          worldY = forwardY * forwardInput + rightY * strafeInput;
+        } else {
+          worldX = normalizedX;
+          worldY = normalizedY;
+        }
+
+        velocityRef.current.x = velocityRef.current.x + (worldX * MOVEMENT_SPEED - velocityRef.current.x) * Math.min(1, ACCELERATION * delta);
+        velocityRef.current.y = velocityRef.current.y + (worldY * MOVEMENT_SPEED - velocityRef.current.y) * Math.min(1, ACCELERATION * delta);
       } else {
         velocityRef.current.x = velocityRef.current.x * Math.max(0, 1 - DAMPING * delta);
         velocityRef.current.y = velocityRef.current.y * Math.max(0, 1 - DAMPING * delta);
@@ -83,7 +104,18 @@ export const useThreeDMovement = (): void => {
       const nextY = avatar.position.y + velocityRef.current.y * delta;
 
       if (Number.isFinite(nextX) && Number.isFinite(nextY)) {
-        setAvatarPosition(localAvatarId, { x: nextX, y: nextY });
+        const state = useThreeDStore.getState();
+        const isFirstPerson = state.cameraMode === 'first-person';
+        setAvatarPosition(
+          localAvatarId,
+          { x: nextX, y: nextY },
+          isFirstPerson
+            ? {
+                heading: avatar.heading,
+                preserveHeading: true,
+              }
+            : undefined,
+        );
       }
 
       animationFrame = requestAnimationFrame(step);

@@ -37,6 +37,9 @@ It now renders the live campus scene plus supporting UI chrome:
   destinations while rendering shared guidance for remote teammates.
 - Distinct room decor for each zone (desks in the open area, lounge seating, conference tables,
   event stage, etc.) to reinforce sense of place without sacrificing performance.
+- Camera controls that match modern 3D spaces: left-drag orbits around your avatar, Shift/right
+  drag pans the camera, the mouse wheel zooms, and first-person mode reuses pointer look with
+  keyboard strafing.
 
 ## Persistence & Settings
 

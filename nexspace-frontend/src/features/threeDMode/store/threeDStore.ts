@@ -59,7 +59,8 @@ type ThreeDState = {
   clearJoinNudges: () => void;
   setQuality: (quality: QualityLevel) => void;
   setCameraMode: (mode: CameraMode) => void;
-  setAvatarPosition: (id: string, position: Vector2) => void;
+  setAvatarPosition: (id: string, position: Vector2, options?: { heading?: number; preserveHeading?: boolean }) => void;
+  setAvatarHeading: (id: string, heading: number) => void;
   syncRoster: (payload: {
     participants: Array<Pick<PartialAvatarInput, 'id' | 'displayName' | 'avatarUrl' | 'status' | 'isLocal'>>;
     fallbackRoomId: string;
@@ -140,7 +141,7 @@ export const useThreeDStore = create<ThreeDState>()(
         minimapWaypoints: { ...state.minimapWaypoints, [avatarId]: waypoint },
       })),
 
-    setAvatarPosition: (id, position) =>
+    setAvatarPosition: (id, position, options) =>
       set((state) => {
         const avatar = state.avatars[id];
         if (!avatar) return state;
@@ -151,12 +152,21 @@ export const useThreeDStore = create<ThreeDState>()(
         const dx = clamped.x - avatar.position.x;
         const dy = clamped.y - avatar.position.y;
         const delta = Math.hypot(dx, dy);
-        const nextHeading = delta < 0.001 ? avatar.heading : Math.atan2(dx, dy);
+        const preserveHeading = options?.preserveHeading ?? false;
+        let nextHeading = options?.heading;
+        if (!Number.isFinite(nextHeading)) {
+          if (preserveHeading || delta < 0.001) {
+            nextHeading = avatar.heading;
+          } else {
+            nextHeading = Math.atan2(dx, dy);
+          }
+        }
+        const normalizedHeading = ((nextHeading ?? avatar.heading) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
 
         if (
           positionsEqual(avatar.position, clamped) &&
           avatar.roomId === nextRoomId &&
-          Math.abs((avatar.heading ?? 0) - nextHeading) < 0.001
+          Math.abs((avatar.heading ?? 0) - normalizedHeading) < 0.001
         ) {
           return state;
         }
@@ -166,7 +176,7 @@ export const useThreeDStore = create<ThreeDState>()(
           position: clamped,
           roomId: nextRoomId,
           lastActiveTs: Date.now(),
-          heading: Number.isFinite(nextHeading) ? nextHeading : avatar.heading,
+          heading: Number.isFinite(normalizedHeading) ? normalizedHeading : avatar.heading,
         };
 
         const patch: Partial<ThreeDState> = {
@@ -191,6 +201,26 @@ export const useThreeDStore = create<ThreeDState>()(
         }
 
         return patch;
+      }),
+
+    setAvatarHeading: (id, heading) =>
+      set((state) => {
+        const avatar = state.avatars[id];
+        if (!avatar) return state;
+        const normalized = ((heading % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        if (Math.abs((avatar.heading ?? 0) - normalized) < 0.001) {
+          return state;
+        }
+        return {
+          avatars: {
+            ...state.avatars,
+            [id]: {
+              ...avatar,
+              heading: normalized,
+              lastActiveTs: Date.now(),
+            },
+          },
+        };
       }),
 
     popJoinNudge: () => {

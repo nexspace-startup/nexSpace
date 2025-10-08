@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useMeetingStore } from '../../../stores/meetingStore';
+import { useUserStore } from '../../../stores/userStore';
 import { useThreeDStore } from '../store/threeDStore';
 import { fallbackRoomId } from '../config/rooms';
 
@@ -10,11 +11,13 @@ export const useThreeDAvatarSync = (): void => {
   const localParticipantId = useMeetingStore(
     (s) => s.room?.localParticipant?.sid ?? s.room?.localParticipant?.identity ?? null,
   );
+  const user = useUserStore((s) => s.user);
 
   const syncRoster = useThreeDStore((s) => s.syncRoster);
   const rooms = useThreeDStore((s) => s.rooms);
 
   const lastSnapshotRef = useRef<string | null>(null);
+  const fallbackLocalIdRef = useRef<string>(`local-preview-${Math.random().toString(36).slice(2)}`);
 
   useEffect(() => {
     const fallback = rooms[0]?.id ?? fallbackRoomId;
@@ -34,8 +37,22 @@ export const useThreeDAvatarSync = (): void => {
       };
     });
 
+    let roster = normalized;
+    if (roster.length === 0) {
+      roster = [
+        {
+          id: user?.id ?? fallbackLocalIdRef.current,
+          displayName:
+            user?.name ?? user?.firstName ?? user?.lastName ?? user?.email ?? 'You',
+          avatarUrl: user?.avatar,
+          status: localPresence,
+          isLocal: true,
+        },
+      ];
+    }
+
     const signature = JSON.stringify({
-      participants: normalized.map((entry) => ({
+      participants: roster.map((entry) => ({
         id: entry.id,
         displayName: entry.displayName,
         avatarUrl: entry.avatarUrl ?? null,
@@ -50,11 +67,11 @@ export const useThreeDAvatarSync = (): void => {
     }
     lastSnapshotRef.current = signature;
 
-    const resolvedLocalId = normalized.find((entry) => entry.isLocal)?.id ?? normalized[0]?.id ?? null;
+    const resolvedLocalId = roster.find((entry) => entry.isLocal)?.id ?? roster[0]?.id ?? null;
     syncRoster({
-      participants: normalized,
+      participants: roster,
       fallbackRoomId: fallback,
       explicitLocalId: resolvedLocalId ?? localParticipantId,
     });
-  }, [participants, presenceById, localPresence, localParticipantId, rooms, syncRoster]);
+  }, [participants, presenceById, localPresence, localParticipantId, rooms, syncRoster, user]);
 };
