@@ -26,17 +26,25 @@ const computeFalloff = (
   return 1 - t;
 };
 
-const setPublicationVolume = (publication: RemoteTrackPublication, volume: number, cache: Map<string, number>) => {
+const setPublicationVolume = (
+  publication: RemoteTrackPublication,
+  participant: RemoteParticipant,
+  volume: number,
+  cache: Map<string, number>,
+) => {
   const track = publication.audioTrack;
   if (!track) return;
-  const key = publication.trackSid ?? publication.sid ?? `${publication.participant?.sid ?? ''}:${publication.source}`;
+  const participantId = participant.sid ?? participant.identity;
+  const key = publication.trackSid ?? track.sid ?? `${participantId}:${publication.source ?? 'unknown'}`;
   const previous = cache.get(key);
   if (previous !== undefined && Math.abs(previous - volume) < 0.01) {
     return;
   }
   cache.set(key, volume);
   try {
-    track.setVolume(volume);
+    if ('setVolume' in track && typeof track.setVolume === 'function') {
+      track.setVolume(volume);
+    }
   } catch {
     // Ignore errors from LiveKit when tracks are not ready yet
   }
@@ -88,39 +96,38 @@ export const useSpatialAudioRouting = (): void => {
           baseVolume = Math.max(baseVolume, MIN_VOLUME);
         }
 
-        const publications = typeof participant.getTrackPublications === 'function'
-          ? participant.getTrackPublications()
-          : Array.from(participant.trackPublications?.values?.() ?? []);
+        const publications: RemoteTrackPublication[] =
+          typeof participant.getTrackPublications === 'function'
+            ? (participant.getTrackPublications() as RemoteTrackPublication[])
+            : participant.trackPublications
+              ? (Array.from(participant.trackPublications.values()) as RemoteTrackPublication[])
+              : [];
 
         publications.forEach((publication) => {
           if (publication.kind !== 'audio') return;
-          setPublicationVolume(publication, baseVolume, cacheRef.current);
+          setPublicationVolume(publication, participant, baseVolume, cacheRef.current);
         });
       });
     };
 
     updateVolumes();
 
-    const unsubAvatars = useThreeDStore.subscribe(
-      (s) => s.avatars,
-      () => updateVolumes(),
-    );
-    const unsubRooms = useThreeDStore.subscribe(
-      (s) => s.rooms,
-      () => updateVolumes(),
-    );
+    const unsubscribe = useThreeDStore.subscribe((state, previousState) => {
+      if (state.avatars !== previousState.avatars || state.rooms !== previousState.rooms) {
+        updateVolumes();
+      }
+    });
 
     const handleTrack = () => updateVolumes();
     room.on(RoomEvent.TrackSubscribed, handleTrack);
     room.on(RoomEvent.TrackUnsubscribed, handleTrack);
-    room.on(RoomEvent.RemoteTrackPublished, handleTrack);
+    room.on(RoomEvent.TrackPublished, handleTrack);
 
     return () => {
-      unsubAvatars();
-      unsubRooms();
+      unsubscribe();
       room.off(RoomEvent.TrackSubscribed, handleTrack);
       room.off(RoomEvent.TrackUnsubscribed, handleTrack);
-      room.off(RoomEvent.RemoteTrackPublished, handleTrack);
+      room.off(RoomEvent.TrackPublished, handleTrack);
     };
   }, [room, localAvatarId, roomById, speakerEnabled]);
 

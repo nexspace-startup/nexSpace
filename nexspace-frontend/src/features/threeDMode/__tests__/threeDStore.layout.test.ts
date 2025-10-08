@@ -2,9 +2,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { useThreeDStore } from '../store/threeDStore';
 import { defaultRooms } from '../config/rooms';
 
-const openWork = defaultRooms.find((room) => room.id === 'open-work-area');
-const lounge = defaultRooms.find((room) => room.id === 'lounge-zone');
-
 describe('threeDStore layout distribution', () => {
   beforeEach(() => {
     useThreeDStore.setState({
@@ -18,6 +15,7 @@ describe('threeDStore layout distribution', () => {
   });
 
   it('distributes avatars across rectangular rooms without overlap', () => {
+    const openWork = defaultRooms.find((room) => room.id === 'open-work-area');
     if (!openWork || openWork.boundary.type !== 'rect') {
       throw new Error('expected open work area room definition');
     }
@@ -48,6 +46,7 @@ describe('threeDStore layout distribution', () => {
   });
 
   it('arranges avatars around the lounge circle interior', () => {
+    const lounge = defaultRooms.find((room) => room.id === 'lounge-zone');
     if (!lounge || lounge.boundary.type !== 'circle') {
       throw new Error('expected lounge zone room definition');
     }

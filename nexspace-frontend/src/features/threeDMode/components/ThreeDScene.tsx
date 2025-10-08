@@ -242,20 +242,21 @@ const updateAvatarMesh = (group: THREE.Group, avatar: AvatarSnapshot, now: numbe
 
 const ThreeDScene: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer>();
-  const sceneRef = useRef<THREE.Scene>();
-  const cameraRef = useRef<THREE.PerspectiveCamera>();
-  const avatarGroupRef = useRef<THREE.Group>();
-  const roomsGroupRef = useRef<THREE.Group>();
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const avatarGroupRef = useRef<THREE.Group | null>(null);
+  const roomsGroupRef = useRef<THREE.Group | null>(null);
   const clockRef = useRef(new THREE.Clock());
 
   useThreeDMovement();
 
   const theme = useUIStore((state) => state.theme);
-  const tokens = getThemeTokens(theme);
+  const tokens = useMemo(() => getThemeTokens(theme), [theme]);
   const quality = useThreeDStore((state) => state.quality);
   const rooms = useThreeDStore((state) => state.rooms);
-  const avatars = useThreeDStore((state) => Object.values(state.avatars));
+  const avatarsRecord = useThreeDStore((state) => state.avatars);
+  const avatars = useMemo(() => Object.values(avatarsRecord), [avatarsRecord]);
   const waypoints = useThreeDStore((state) => state.minimapWaypoints);
   const localAvatarId = useThreeDStore((state) => state.localAvatarId);
 
@@ -370,12 +371,14 @@ const ThreeDScene: React.FC = () => {
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
       renderer.dispose();
-      containerRef.current?.removeChild(renderer.domElement);
-      rendererRef.current = undefined;
-      sceneRef.current = undefined;
-      cameraRef.current = undefined;
-      avatarGroupRef.current = undefined;
-      roomsGroupRef.current = undefined;
+      if (renderer.domElement.parentElement === containerRef.current) {
+        containerRef.current?.removeChild(renderer.domElement);
+      }
+      rendererRef.current = null;
+      sceneRef.current = null;
+      cameraRef.current = null;
+      avatarGroupRef.current = null;
+      roomsGroupRef.current = null;
     };
   }, []);
 
@@ -383,20 +386,19 @@ const ThreeDScene: React.FC = () => {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    scene.background = toThreeColor(tokens.background).clone().lerp(
-      toThreeColor(theme === 'dark' ? '#080912' : '#f1f5ff'),
-      0.35,
-    );
-    scene.fog = new THREE.Fog(scene.background.getHex(), 40, 120);
+    const background = toThreeColor(tokens.background)
+      .clone()
+      .lerp(toThreeColor(theme === 'dark' ? '#080912' : '#f1f5ff'), 0.35);
+    scene.background = background;
+    scene.fog = new THREE.Fog(background.getHex(), 40, 120);
 
-    const ground = scene.children.find((child) => child instanceof THREE.Mesh && child.geometry instanceof THREE.PlaneGeometry) as
-      | THREE.Mesh
-      | undefined;
-    if (ground) {
-      (ground.material as THREE.MeshStandardMaterial).color = toThreeColor(tokens.background).clone().lerp(
-        toThreeColor(tokens.surfaceAlt),
-        0.2,
-      );
+    const ground = scene.children.find(
+      (child): child is THREE.Mesh => child instanceof THREE.Mesh && child.geometry instanceof THREE.PlaneGeometry,
+    );
+    if (ground && ground.material instanceof THREE.MeshStandardMaterial) {
+      ground.material.color = toThreeColor(tokens.background)
+        .clone()
+        .lerp(toThreeColor(tokens.surfaceAlt), 0.2);
     }
   }, [tokens, theme]);
 
