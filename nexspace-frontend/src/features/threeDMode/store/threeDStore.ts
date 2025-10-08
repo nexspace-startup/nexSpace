@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import type { PresenceStatus } from '../../../constants/enums';
 import { defaultRooms, fallbackRoomId, type RoomDefinition } from '../config/rooms';
+import { computeRoomLayout } from '../utils/layout';
 
 export type Vector2 = { x: number; y: number };
 export type QualityLevel = 'low' | 'medium' | 'high';
@@ -57,6 +58,23 @@ type ThreeDState = {
 
 const FALLBACK_POSITION: Vector2 = { x: 0, y: 0 };
 
+const applyRoomLayout = (
+  avatars: Record<string, AvatarRuntimeState>,
+  rooms: RoomDefinition[],
+): Record<string, AvatarRuntimeState> => {
+  if (!rooms.length || !Object.keys(avatars).length) {
+    return avatars;
+  }
+
+  const layout = computeRoomLayout(rooms, avatars);
+
+  return Object.entries(avatars).reduce<Record<string, AvatarRuntimeState>>((acc, [id, avatar]) => {
+    const nextPosition = layout[id] ?? avatar.position ?? FALLBACK_POSITION;
+    acc[id] = { ...avatar, position: nextPosition };
+    return acc;
+  }, {});
+};
+
 export const useThreeDStore = create<ThreeDState>()(
   devtools((set, get) => ({
     rooms: defaultRooms,
@@ -68,7 +86,11 @@ export const useThreeDStore = create<ThreeDState>()(
     lastNudgeByAvatar: {},
     joinNudgeCooldownMs: 45_000,
 
-    setRooms: (rooms) => set({ rooms }),
+    setRooms: (rooms) =>
+      set((state) => ({
+        rooms,
+        avatars: applyRoomLayout(state.avatars, rooms),
+      })),
 
     setLocalAvatarId: (id) => set({ localAvatarId: id }),
 
@@ -98,8 +120,10 @@ export const useThreeDStore = create<ThreeDState>()(
         delete nextWaypoints[id];
         const nextLastNudge = { ...state.lastNudgeByAvatar };
         delete nextLastNudge[id];
+        const avatarsWithLayout = applyRoomLayout(nextAvatars, state.rooms);
+
         return {
-          avatars: nextAvatars,
+          avatars: avatarsWithLayout,
           minimapWaypoints: nextWaypoints,
           lastNudgeByAvatar: nextLastNudge,
         };
@@ -157,8 +181,11 @@ export const useThreeDStore = create<ThreeDState>()(
           }
         }
 
+        const nextAvatars = { ...state.avatars, [input.id]: updated };
+        const avatarsWithLayout = applyRoomLayout(nextAvatars, state.rooms);
+
         return {
-          avatars: { ...state.avatars, [input.id]: updated },
+          avatars: avatarsWithLayout,
           localAvatarId: localId,
           joinNudges,
           lastNudgeByAvatar,

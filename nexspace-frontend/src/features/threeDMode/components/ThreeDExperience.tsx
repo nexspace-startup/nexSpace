@@ -6,6 +6,7 @@ import ThreeDMinimap from './ThreeDMinimap';
 import JoinNudgePanel from './JoinNudgePanel';
 import QualitySelector from './QualitySelector';
 import { useThreeDAvatarSync } from '../hooks/useThreeDAvatarSync';
+import ThreeDScene from './ThreeDScene';
 
 const ThreeDExperience: React.FC = () => {
   useThreeDAvatarSync();
@@ -13,51 +14,75 @@ const ThreeDExperience: React.FC = () => {
   const tokens = getThemeTokens(theme);
   const quality = useThreeDStore((s) => s.quality);
   const rooms = useThreeDStore((s) => s.rooms);
+  const avatars = useThreeDStore((s) => s.avatars);
+  const localAvatarId = useThreeDStore((s) => s.localAvatarId);
 
   const gradientStyle = useMemo(
     () => ({
-      background: `radial-gradient(circle at 22% 18%, ${tokens.surfaceAlt} 0%, ${tokens.background} 58%)`,
+      background: `radial-gradient(circle at 18% 12%, ${tokens.surfaceAlt} 0%, transparent 45%), radial-gradient(circle at 82% 16%, ${tokens.surfaceAlpha} 0%, transparent 52%)`,
     }),
-    [tokens]
+    [tokens],
+  );
+
+  const roomSummaries = useMemo(
+    () =>
+      rooms.map((room) => {
+        const occupants = Object.values(avatars).filter((avatar) => avatar.roomId === room.id);
+        const localInside = occupants.some((avatar) => avatar.id === localAvatarId);
+        return { room, occupants, localInside };
+      }),
+    [rooms, avatars, localAvatarId],
   );
 
   return (
-    <div
-      className="relative h-full w-full overflow-hidden"
-      style={{ backgroundColor: tokens.background, color: tokens.textPrimary }}
-    >
-      <div className="absolute inset-0" style={gradientStyle}>
+    <div className="relative h-full w-full overflow-hidden" style={{ backgroundColor: tokens.background }}>
+      <ThreeDScene />
+
+      <div className="pointer-events-none absolute inset-0" style={gradientStyle} />
+
+      <div className="pointer-events-none absolute left-6 top-6 w-[320px] max-w-[85vw]">
         <div
-          aria-hidden
-          className="absolute inset-0"
+          className="rounded-3xl border px-5 py-4 shadow-2xl backdrop-blur-xl"
           style={{
-            backgroundImage: `linear-gradient(135deg, ${tokens.gridLine} 1px, transparent 1px), linear-gradient(45deg, ${tokens.gridLine} 1px, transparent 1px)`,
-            backgroundSize: '32px 32px',
-            opacity: 0.25,
+            background: tokens.surface,
+            borderColor: tokens.borderSoft,
           }}
-        />
-        <div className="relative flex h-full w-full items-center justify-center">
-          <div
-            className="pointer-events-none max-w-lg rounded-3xl border px-6 py-6 text-center shadow-2xl backdrop-blur-xl"
-            style={{
-              background: tokens.surface,
-              borderColor: tokens.borderStrong,
-            }}
-          >
-            <h2 className="text-lg font-semibold" style={{ color: tokens.textPrimary }}>
-              Immersive campus preview
-            </h2>
-            <p className="mt-3 text-sm leading-relaxed" style={{ color: tokens.textSecondary }}>
-              The spatial workspace is syncing avatars, minimap presence, and welcome nudges while
-              the realtime 3D stage is constructed. Visual fidelity adapts to your selected quality
-              mode.
-            </p>
-            <p className="mt-4 text-xs uppercase tracking-[0.32em]" style={{ color: tokens.textMuted }}>
-              Quality: {quality.toUpperCase()}
-            </p>
-            <p className="mt-2 text-xs" style={{ color: tokens.textMuted }}>
-              Rooms configured: {rooms.length}
-            </p>
+        >
+          <p className="text-xs uppercase tracking-[0.32em]" style={{ color: tokens.textMuted }}>
+            Spatial status
+          </p>
+          <h2 className="mt-2 text-lg font-semibold" style={{ color: tokens.textPrimary }}>
+            Campus overview
+          </h2>
+          <p className="mt-2 text-xs" style={{ color: tokens.textSecondary }}>
+            Quality {quality.toUpperCase()} • {rooms.length} zones active • {Object.keys(avatars).length} teammates synced
+          </p>
+          <div className="mt-4 space-y-2">
+            {roomSummaries.map(({ room, occupants, localInside }) => (
+                <div
+                  key={room.id}
+                  className="flex items-start justify-between gap-3 rounded-2xl border px-3 py-2"
+                  style={{
+                    borderColor: localInside ? tokens.accent : tokens.borderSoft,
+                    background: localInside ? tokens.accentSoft : tokens.surfaceAlt,
+                    color: tokens.textPrimary,
+                  }}
+                >
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: tokens.textPrimary }}>
+                      {room.name}
+                    </p>
+                    {room.signage && (
+                      <p className="text-[11px] leading-relaxed" style={{ color: tokens.textSecondary }}>
+                        {room.signage}
+                      </p>
+                    )}
+                  </div>
+                  <span className="text-xs font-medium" style={{ color: tokens.textSecondary }}>
+                    {occupants.length} in room
+                  </span>
+                </div>
+              ))}
           </div>
         </div>
       </div>
@@ -72,10 +97,7 @@ const ThreeDExperience: React.FC = () => {
 
       <JoinNudgePanel />
 
-      <div
-        className="pointer-events-none absolute bottom-4 right-6 text-[11px] uppercase tracking-[0.32em]"
-        style={{ color: tokens.textMuted }}
-      >
+      <div className="pointer-events-none absolute bottom-4 right-6 text-[11px] uppercase tracking-[0.32em]" style={{ color: tokens.textMuted }}>
         Theme: {theme.toUpperCase()}
       </div>
     </div>

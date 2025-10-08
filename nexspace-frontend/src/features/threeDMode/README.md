@@ -1,13 +1,13 @@
 # 3D Mode Feature Scaffold
 
-This folder contains the initial scaffolding for the immersive 3D workspace mode. The goal of
-this first increment is to provide the structural building blocks that subsequent milestones can
-extend with realtime rendering, spatial audio, and rich interactions.
+This folder now contains the live 3D campus experience for the immersive workspace mode. The
+initial scaffolding has been extended with a Three.js scene, spatial overlays, and data-driven
+layouts that future milestones can wire into realtime audio/video, huddles, and moderation flows.
 
 ## Structure
 
 - `components/` – UI overlays that sit on top of the 3D canvas such as the minimap, quality
-  controls, and join-nudge prompts.
+  controls, join-nudge prompts, and the `ThreeDScene` renderer.
 - `config/` – Room & zone definitions with audio envelopes and signage copy. These are data-driven
   so that we can add, remove, or tweak rooms without touching render logic.
 - `hooks/` – React hooks that sync LiveKit meeting data into the 3D store. The initial
@@ -18,14 +18,14 @@ extend with realtime rendering, spatial audio, and rich interactions.
 ## Usage
 
 The `ThreeDExperience` component is wired into `MeetingPanel` when the view mode is set to `3d`.
-It currently renders a styled placeholder card while exposing functional UI chrome:
+It now renders the live campus scene plus supporting UI chrome:
 
-- Minimap with per-room occupancy counts.
+- A performant Three.js scene with baked ambient lighting, room floor meshes, labels, and avatar
+  capsules that gently bob to signal presence.
+- Deterministic room-aware avatar layout so occupants distribute evenly across each zone.
+- A minimap with per-room occupancy counts.
 - Join-nudge surface that deduplicates entries with a cooldown.
-- Quality selector with Low/Medium/High presets.
-
-These pieces are intentionally lightweight so they can stay mounted when we integrate the Three.js
-scene without causing layout thrash.
+- Quality selector with Low/Medium/High presets that map to renderer fidelity and shadows.
 
 ## Persistence & Settings
 
@@ -36,8 +36,8 @@ scene without causing layout thrash.
 
 ## Next Steps
 
-1. Embed the actual Three.js scene and connect room boundaries to spatial audio attenuation.
-2. Replace the fallback room assignment in `useThreeDAvatarSync` with metadata-driven placement.
+1. Connect room boundaries to spatial audio attenuation & voice isolation rules.
+2. Layer in navigation controls (WASD, click-to-move) and proximity-based falloff for avatars.
 3. Wire the join-nudge actions (wave, invite, DM) into the communication stack.
 4. Extend tests to cover proximity calculations once movement updates land.
 
