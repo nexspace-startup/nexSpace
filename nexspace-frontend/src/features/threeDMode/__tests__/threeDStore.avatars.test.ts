@@ -57,4 +57,41 @@ describe('threeDStore avatar updates', () => {
     });
     expect(useThreeDStore.getState().localAvatarId).toBe('local');
   });
+
+  it('does not churn state when syncing an unchanged roster snapshot', () => {
+    if (!openWork) throw new Error('expected open work area');
+    const store = useThreeDStore.getState();
+    store.syncRoster({
+      participants: [
+        {
+          id: 'local',
+          displayName: 'Alex',
+          isLocal: true,
+        },
+      ],
+      fallbackRoomId: openWork.id,
+      explicitLocalId: 'local',
+    });
+
+    const firstAvatars = useThreeDStore.getState().avatars;
+    const firstLocalId = useThreeDStore.getState().localAvatarId;
+
+    store.syncRoster({
+      participants: [
+        {
+          id: 'local',
+          displayName: 'Alex',
+          isLocal: true,
+        },
+      ],
+      fallbackRoomId: openWork.id,
+      explicitLocalId: 'local',
+    });
+
+    const secondAvatars = useThreeDStore.getState().avatars;
+    const secondLocalId = useThreeDStore.getState().localAvatarId;
+
+    expect(secondAvatars).toBe(firstAvatars);
+    expect(secondLocalId).toBe(firstLocalId);
+  });
 });

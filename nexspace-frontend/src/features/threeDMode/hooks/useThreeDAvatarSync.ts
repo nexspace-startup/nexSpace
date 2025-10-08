@@ -11,9 +11,7 @@ export const useThreeDAvatarSync = (): void => {
     (s) => s.room?.localParticipant?.sid ?? s.room?.localParticipant?.identity ?? null,
   );
 
-  const setLocalAvatarId = useThreeDStore((s) => s.setLocalAvatarId);
-  const upsertAvatar = useThreeDStore((s) => s.upsertAvatar);
-  const removeAvatar = useThreeDStore((s) => s.removeAvatar);
+  const syncRoster = useThreeDStore((s) => s.syncRoster);
   const rooms = useThreeDStore((s) => s.rooms);
 
   const lastSnapshotRef = useRef<string | null>(null);
@@ -52,38 +50,11 @@ export const useThreeDAvatarSync = (): void => {
     }
     lastSnapshotRef.current = signature;
 
-    const existing = useThreeDStore.getState().avatars;
-    const seen = new Set<string>();
-
     const resolvedLocalId = normalized.find((entry) => entry.isLocal)?.id ?? normalized[0]?.id ?? null;
-    setLocalAvatarId(resolvedLocalId ?? null);
-
-    normalized.forEach((participant) => {
-      const previous = existing[participant.id];
-      upsertAvatar({
-        id: participant.id,
-        displayName: participant.displayName,
-        avatarUrl: participant.avatarUrl,
-        roomId: previous?.roomId ?? fallback,
-        status: participant.status,
-        isLocal: participant.isLocal,
-      });
-      seen.add(participant.id);
+    syncRoster({
+      participants: normalized,
+      fallbackRoomId: fallback,
+      explicitLocalId: resolvedLocalId ?? localParticipantId,
     });
-
-    Object.keys(existing).forEach((id) => {
-      if (!seen.has(id)) {
-        removeAvatar(id);
-      }
-    });
-  }, [
-    participants,
-    presenceById,
-    localPresence,
-    localParticipantId,
-    rooms,
-    setLocalAvatarId,
-    upsertAvatar,
-    removeAvatar,
-  ]);
+  }, [participants, presenceById, localPresence, localParticipantId, rooms, syncRoster]);
 };

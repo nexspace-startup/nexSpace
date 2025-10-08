@@ -55,6 +55,11 @@ type ThreeDState = {
   clearJoinNudges: () => void;
   setQuality: (quality: QualityLevel) => void;
   setAvatarPosition: (id: string, position: Vector2) => void;
+  syncRoster: (payload: {
+    participants: Array<Pick<PartialAvatarInput, 'id' | 'displayName' | 'avatarUrl' | 'status' | 'isLocal'>>;
+    fallbackRoomId: string;
+    explicitLocalId: string | null;
+  }) => void;
   getOccupantsForRoom: (roomId: string) => AvatarRuntimeState[];
 };
 
@@ -190,6 +195,163 @@ export const useThreeDStore = create<ThreeDState>()(
           minimapWaypoints: nextWaypoints,
           lastNudgeByAvatar: nextLastNudge,
         };
+      }),
+
+    syncRoster: ({ participants, fallbackRoomId: fallback, explicitLocalId }) =>
+      set((state) => {
+        const safeFallback = fallback || state.rooms[0]?.id || fallbackRoomId;
+        const now = Date.now();
+        const nextAvatars: Record<string, AvatarRuntimeState> = {};
+
+        participants.forEach((participant) => {
+          const previous = state.avatars[participant.id];
+          const resolvedRoomId = previous?.roomId ?? safeFallback;
+          const resolvedPosition = previous?.position ?? FALLBACK_POSITION;
+          const resolvedDisplayName = participant.displayName ?? previous?.displayName ?? 'Participant';
+          const resolvedStatus = participant.status ?? previous?.status;
+          const resolvedAvatarUrl = participant.avatarUrl ?? previous?.avatarUrl;
+          const resolvedIsLocal = participant.isLocal ?? previous?.isLocal ?? false;
+
+          const changed =
+            !previous ||
+            previous.roomId !== resolvedRoomId ||
+            previous.displayName !== resolvedDisplayName ||
+            previous.status !== resolvedStatus ||
+            previous.avatarUrl !== resolvedAvatarUrl ||
+            previous.isLocal !== resolvedIsLocal;
+
+          nextAvatars[participant.id] = {
+            id: participant.id,
+            roomId: resolvedRoomId,
+            position: resolvedPosition,
+            displayName: resolvedDisplayName,
+            status: resolvedStatus,
+            avatarUrl: resolvedAvatarUrl,
+            isLocal: resolvedIsLocal,
+            lastActiveTs: changed ? now : previous?.lastActiveTs ?? now,
+          };
+        });
+
+        const avatarIds = new Set(Object.keys(nextAvatars));
+
+        const filteredWaypoints = Object.entries(state.minimapWaypoints).reduce<Record<string, Vector2 | null>>(
+          (acc, [id, waypoint]) => {
+            if (avatarIds.has(id)) {
+              acc[id] = waypoint;
+            }
+            return acc;
+          },
+          {},
+        );
+
+        const nextLocalAvatarId =
+          participants.find((participant) => participant.isLocal)?.id ?? explicitLocalId ?? state.localAvatarId ?? null;
+
+        const localAvatar = nextLocalAvatarId ? nextAvatars[nextLocalAvatarId] ?? state.avatars[nextLocalAvatarId] : undefined;
+
+        const retainedJoinNudges = state.joinNudges.filter((nudge) => avatarIds.has(nudge.avatarId));
+        let joinQueue =
+          retainedJoinNudges.length === state.joinNudges.length ? state.joinNudges : retainedJoinNudges;
+
+        let lastNudge: Record<string, number> = state.lastNudgeByAvatar;
+        let lastNudgeChanged = false;
+        Object.keys(state.lastNudgeByAvatar).forEach((id) => {
+          if (!avatarIds.has(id)) {
+            if (!lastNudgeChanged) {
+              lastNudge = { ...state.lastNudgeByAvatar };
+              lastNudgeChanged = true;
+            }
+            delete lastNudge[id];
+          }
+        });
+
+        if (localAvatar) {
+          participants.forEach((participant) => {
+            if (participant.id === localAvatar.id) return;
+            const previous = state.avatars[participant.id];
+            const current = nextAvatars[participant.id];
+            if (!current) return;
+            const movedRooms = previous?.roomId !== current.roomId;
+            if (!movedRooms || current.roomId !== localAvatar.roomId) {
+              return;
+            }
+            const lastNudgeAt = lastNudge[participant.id] ?? 0;
+            if (now - lastNudgeAt < state.joinNudgeCooldownMs) {
+              return;
+            }
+            const nudge: JoinNudge = {
+              id: `${participant.id}:${now}`,
+              avatarId: participant.id,
+              roomId: current.roomId,
+              displayName: current.displayName,
+              timestamp: now,
+            };
+            if (joinQueue === state.joinNudges) {
+              joinQueue = [...state.joinNudges, nudge];
+            } else {
+              joinQueue.push(nudge);
+            }
+            if (!lastNudgeChanged) {
+              lastNudge = { ...lastNudge };
+              lastNudgeChanged = true;
+            }
+            lastNudge[participant.id] = now;
+          });
+        }
+
+        const avatarsWithLayout = applyRoomLayout(nextAvatars, state.rooms);
+
+        const prevAvatars = state.avatars;
+        const prevIds = Object.keys(prevAvatars);
+        const nextIds = Object.keys(avatarsWithLayout);
+        const sameCount = prevIds.length === nextIds.length;
+        const avatarsChanged =
+          !sameCount ||
+          nextIds.some((id) => {
+            const nextAvatar = avatarsWithLayout[id];
+            const prevAvatar = prevAvatars[id];
+            if (!prevAvatar) return true;
+            return (
+              prevAvatar.roomId !== nextAvatar.roomId ||
+              prevAvatar.displayName !== nextAvatar.displayName ||
+              prevAvatar.status !== nextAvatar.status ||
+              prevAvatar.avatarUrl !== nextAvatar.avatarUrl ||
+              prevAvatar.isLocal !== nextAvatar.isLocal ||
+              prevAvatar.lastActiveTs !== nextAvatar.lastActiveTs ||
+              !positionsEqual(prevAvatar.position, nextAvatar.position)
+            );
+          });
+
+        const waypointsChanged =
+          Object.keys(state.minimapWaypoints).length !== Object.keys(filteredWaypoints).length ||
+          Object.entries(filteredWaypoints).some(([id, waypoint]) => state.minimapWaypoints[id] !== waypoint);
+
+        const localChanged = state.localAvatarId !== nextLocalAvatarId;
+        const nudgesChanged = joinQueue !== state.joinNudges;
+        const lastNudgeMutated = lastNudgeChanged || lastNudge !== state.lastNudgeByAvatar;
+
+        if (!avatarsChanged && !waypointsChanged && !localChanged && !nudgesChanged && !lastNudgeMutated) {
+          return state;
+        }
+
+        const patch: Partial<ThreeDState> = {};
+        if (avatarsChanged) {
+          patch.avatars = avatarsWithLayout;
+        }
+        if (waypointsChanged) {
+          patch.minimapWaypoints = filteredWaypoints;
+        }
+        if (localChanged) {
+          patch.localAvatarId = nextLocalAvatarId;
+        }
+        if (nudgesChanged) {
+          patch.joinNudges = joinQueue;
+        }
+        if (lastNudgeMutated) {
+          patch.lastNudgeByAvatar = lastNudge;
+        }
+
+        return patch;
       }),
 
     upsertAvatar: (input) =>
