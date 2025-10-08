@@ -542,7 +542,7 @@ export function buildZones(
 
     // Focus Pod A - light powder blue (light mode friendly)
     const focusPaletteKey = resolveRoomPaletteKey('focus-booths');
-    const focusColors = getRoomPalette(activePalette, 'focus-booths');
+    const focusPalette = getRoomPalette(activePalette, 'focus-booths');
     addRoomWithDoor(
         scene,
         colliders,
@@ -550,19 +550,19 @@ export function buildZones(
         2.5,
         0.12,
         { wall: 'E', width: 1.8, centerZ: -6.5 },
-        focusColors.base,
-        focusColors.accent,
+        focusPalette.base,
+        focusPalette.accent,
         focusPaletteKey
     );
-    addWarmLighting(scene, (focusRect.minX + focusRect.maxX) / 2, 2.2, (focusRect.minZ + focusRect.maxZ) / 2, focusColors.accent);
+    addWarmLighting(scene, (focusRect.minX + focusRect.maxX) / 2, 2.2, (focusRect.minZ + focusRect.maxZ) / 2, focusPalette.accent);
 
     // Conference Room — glass walls with open glass door and beige roof
-    const conferenceColors = getRoomPalette(activePalette, 'conference');
+    const conferencePalette = getRoomPalette(activePalette, 'conference');
     const confGlass = addGlassRoomWithOpenDoor(scene, colliders, conferenceRect, 5.2, 0.06, { wall: 'W', width: 2.2, centerZ: -2.0 });
-    addWarmLighting(scene, (conferenceRect.minX + conferenceRect.maxX) / 2, 2.7, (conferenceRect.minZ + conferenceRect.maxZ) / 2, conferenceColors?.accent ?? activePalette.accent);
+    addWarmLighting(scene, (conferenceRect.minX + conferenceRect.maxX) / 2, 2.7, (conferenceRect.minZ + conferenceRect.maxZ) / 2, conferencePalette?.accent ?? activePalette.accent);
 
     // Lounge - warm peach
-    const loungeColors = getRoomPalette(activePalette, 'cafe-lounge');
+    const loungePalette = getRoomPalette(activePalette, 'cafe-lounge');
     addRoomWithDoor(
         scene,
         colliders,
@@ -570,14 +570,14 @@ export function buildZones(
         0.5,
         0.1,
         { wall: 'N', width: 2.6 },
-        loungeColors.base,
-        loungeColors.accent,
+        loungePalette.base,
+        loungePalette.accent,
         resolveRoomPaletteKey('cafe-lounge')
     );
-    addWarmLighting(scene, (loungeRect.minX + loungeRect.maxX) / 2, 2.2, (loungeRect.minZ + loungeRect.maxZ) / 2, loungeColors.accent);
+    addWarmLighting(scene, (loungeRect.minX + loungeRect.maxX) / 2, 2.2, (loungeRect.minZ + loungeRect.maxZ) / 2, loungePalette.accent);
 
     // Game Room - soft lavender
-    const gameColors = getRoomPalette(activePalette, 'game');
+    const gamePalette = getRoomPalette(activePalette, 'game');
     addRoomWithDoor(
         scene,
         colliders,
@@ -585,15 +585,15 @@ export function buildZones(
         2.5,
         0.12,
         { wall: 'E', width: 2.0 },
-        gameColors.base,
-        gameColors.accent,
+        gamePalette.base,
+        gamePalette.accent,
         'game'
     );
     addDoorway((gameRect.minX + gameRect.maxX) / 2, gameRect.minZ);
-    addWarmLighting(scene, (gameRect.minX + gameRect.maxX) / 2, 2.2, (gameRect.minZ + gameRect.maxZ) / 2, gameColors.accent);
+    addWarmLighting(scene, (gameRect.minX + gameRect.maxX) / 2, 2.2, (gameRect.minZ + gameRect.maxZ) / 2, gamePalette.accent);
 
     // Kitchen - pale mint
-    const kitchenColors = getRoomPalette(activePalette, 'kitchen');
+    const kitchenPalette = getRoomPalette(activePalette, 'kitchen');
     addRoomWithDoor(
         scene,
         colliders,
@@ -601,12 +601,12 @@ export function buildZones(
         2.5,
         0.1,
         { wall: 'W', width: 1.8 },
-        kitchenColors.base,
-        kitchenColors.accent,
+        kitchenPalette.base,
+        kitchenPalette.accent,
         'kitchen'
     );
     addDoorway(pantryRect.minX, (pantryRect.minZ + pantryRect.maxZ) / 2);
-    addWarmLighting(scene, (pantryRect.minX + pantryRect.maxX) / 2, 2.2, (pantryRect.minZ + pantryRect.maxZ) / 2, kitchenColors.accent);
+    addWarmLighting(scene, (pantryRect.minX + pantryRect.maxX) / 2, 2.2, (pantryRect.minZ + pantryRect.maxZ) / 2, kitchenPalette.accent);
 
     // 1) Compute center once
     const confCenter = {
