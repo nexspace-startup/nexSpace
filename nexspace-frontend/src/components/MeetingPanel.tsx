@@ -5,7 +5,7 @@ import "@livekit/components-styles";
 import { useShallow } from "zustand/react/shallow";
 import MeetingControls from "./MeetingControls";
 import MeetingGrid from "./MeetingGrid";
-import Meeting3D from "./Meeting3D";
+import Meeting3D from "../features/meeting3d";
 import TopWidget from "./TopWidget";
 import ChatPanel from "./ChatPanel";
 import { useMeetingStore } from "../stores/meetingStore";
@@ -73,6 +73,18 @@ const MeetingPanel: React.FC = () => {
     return fmtHMS(Date.now() - startedAt);
   }, [canConnect, startedAt, tick]);
   const viewMode = useMeetingStore((s) => s.viewMode);
+
+  const topSafeAreaPx = useMemo(() => {
+    if (!canConnect) {
+      return isMobile ? 48 : 32;
+    }
+    if (isMobile) {
+      return 96;
+    }
+    return showTop ? 112 : 48;
+  }, [canConnect, isMobile, showTop]);
+
+  const bottomSafeAreaPx = useMemo(() => (isMobile ? 148 : 128), [isMobile]);
 
   return (
     <section className="relative flex-1 h-dvh overflow-hidden bg-[#202024]">
@@ -156,7 +168,7 @@ const MeetingPanel: React.FC = () => {
 
           {/* Stage: Grid or 3D */}
           {viewMode === '3d' ? (
-            <Meeting3D bottomSafeAreaPx={0} topSafeAreaPx={0} />
+            <Meeting3D bottomSafeAreaPx={bottomSafeAreaPx} topSafeAreaPx={topSafeAreaPx} />
           ) : (
             <MeetingGrid pageSize={24} bottomSafeAreaPx={isMobile ? 96 : 120} topSafeAreaPx={showTop ? 96 : 16} />
           )}
