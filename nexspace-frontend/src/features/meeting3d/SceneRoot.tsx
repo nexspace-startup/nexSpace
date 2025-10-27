@@ -12,7 +12,7 @@ import { DeskGridManager, type SeatTransform } from './lib3d/DeskGridManager';
 import { assignParticipantsToDesks } from './lib3d/Participants';
 import { type DeskPrefab, createDeskModule } from './lib3d/Desks';
 import { buildEnvironment, applyEnvironmentTheme, animateEnvironmentTheme } from './lib3d/Environment';
-import { MODE_PALETTE } from './lib3d/themeConfig';
+import { MODE_PALETTE, getRoomPalette, numberToHex, type ModePalette } from './lib3d/themeConfig';
 import { type BuiltZonesInfo, buildZones, applyZoneTheme, animateZoneTheme } from './lib3d/Zone';
 import { meeting3dFeatures } from './config';
 import MinimapOverlay, { type MinimapRoomSummary } from './ui/MinimapOverlay';
@@ -22,6 +22,7 @@ import RoomWhiteboard from './ui/RoomWhiteboard';
 import { ROOM_DEFINITIONS, ROOM_NAV_GLOBAL_BOUNDS, ROOM_PORTALS, getRoomById, getRoomCenter } from './rooms/definitions';
 import type { RoomAudioProfile, RoomBounds, RoomId, RoomPortal } from './rooms/types';
 import { createRoomPresenceRecord, DEFAULT_SORTED_NAV_VOLUMES, getAdjacentRooms, isPointInsideNavVolumes, resolveRoomForPosition, type NavVolumeRuntime } from './rooms/navigation';
+import { resolveRoomLayout } from './rooms/layout';
 import type { PresenceStatus } from '../../constants/enums';
 
 type Props = { bottomSafeAreaPx?: number; topSafeAreaPx?: number; };
@@ -547,6 +548,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   const { participants, room } = useMeetingStore(useShallow((s) => ({ participants: s.participants, room: s.room })));
   const chatOpen = useMeetingStore((s) => s.chatOpen);
   const theme = useUIStore((s) => s.theme);
+  const palette = useMemo<ModePalette>(() => MODE_PALETTE[theme], [theme]);
   const toggleTheme = useUIStore((s) => s.toggleTheme);
   const micEnabled = useMeetingStore((s) => s.micEnabled);
   const screenShareEnabled = useMeetingStore((s) => s.screenShareEnabled);
@@ -1364,9 +1366,11 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
     container.setAttribute('tabindex', '0');
 
+    const resolvedLayout = resolveRoomLayout({ roomWidth: ROOM_W, roomDepth: ROOM_D, rooms: ROOM_DEFINITIONS });
+
     // Build static environment if not cached
     if (!GLOBAL_SCENE_CACHE) {
-      const env = buildEnvironment(scene!, { ROOM_W, ROOM_D, palette: MODE_PALETTE[theme], theme }, rendererRef.current ?? undefined);
+      const env = buildEnvironment(scene!, { ROOM_W, ROOM_D, palette: MODE_PALETTE[theme], theme, layout: resolvedLayout }, rendererRef.current ?? undefined);
       environmentObstaclesRef.current = env.obstacles.slice();
       obstaclesRef.current = env.obstacles;
       stageScreenRef.current = env.stageScreen;
@@ -1381,7 +1385,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     
 
     if (!GLOBAL_SCENE_CACHE) {
-      const zones = buildZones(scene!, { ROOM_W, ROOM_D, palette: MODE_PALETTE[theme], mode: theme });
+      const zones = buildZones(scene!, { ROOM_W, ROOM_D, palette: MODE_PALETTE[theme], mode: theme, layout: resolvedLayout });
       zonesInfoRef.current = zones;
       obstaclesRef.current.push(...zones.zoneColliders);
       if (zones.stageScreen) stageScreenRef.current = zones.stageScreen;
@@ -2695,7 +2699,11 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           if (far) {
             if (!bb) {
               const c = document.createElement('canvas'); c.width = c.height = 128; const ctx = c.getContext('2d')!;
-              ctx.clearRect(0,0,128,128); ctx.fillStyle = '#8a8af0'; ctx.beginPath(); ctx.arc(64,64,56,0,Math.PI*2); ctx.fill();
+              ctx.clearRect(0,0,128,128);
+              ctx.fillStyle = numberToHex(palette.accent);
+              ctx.beginPath();
+              ctx.arc(64,64,56,0,Math.PI*2);
+              ctx.fill();
               const tex = new THREE.CanvasTexture(c);
               const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
               bb = new THREE.Sprite(mat); bb.name = 'AV_BB'; bb.scale.set(0.9,0.9,1); bb.position.set(0,1.6,0); g.add(bb);
@@ -2738,7 +2746,8 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
           getSeatDotsForMinimap(),
           deskMgrRef.current,
           zonesInfoRef.current,
-          minimapHitsRef.current
+          minimapHitsRef.current,
+          palette,
         );
         const budgetMs = (screenShareEnabled || micEnabled) ? 180 : 90;
         minimapNextAtRef.current = now + budgetMs;
@@ -3256,6 +3265,50 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       }
     }
 
+    const isDarkTheme = theme === 'dark';
+    const localBodyColor = palette.accent;
+    const remoteBodyColor = palette.rooms.conference.accent;
+    const ceilingColor = new THREE.Color(palette.ceiling);
+    const lightenTarget = new THREE.Color(0xffffff);
+    const localSkinColor = ceilingColor.clone().lerp(lightenTarget, isDarkTheme ? 0.82 : 0.4).getHex();
+    const remoteSkinColor = ceilingColor.clone().lerp(lightenTarget, isDarkTheme ? 0.88 : 0.5).getHex();
+    const computeEmissive = (body: number, local: boolean) => {
+      const base = new THREE.Color(body);
+      const factor = local ? (isDarkTheme ? 0.22 : 0.12) : (isDarkTheme ? 0.18 : 0.1);
+      return base.clone().multiplyScalar(factor);
+    };
+    const applyAvatarPalette = (avatar: THREE.Group, isLocalAvatar: boolean) => {
+      const bodyColorValue = isLocalAvatar ? localBodyColor : remoteBodyColor;
+      const skinColorValue = isLocalAvatar ? localSkinColor : remoteSkinColor;
+      const emissiveColor = computeEmissive(bodyColorValue, isLocalAvatar);
+      avatar.traverse((node) => {
+        if (!(node as any).isMesh) return;
+        const mesh = node as THREE.Mesh;
+        let part = mesh.userData?.avatarPart as string | undefined;
+        if (!part) {
+          const name = mesh.name ?? '';
+          if (name === 'TORSO' || name.startsWith('ARM')) {
+            part = 'body';
+            mesh.userData.avatarPart = 'body';
+          } else if (name === 'HEAD') {
+            part = 'skin';
+            mesh.userData.avatarPart = 'skin';
+          }
+        }
+        const material = mesh.material as THREE.Material;
+        if (!(material instanceof THREE.MeshStandardMaterial)) return;
+        if (part === 'body') {
+          material.color.set(bodyColorValue);
+          material.emissive.copy(emissiveColor);
+          material.emissiveIntensity = isLocalAvatar ? 0.22 : 0.18;
+          material.needsUpdate = true;
+        } else if (part === 'skin') {
+          material.color.set(skinColorValue);
+          material.needsUpdate = true;
+        }
+      });
+    };
+
     let localAvatarSet = false;
 
     // Only create/update avatars for new or changed participants
@@ -3271,6 +3324,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
 
       // If avatar exists, handle updates
       if (existingAvatar) {
+        applyAvatarPalette(existingAvatar, isLocal);
         // FOR LOCAL AVATAR: Never reset position - user has moved it manually
         if (isLocal && !localAvatarSet) {
           avatarRef.current = existingAvatar;
@@ -3306,16 +3360,24 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       g.position.copy(seat.position);
       g.rotation.y = seat.yaw;
 
-      const bodyColor = isLocal ? 0x3D93F8 : 0x8a8af0;
-      const skinColor = isLocal ? 0xe6edf7 : 0xf2f2f2;
+      const bodyColor = isLocal ? localBodyColor : remoteBodyColor;
+      const skinColor = isLocal ? localSkinColor : remoteSkinColor;
+      const emissive = computeEmissive(bodyColor, isLocal).getHex();
 
       const torso = new THREE.Mesh(
         new THREE.CapsuleGeometry(0.18, 0.6, 6, 12),
-        new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.15, roughness: 0.6, emissive: 0x0b111f, emissiveIntensity: 0.15 })
+        new THREE.MeshStandardMaterial({
+          color: bodyColor,
+          metalness: 0.15,
+          roughness: 0.6,
+          emissive,
+          emissiveIntensity: isLocal ? 0.22 : 0.18,
+        })
       );
       torso.name = 'TORSO';
       torso.position.set(0, 1.0, 0);
       torso.castShadow = true;
+      torso.userData.avatarPart = 'body';
       g.add(torso);
 
       const head = new THREE.Mesh(
@@ -3325,6 +3387,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       head.position.set(0, 1.55, 0);
       head.castShadow = true;
       head.name = 'HEAD';
+      head.userData.avatarPart = 'skin';
       g.add(head);
 
       const armMat = new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.12, roughness: 0.55 });
@@ -3332,10 +3395,12 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       const armL = new THREE.Mesh(armGeo, armMat);
       armL.position.set(-0.26, 1.1, 0);
       armL.rotation.z = 0.15;
+      armL.userData.avatarPart = 'body';
       g.add(armL);
       const armR = new THREE.Mesh(armGeo, armMat);
       armR.position.set(0.26, 1.1, 0);
       armR.rotation.z = -0.15;
+      armR.userData.avatarPart = 'body';
       g.add(armR);
 
       const legMat = new THREE.MeshStandardMaterial({ color: 0x35353c, metalness: 0.08, roughness: 0.7 });
@@ -3363,6 +3428,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
       mon.position.set(0, 0.85, -0.36);
       g.add(mon);
 
+      applyAvatarPalette(g, isLocal);
       avatars.add(g);
       avatarBySidRef.current.set(sid, g);
       (p.aliasIds ?? []).forEach((alias) => {
@@ -3380,7 +3446,7 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
         localAvatarSet = true;
       }
     }
-  }, [uniqueParticipants]);
+  }, [uniqueParticipants, palette, theme]);
 
   // Video textures: stage + local desk + seat monitors + head badges
   useEffect(() => {
@@ -3619,19 +3685,23 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
   );
 
   const roomQuickList = useMemo<MinimapRoomSummary[]>(() => {
+    const paletteForTheme = palette;
     return ROOM_DEFINITIONS
       .slice()
       .sort((a, b) => a.order - b.order)
-      .map<MinimapRoomSummary>((room) => ({
-        id: room.id,
-        title: room.title,
-        label: room.label,
-        description: room.description,
-        accentColor: room.accentColor,
-        occupancy: roomPresence[room.id] ?? 0,
-        connections: (roomAdjacency[room.id] ?? []).map((rid) => getRoomById(rid)?.title ?? rid),
-      }));
-  }, [roomPresence, roomAdjacency]);
+      .map<MinimapRoomSummary>((room) => {
+        const colors = getRoomPalette(paletteForTheme, room.id);
+        return {
+          id: room.id,
+          title: room.title,
+          label: room.label,
+          description: room.description,
+          accentColor: numberToHex(colors.accent),
+          occupancy: roomPresence[room.id] ?? 0,
+          connections: (roomAdjacency[room.id] ?? []).map((rid) => getRoomById(rid)?.title ?? rid),
+        };
+      });
+  }, [roomPresence, roomAdjacency, palette]);
 
   const portalTargetRoom = useMemo(() => {
     if (!portalSuggestion) {
@@ -3639,6 +3709,11 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
     }
     return getRoomById(portalSuggestion) ?? null;
   }, [portalSuggestion]);
+
+  const portalAccent = useMemo(() => {
+    if (!portalTargetRoom) return undefined;
+    return numberToHex(getRoomPalette(palette, portalTargetRoom.id).accent);
+  }, [portalTargetRoom, palette]);
 
   const handleJumpToRoom = useCallback(
     (roomId: RoomId) => {
@@ -3785,10 +3860,10 @@ const SceneRoot: React.FC<Props> = ({ bottomSafeAreaPx = 120, topSafeAreaPx = 96
             onClick={() => handleJumpToRoom(portalTargetRoom.id)}
             className="rounded-full border px-4 py-2 text-sm font-semibold shadow-lg transition-colors"
             style={{
-              borderColor: portalTargetRoom.accentColor,
-              background: 'rgba(12,18,28,0.85)',
-              color: '#f8fafc',
-              boxShadow: `0 12px 32px ${portalTargetRoom.accentColor}33`,
+              borderColor: portalAccent,
+              background: 'var(--panel-bg)',
+              color: 'var(--text-1)',
+              boxShadow: portalAccent ? `0 12px 32px ${portalAccent}33` : undefined,
             }}
           >
             Enter {portalTargetRoom.title}
@@ -4080,25 +4155,77 @@ function drawMinimap(
   remotes: Array<{ x: number; z: number; name?: string; sid: string }>,
   mgr: DeskGridManager | null,
   zones: BuiltZonesInfo | null,
-  hits: Array<{ x: number; y: number; w: number; h: number; target?: THREE.Vector3; allowGhost?: boolean; roomName?: string }>
+  hits: Array<{ x: number; y: number; w: number; h: number; target?: THREE.Vector3; allowGhost?: boolean; roomName?: string }>,
+  palette: ModePalette,
 ) {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   // Theme-aware colors
   const css = getComputedStyle(canvas);
-  const panelBg = (css.getPropertyValue('--surface-1') || '#14171e').trim();
-  const borderCol = (css.getPropertyValue('--panel-border') || '#2f2f36').trim();
-  const text1 = (css.getPropertyValue('--text-1') || '#e5e7eb').trim();
-  const text2 = (css.getPropertyValue('--text-2') || '#cfd3dc').trim();
-  const accent = (css.getPropertyValue('--accent') || '#3D93F8').trim();
-  const toRGBA = (hex: string, a: number) => {
-    const h = hex.replace('#', '');
-    const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
-    const num = parseInt(full, 16);
-    const r = (num >> 16) & 255, g = (num >> 8) & 255, b = num & 255;
-    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  const accentHex = numberToHex(palette.accent);
+  const getCssValue = (key: string, fallback: string) => {
+    const value = css.getPropertyValue(key);
+    return value && value.trim() ? value.trim() : fallback;
   };
+  const parseComponent = (component: string) => {
+    const trimmed = component.trim();
+    if (!trimmed) return 0;
+    if (trimmed.endsWith('%')) {
+      const pct = Number.parseFloat(trimmed.slice(0, -1));
+      if (Number.isFinite(pct)) {
+        return Math.max(0, Math.min(255, Math.round((pct / 100) * 255)));
+      }
+      return 0;
+    }
+    const value = Number.parseFloat(trimmed);
+    return Number.isFinite(value) ? Math.max(0, Math.min(255, Math.round(value))) : 0;
+  };
+  const toRGBA = (value: string, alpha: number) => {
+    const normalized = (value || '').trim();
+    if (!normalized) {
+      return `rgba(0, 0, 0, ${alpha})`;
+    }
+    const rgbaMatch = normalized.match(/rgba?\(([^)]+)\)/i);
+    if (rgbaMatch) {
+      const parts = rgbaMatch[1].split(',');
+      const r = parseComponent(parts[0] ?? '0');
+      const g = parseComponent(parts[1] ?? '0');
+      const b = parseComponent(parts[2] ?? '0');
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+    const hex = normalized.replace('#', '');
+    const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex;
+    const num = Number.parseInt(full, 16);
+    if (Number.isNaN(num)) {
+      return `rgba(0, 0, 0, ${alpha})`;
+    }
+    const r = (num >> 16) & 255;
+    const g = (num >> 8) & 255;
+    const b = num & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+  const panelBg = getCssValue('--minimap-bg', palette.minimap.background);
+  const borderCol = getCssValue('--minimap-border', palette.minimap.border);
+  const text1 = getCssValue('--text-1', palette.minimap.text);
+  const text2 = getCssValue('--text-2', palette.minimap.text);
+  const accent = getCssValue('--accent', accentHex);
+  const roomFill = getCssValue('--minimap-room-fill', palette.minimap.roomFill || accent);
+  const roomStroke = getCssValue('--minimap-room-stroke', palette.minimap.roomStroke || accent);
+  const doorColor = getCssValue('--minimap-door', palette.minimap.door || accent);
+  const landmarkColor = getCssValue('--minimap-landmark', palette.minimap.landmark || text1);
+  const labelColor = getCssValue('--minimap-label', palette.minimap.text || text2);
+  const stageFill = getCssValue('--minimap-stage-fill', palette.minimap.stageFill || toRGBA(accent, 0.14));
+  const stageFillStrong = getCssValue(
+    '--minimap-stage-fill-strong',
+    palette.minimap.stageFillStrong || toRGBA(accent, 0.22),
+  );
+  const stageStroke = getCssValue('--minimap-stage-stroke', palette.minimap.stageStroke || accent);
+  const remoteColor = getCssValue('--minimap-remote', palette.minimap.remote || accent);
+  const remoteGlow = getCssValue('--minimap-remote-glow', palette.minimap.remoteGlow || toRGBA(remoteColor, 0.35));
+  const remoteLabel = getCssValue('--minimap-remote-label', palette.minimap.remoteLabel || text2);
+  const youColor = getCssValue('--minimap-you', palette.minimap.you || accent);
+  const youGlow = getCssValue('--minimap-you-glow', palette.minimap.youGlow || toRGBA(youColor, 0.35));
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = panelBg || '#14171e';
@@ -4121,19 +4248,16 @@ function drawMinimap(
       const a = toMap(r.rect.minX, r.rect.minZ), b = toMap(r.rect.maxX, r.rect.maxZ);
 
       // Room background with subtle gradient
-      const roomGrad = ctx.createLinearGradient(a.X, a.Y, b.X, b.Y);
-      roomGrad.addColorStop(0, toRGBA(accent, 0.10));
-      roomGrad.addColorStop(1, toRGBA(accent, 0.05));
-      ctx.fillStyle = roomGrad;
+      ctx.fillStyle = roomFill.startsWith('rgba') || roomFill.startsWith('rgb(') ? roomFill : toRGBA(roomFill, 0.12);
       ctx.fillRect(a.X, a.Y, (b.X - a.X), (b.Y - a.Y));
 
       // Room border
-      ctx.strokeStyle = accent;
+      ctx.strokeStyle = roomStroke;
       ctx.lineWidth = 1.5;
       ctx.strokeRect(a.X, a.Y, (b.X - a.X), (b.Y - a.Y));
 
       // Enhanced room name with better visibility
-      ctx.fillStyle = text2;
+      ctx.fillStyle = labelColor;
       ctx.font = 'bold 11px system-ui, -apple-system';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
@@ -4173,7 +4297,7 @@ function drawMinimap(
     }
 
     // Enhanced doorways
-    ctx.fillStyle = accent;
+    ctx.fillStyle = doorColor;
     for (const d of zones.doorways) {
       const p = toMap(d.x, d.z);
       ctx.beginPath();
@@ -4189,7 +4313,7 @@ function drawMinimap(
     }
 
     // Enhanced landmarks
-    ctx.fillStyle = accent;
+    ctx.fillStyle = doorColor;
     ctx.font = '10px system-ui';
     for (const lm of zones.landmarks) {
       const p = toMap(lm.x, lm.z);
@@ -4197,7 +4321,7 @@ function drawMinimap(
       // Landmark dot with glow
       ctx.beginPath();
       ctx.arc(p.X, p.Y, 4, 0, Math.PI * 2);
-      ctx.fillStyle = accent;
+      ctx.fillStyle = landmarkColor;
       ctx.fill();
 
       // Glow effect
@@ -4249,11 +4373,11 @@ function drawMinimap(
   // Stage area
   const st = toMap(0, -ROOM_D / 2 + 3.2);
   const stageGrad = ctx.createLinearGradient(st.X - 60, st.Y - 18, st.X + 60, st.Y + 18);
-  stageGrad.addColorStop(0, '#1a1d24');
-  stageGrad.addColorStop(1, '#2c2f39');
+  stageGrad.addColorStop(0, stageFill);
+  stageGrad.addColorStop(1, stageFillStrong);
   ctx.fillStyle = stageGrad;
   ctx.fillRect(st.X - 60, st.Y - 18, 120, 36);
-  ctx.strokeStyle = '#4a90e2';
+  ctx.strokeStyle = stageStroke;
   ctx.lineWidth = 1;
   ctx.strokeRect(st.X - 60, st.Y - 18, 120, 36);
 
@@ -4264,20 +4388,22 @@ function drawMinimap(
     const p = toMap(r.x, r.z);
 
     // Participant dot with glow
-    ctx.fillStyle = '#8a8af0';
+    ctx.fillStyle = remoteColor;
     ctx.beginPath();
     ctx.arc(p.X, p.Y, 4, 0, Math.PI * 2);
     ctx.fill();
 
     // Glow effect
+    ctx.save();
+    ctx.fillStyle = remoteGlow;
     ctx.beginPath();
     ctx.arc(p.X, p.Y, 6, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(138, 138, 240, 0.4)';
     ctx.fill();
+    ctx.restore();
 
     if (r.name) {
       const text = r.name.slice(0, 18);
-      ctx.fillStyle = '#cfd6ff';
+      ctx.fillStyle = remoteLabel;
       ctx.font = 'bold 10px system-ui';
 
       // Add text shadow
@@ -4311,18 +4437,20 @@ function drawMinimap(
 
   // Your position with pulsing glow
   const time = Date.now() * 0.003;
-  const glowIntensity = 0.6 + 0.4 * Math.sin(time);
 
-  ctx.fillStyle = accent;
+  ctx.fillStyle = youColor;
   ctx.beginPath();
   ctx.arc(yp.X, yp.Y, 5, 0, Math.PI * 2);
   ctx.fill();
 
   // Pulsing glow
+  ctx.save();
+  ctx.globalAlpha = 0.45 + 0.25 * Math.sin(time);
+  ctx.fillStyle = youGlow;
   ctx.beginPath();
   ctx.arc(yp.X, yp.Y, 8 + 2 * Math.sin(time), 0, Math.PI * 2);
-  ctx.fillStyle = toRGBA(accent, glowIntensity * 0.3);
   ctx.fill();
+  ctx.restore();
 
   // "You" label with better styling
   ctx.fillStyle = text1;

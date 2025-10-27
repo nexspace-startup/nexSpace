@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { createSofa } from './sofa';
 import { createOfficeChair } from './officeChair';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { MODE_PALETTE, type ModePalette, type FurniturePalette } from './themeConfig';
+import { MODE_PALETTE, type ModePalette, type FurniturePalette, getRoomPalette, resolveRoomPaletteKey, numberToHex } from './themeConfig';
 import { ROOM_DEFINITIONS, ROOM_PORTALS } from '../rooms/definitions';
 import type { RoomId } from '../rooms/types';
+import { resolveRoomLayout, type ResolvedRoomLayout } from '../rooms/layout';
 
 function createRealisticTiledFloor(
     scene: THREE.Scene,
@@ -155,16 +156,25 @@ export type BuiltZonesInfo = {
     conferenceDoorOpen?: boolean;
 };
 
-function labelSprite(text: string, scaleX = 3.0, color = '#ffffff') {
+function labelSprite(text: string, scaleX = 3.0, palette: ModePalette, color?: string) {
     const c = document.createElement('canvas'); c.width = 512; c.height = 128;
     const cx = c.getContext('2d')!;
     cx.clearRect(0, 0, 512, 128);
-    cx.font = 'bold 48px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    cx.fillStyle = palette.signage.panel;
+    cx.fillRect(0, 0, 512, 128);
+    cx.strokeStyle = color ?? palette.signage.border ?? palette.signage.text;
+    cx.lineWidth = 5;
+    cx.strokeRect(6, 6, 512 - 12, 128 - 12);
+    cx.font = '600 48px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
     cx.textAlign = 'center'; cx.textBaseline = 'middle';
-    cx.shadowColor = 'rgba(0,0,0,0.8)'; cx.shadowBlur = 8; cx.shadowOffsetY = 3;
-    cx.fillStyle = color; cx.fillText(text, 256, 64);
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
+    cx.shadowColor = palette.signage.glow; cx.shadowBlur = 10; cx.shadowOffsetY = 2;
+    cx.fillStyle = palette.signage.text;
+    cx.fillText(text, 256, 64);
+    const material = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true });
+    material.userData = { ...(material.userData ?? {}), canvas: c };
+    const sp = new THREE.Sprite(material);
     sp.scale.set(scaleX, 1, 1);
+    (sp as any).userData = { ...(sp as any).userData, labelText: text };
     return sp;
 }
 
@@ -453,11 +463,11 @@ function segmentIntersectsAnyBox(a: THREE.Vector3, b: THREE.Vector3, boxes: THRE
 
 export function buildZones(
     scene: THREE.Scene,
-    { ROOM_W, ROOM_D, palette, mode }: { ROOM_W: number; ROOM_D: number; palette?: import('./themeConfig').ModePalette; mode?: 'light' | 'dark' }
+    { ROOM_W, ROOM_D, palette, mode, layout }: { ROOM_W: number; ROOM_D: number; palette?: import('./themeConfig').ModePalette; mode?: 'light' | 'dark'; layout?: ResolvedRoomLayout }
 ): BuiltZonesInfo {
     const activePalette: import('./themeConfig').ModePalette = palette ?? MODE_PALETTE[mode || 'dark'];
+    const resolvedLayout: ResolvedRoomLayout = layout ?? resolveRoomLayout({ roomWidth: ROOM_W, roomDepth: ROOM_D, rooms: ROOM_DEFINITIONS });
     const furniture = activePalette.furniture;
-    const toHex = (value: number) => `#${value.toString(16).padStart(6, '0')}`;
     const colliders: THREE.Box3[] = [];
 
     // Enhanced big screen (north) with modern look
@@ -494,15 +504,12 @@ export function buildZones(
         roomId: RoomId,
         fallback: { minX: number; maxX: number; minZ: number; maxZ: number }
     ) => {
-        const match = roomById(roomId);
+        const match = resolvedLayout.get(roomId);
         if (match) {
-            return {
-                minX: match.bounds.minX,
-                maxX: match.bounds.maxX,
-                minZ: match.bounds.minZ,
-                maxZ: match.bounds.maxZ,
-            };
+            return { ...match.bounds };
         }
+        const def = roomById(roomId);
+        if (def) { return { ...def.bounds }; }
         return { ...fallback };
     };
     const lobbyRect = resolveBounds('lobby', { minX: -9.5, maxX: 9.5, minZ: -ROOM_D / 2 + 2.0, maxZ: -6.4 });
@@ -534,6 +541,8 @@ export function buildZones(
     ROOM_PORTALS.forEach((portal) => addDoorway(portal.position.x, portal.position.z));
 
     // Focus Pod A - light powder blue (light mode friendly)
+    const focusPaletteKey = resolveRoomPaletteKey('focus-booths');
+    const focusPalette = getRoomPalette(activePalette, 'focus-booths');
     addRoomWithDoor(
         scene,
         colliders,
@@ -541,17 +550,19 @@ export function buildZones(
         2.5,
         0.12,
         { wall: 'E', width: 1.8, centerZ: -6.5 },
-        activePalette.rooms.focus.base,
-        activePalette.rooms.focus.accent,
-        'focus'
+        focusPalette.base,
+        focusPalette.accent,
+        focusPaletteKey
     );
-    addWarmLighting(scene, (focusRect.minX + focusRect.maxX) / 2, 2.2, (focusRect.minZ + focusRect.maxZ) / 2, activePalette.rooms.focus.accent);
+    addWarmLighting(scene, (focusRect.minX + focusRect.maxX) / 2, 2.2, (focusRect.minZ + focusRect.maxZ) / 2, focusPalette.accent);
 
     // Conference Room — glass walls with open glass door and beige roof
+    const conferencePalette = getRoomPalette(activePalette, 'conference');
     const confGlass = addGlassRoomWithOpenDoor(scene, colliders, conferenceRect, 5.2, 0.06, { wall: 'W', width: 2.2, centerZ: -2.0 });
-    addWarmLighting(scene, (conferenceRect.minX + conferenceRect.maxX) / 2, 2.7, (conferenceRect.minZ + conferenceRect.maxZ) / 2, activePalette.rooms.conference?.accent ?? activePalette.accent);
+    addWarmLighting(scene, (conferenceRect.minX + conferenceRect.maxX) / 2, 2.7, (conferenceRect.minZ + conferenceRect.maxZ) / 2, conferencePalette?.accent ?? activePalette.accent);
 
     // Lounge - warm peach
+    const loungePalette = getRoomPalette(activePalette, 'cafe-lounge');
     addRoomWithDoor(
         scene,
         colliders,
@@ -559,13 +570,14 @@ export function buildZones(
         0.5,
         0.1,
         { wall: 'N', width: 2.6 },
-        activePalette.rooms.lounge.base,
-        activePalette.rooms.lounge.accent,
-        'lounge'
+        loungePalette.base,
+        loungePalette.accent,
+        resolveRoomPaletteKey('cafe-lounge')
     );
-    addWarmLighting(scene, (loungeRect.minX + loungeRect.maxX) / 2, 2.2, (loungeRect.minZ + loungeRect.maxZ) / 2, activePalette.rooms.lounge.accent);
+    addWarmLighting(scene, (loungeRect.minX + loungeRect.maxX) / 2, 2.2, (loungeRect.minZ + loungeRect.maxZ) / 2, loungePalette.accent);
 
     // Game Room - soft lavender
+    const gamePalette = getRoomPalette(activePalette, 'game');
     addRoomWithDoor(
         scene,
         colliders,
@@ -573,14 +585,15 @@ export function buildZones(
         2.5,
         0.12,
         { wall: 'E', width: 2.0 },
-        activePalette.rooms.game.base,
-        activePalette.rooms.game.accent,
+        gamePalette.base,
+        gamePalette.accent,
         'game'
     );
     addDoorway((gameRect.minX + gameRect.maxX) / 2, gameRect.minZ);
-    addWarmLighting(scene, (gameRect.minX + gameRect.maxX) / 2, 2.2, (gameRect.minZ + gameRect.maxZ) / 2, activePalette.rooms.game.accent);
+    addWarmLighting(scene, (gameRect.minX + gameRect.maxX) / 2, 2.2, (gameRect.minZ + gameRect.maxZ) / 2, gamePalette.accent);
 
     // Kitchen - pale mint
+    const kitchenPalette = getRoomPalette(activePalette, 'kitchen');
     addRoomWithDoor(
         scene,
         colliders,
@@ -588,12 +601,12 @@ export function buildZones(
         2.5,
         0.1,
         { wall: 'W', width: 1.8 },
-        activePalette.rooms.kitchen.base,
-        activePalette.rooms.kitchen.accent,
+        kitchenPalette.base,
+        kitchenPalette.accent,
         'kitchen'
     );
     addDoorway(pantryRect.minX, (pantryRect.minZ + pantryRect.maxZ) / 2);
-    addWarmLighting(scene, (pantryRect.minX + pantryRect.maxX) / 2, 2.2, (pantryRect.minZ + pantryRect.maxZ) / 2, activePalette.rooms.kitchen.accent);
+    addWarmLighting(scene, (pantryRect.minX + pantryRect.maxX) / 2, 2.2, (pantryRect.minZ + pantryRect.maxZ) / 2, kitchenPalette.accent);
 
     // 1) Compute center once
     const confCenter = {
@@ -761,7 +774,8 @@ export function buildZones(
     const roomLabelSprites: THREE.Sprite[] = [];
 
     const focusLabel = roomTitle('focus-booths', 'Focus Booths');
-    const lblA = labelSprite(focusLabel, 3.2, toHex(activePalette.rooms.focus.accent));
+    const focusColors = getRoomPalette(activePalette, 'focus-booths');
+    const lblA = labelSprite(focusLabel, 3.2, activePalette, numberToHex(focusColors.accent));
     lblA.position.set((focusRect.minX + focusRect.maxX) / 2, 2.8, (focusRect.minZ + focusRect.maxZ) / 2);
     (lblA as any).userData = {
         roomName: focusLabel,
@@ -772,7 +786,9 @@ export function buildZones(
     roomLabelSprites.push(lblA);
 
     const conferenceLabel = roomTitle('conference', 'Conference Rooms');
-    const lblC = labelSprite(conferenceLabel, 3.2, toHex(activePalette.rooms.conference?.accent ?? activePalette.accent));
+    const conferenceColors = getRoomPalette(activePalette, 'conference');
+    const conferenceAccent = conferenceColors?.accent ?? activePalette.accent;
+    const lblC = labelSprite(conferenceLabel, 3.2, activePalette, numberToHex(conferenceAccent));
     lblC.position.set((conferenceRect.minX + conferenceRect.maxX) / 2, 2.9, (conferenceRect.minZ + conferenceRect.maxZ) / 2);
     (lblC as any).userData = {
         roomName: conferenceLabel,
@@ -783,7 +799,8 @@ export function buildZones(
     roomLabelSprites.push(lblC);
 
     const loungeLabel = roomTitle('cafe-lounge', 'Cafe Lounge');
-    const lblL = labelSprite(loungeLabel, 3.2, toHex(activePalette.rooms.lounge.accent));
+    const loungeColors = getRoomPalette(activePalette, 'cafe-lounge');
+    const lblL = labelSprite(loungeLabel, 3.2, activePalette, numberToHex(loungeColors.accent));
     lblL.position.set((loungeRect.minX + loungeRect.maxX) / 2, 2.8, (loungeRect.minZ + loungeRect.maxZ) / 2);
     (lblL as any).userData = {
         roomName: loungeLabel,
@@ -793,7 +810,8 @@ export function buildZones(
     scene.add(lblL);
     roomLabelSprites.push(lblL);
 
-    const lblG = labelSprite('Cafe Games', 3.0, toHex(activePalette.rooms.game.accent));
+    const gameColors = getRoomPalette(activePalette, 'game');
+    const lblG = labelSprite('Cafe Games', 3.0, activePalette, numberToHex(gameColors.accent));
     lblG.position.set((gameRect.minX + gameRect.maxX) / 2, 2.8, (gameRect.minZ + gameRect.maxZ) / 2);
     (lblG as any).userData = {
         roomName: 'Cafe Games',
@@ -803,7 +821,8 @@ export function buildZones(
     scene.add(lblG);
     roomLabelSprites.push(lblG);
 
-    const lblKitchen = labelSprite('Kitchen', 3.0, toHex(activePalette.rooms.kitchen.accent));
+    const kitchenColors = getRoomPalette(activePalette, 'kitchen');
+    const lblKitchen = labelSprite('Kitchen', 3.0, activePalette, numberToHex(kitchenColors.accent));
     lblKitchen.position.set((pantryRect.minX + pantryRect.maxX) / 2, 2.2, (pantryRect.minZ + pantryRect.maxZ) / 2);
     (lblKitchen as any).userData = {
         roomName: 'Kitchen',
@@ -1124,6 +1143,34 @@ export function applyZoneTheme(scene: THREE.Scene, palette: ModePalette) {
         });
 
         applyFurnitureTheme(scene, palette);
+
+        scene.traverse((obj: any) => {
+            if (!obj?.isSprite) return;
+            const labelText = obj.userData?.labelText as string | undefined;
+            const canvas = obj.material?.userData?.canvas as HTMLCanvasElement | undefined;
+            if (!labelText || !canvas) return;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = palette.signage.panel;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = palette.signage.border || numberToHex(palette.accent);
+            ctx.lineWidth = 5;
+            ctx.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
+            ctx.font = '600 48px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = palette.signage.glow;
+            ctx.shadowBlur = 10;
+            ctx.shadowOffsetY = 2;
+            ctx.fillStyle = palette.signage.text;
+            ctx.fillText(labelText, canvas.width / 2, canvas.height / 2);
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+            const tex = obj.material.map as THREE.CanvasTexture | undefined;
+            if (tex) tex.needsUpdate = true;
+            obj.material.needsUpdate = true;
+        });
     } catch { /* ignore */ }
 }
 
